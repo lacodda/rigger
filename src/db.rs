@@ -243,7 +243,7 @@ impl Db {
     /// report counts on the difference, and a second import of an unchanged
     /// hub must report nothing.
     pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage) -> Result<(i64, Change)> {
-        let existing: Option<(i64, Option<String>, String, Option<String>)> = self
+        let mut existing: Option<(i64, Option<String>, String, Option<String>)> = self
             .conn
             .query_row(
                 "SELECT id, title, status, shipped_at FROM versions WHERE project_id = ?1 AND name = ?2",
@@ -251,6 +251,25 @@ impl Db {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
+
+        // A stage recorded under its own number before rigger learnt to read
+        // the number it shipped as (`v1.9` heading, `v1.9.0` release) is the
+        // same stage: same title, same numbers. Two rows for one stage
+        // inflate every count, so the older spelling goes - whether or not
+        // the new one is already there.
+        if let Some((twin_id, _)) = self.version_twin(project_id, stage)? {
+            if existing.is_some() {
+                // Both spellings present: the stage was imported twice, once
+                // before this rule existed. Keep the row the record points at.
+                self.conn.execute("DELETE FROM versions WHERE id = ?1", [twin_id])?;
+            } else {
+                // Only the old spelling: rename it, so the tasks and events
+                // hanging off it stay attached.
+                self.conn
+                    .execute("UPDATE versions SET name = ?1 WHERE id = ?2", params![stage.version, twin_id])?;
+                existing = Some((twin_id, stage.title.clone(), String::new(), None));
+            }
+        }
         let status = if stage.shipped_on.is_some() { "shipped" } else { "planned" };
         match existing {
             Some((id, title, was_status, shipped_at)) => {
@@ -271,6 +290,21 @@ impl Db {
                 Ok((self.conn.last_insert_rowid(), Change::Added))
             }
         }
+    }
+
+    /// The same stage recorded under a different spelling of its number:
+    /// same title, same numbers, different text (`v1.9` against `v1.9.0`).
+    fn version_twin(&self, project_id: i64, stage: &crate::hub::Stage) -> Result<Option<(i64, String)>> {
+        let Some(title) = stage.title.as_deref() else { return Ok(None) };
+        let candidate: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, name FROM versions WHERE project_id = ?1 AND title = ?2 AND name <> ?3",
+                params![project_id, title, stage.version],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(candidate.filter(|(_, name)| version_order(name) == version_order(&stage.version)))
     }
 
     /// Records a task of a version. The pair (version, title) identifies it:
@@ -343,15 +377,21 @@ impl Db {
     }
 
     /// The newest version the record says shipped, with its date.
+    ///
+    /// Ordered by the version number, not by the row: a hub lists its
+    /// changelog newest-first, so the highest row id belongs to the *oldest*
+    /// entry, and several versions often share one shipping date. Sorting by
+    /// date and id answered "v0.1.0" for a project that had reached v0.10.0.
     pub fn last_shipped_version(&self, project_id: i64) -> Result<Option<(String, String)>> {
-        Ok(self
+        let mut stmt = self
             .conn
-            .query_row(
-                "SELECT name, shipped_at FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL ORDER BY shipped_at DESC, id DESC LIMIT 1",
-                [project_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?)
+            .prepare("SELECT name, shipped_at FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL")?;
+        let rows = stmt.query_map([project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut shipped: Vec<(String, String)> = rows.collect::<rusqlite::Result<_>>()?;
+        // The date breaks ties the other way round: a version numbered lower
+        // but shipped later is genuinely the more recent release.
+        shipped.sort_by(|a, b| version_order(&a.0).cmp(&version_order(&b.0)).then(a.1.cmp(&b.1)));
+        Ok(shipped.pop())
     }
 
     /// The stage being built: the oldest planned version, with its open tasks.
@@ -359,15 +399,20 @@ impl Db {
     /// Oldest rather than newest, because a plan is a queue - the next stage
     /// is the one that has waited longest, not the one written last.
     pub fn current_stage(&self, project_id: i64) -> Result<Option<CurrentStage>> {
-        let stage: Option<(i64, String, Option<String>)> = self
+        // The lowest version number among those still planned - by number,
+        // not by row: a plan lists its stages in whatever order the owner
+        // wrote them, and a hub's changelog runs newest-first.
+        let mut stmt = self
             .conn
-            .query_row(
-                "SELECT id, name, title FROM versions WHERE project_id = ?1 AND status = 'planned' ORDER BY id LIMIT 1",
-                [project_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()?;
-        let Some((id, name, title)) = stage else { return Ok(None) };
+            .prepare("SELECT id, name, title FROM versions WHERE project_id = ?1 AND status = 'planned'")?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+        })?;
+        let mut planned: Vec<(i64, String, Option<String>)> = rows.collect::<rusqlite::Result<_>>()?;
+        planned.sort_by_key(|(_, name, _)| version_order(name));
+        let Some((id, name, title)) = planned.into_iter().next() else {
+            return Ok(None);
+        };
         let mut stmt = self
             .conn
             .prepare("SELECT title FROM tasks WHERE version_id = ?1 AND status = 'open' ORDER BY id")?;
@@ -477,10 +522,55 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     })
 }
 
+/// A version number as numbers, so that v0.10.0 sorts above v0.9.0.
+///
+/// Hubs write versions in more shapes than semver allows: `v1.9` alongside
+/// `v1.9.0`, and `v0.19.0+` for a stage that shipped as two releases. Missing
+/// parts count as zero, and anything after the digits is ignored - it never
+/// distinguishes two versions of one project.
+pub fn version_order(name: &str) -> (u32, u32, u32) {
+    let digits = name.trim_start_matches(['v', 'V']);
+    let mut parts = digits
+        .split('.')
+        .map(|p| p.chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
 /// Timestamps are stored as UTC in RFC 3339, which sorts as text.
 pub fn now() -> String {
     jiff::Timestamp::now()
         .round(jiff::Unit::Second)
         .map(|t| t.to_string())
         .unwrap_or_else(|_| jiff::Timestamp::now().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_order;
+
+    #[test]
+    fn ten_sorts_above_nine() {
+        // The defect this ordering exists for: a project that had reached
+        // v0.10.0 reported v0.1.0 as its latest release.
+        assert!(version_order("v0.10.0") > version_order("v0.9.0"));
+        assert!(version_order("v0.20.1") > version_order("v0.19.0"));
+    }
+
+    #[test]
+    fn a_two_part_number_is_a_version_too() {
+        // kasl writes `v1.9 · Title — shipped, released **v1.9.0**`.
+        assert_eq!(version_order("v1.9"), (1, 9, 0));
+        assert!(version_order("v1.10") > version_order("v1.9"));
+    }
+
+    #[test]
+    fn a_suffix_after_the_digits_is_ignored() {
+        // dowel writes `v0.19.0+` for a stage that shipped as two releases.
+        assert_eq!(version_order("v0.19.0+"), (0, 19, 0));
+    }
+
+    #[test]
+    fn an_unparseable_name_sorts_lowest_rather_than_panicking() {
+        assert_eq!(version_order("draft"), (0, 0, 0));
+    }
 }

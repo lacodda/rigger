@@ -271,6 +271,66 @@ fn a_stage_that_shipped_is_updated_rather_than_duplicated() {
         .stdout(predicate::str::contains("versions:  3"));
 }
 
+/// A stage whose heading numbers it one way and its release another - kasl
+/// writes `v1.9 · Title — closed, released **v1.9.0**` - is recorded under
+/// the number git will carry. And a database that already held it under the
+/// old number is corrected rather than left with two rows for one stage.
+#[test]
+fn a_stage_renumbered_by_its_release_replaces_the_old_row() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    let hub_dir = root.join("hub");
+
+    std::fs::write(hub_dir.join("Изменения.md"), "# Изменения\n\n## v1.9 · Очередь — закрыт 2026-09-03\n").unwrap();
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(&hub_dir).assert().success();
+
+    // The heading now names the release the stage shipped as.
+    std::fs::write(
+        hub_dir.join("Изменения.md"),
+        "# Изменения\n\n## v1.9 · Очередь — закрыт 2026-09-03, выпущен **v1.9.0**\n",
+    )
+    .unwrap();
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(&hub_dir).assert().success();
+
+    rigger(data.path())
+        .args(["context", "proj"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Last shipped: v1.9.0"));
+
+    // One stage, one row. Two versions in total: the plan's open stage and
+    // this one - a twin left behind would make it three.
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("versions:  2"));
+}
+
+/// The packet names the newest release, and versions are numbered, not
+/// lettered: v0.10.0 comes after v0.9.0. Hubs list their changelog
+/// newest-first, so ordering by row put the oldest entry on top.
+#[test]
+fn the_newest_release_is_the_highest_number_not_the_last_row() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    let hub_dir = root.join("hub");
+
+    // Written the way a hub writes it: newest at the top, one date for all.
+    std::fs::write(
+        hub_dir.join("Изменения.md"),
+        "# Изменения\n\n## v0.10.0 · Tenth — выпущена 2026-09-02\n\n## v0.9.0 · Ninth — выпущена 2026-09-02\n\n## v0.1.0 · First — выпущена 2026-09-02\n",
+    )
+    .unwrap();
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(&hub_dir).assert().success();
+
+    rigger(data.path())
+        .args(["context", "proj"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Last shipped: v0.10.0"));
+}
+
 #[test]
 fn import_of_a_missing_hub_reports_the_files_it_wanted() {
     let data = tempfile::tempdir().unwrap();

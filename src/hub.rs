@@ -123,6 +123,16 @@ fn trailing_date(text: &str) -> Option<String> {
     None
 }
 
+/// The version a stage actually shipped as, when its heading names one after
+/// the word "выпущен": `v1.9 · Title — закрыт 2026-09-03, выпущен **v1.9.0**`.
+fn released_version(tail: &str) -> Option<&str> {
+    let at = tail.find("выпущен")?;
+    let rest = &tail[at..];
+    rest.split(|c: char| c.is_whitespace() || c == '*')
+        .filter_map(|word| leading_version(word).filter(|v| v.len() == word.len()))
+        .next()
+}
+
 /// The title of a stage: what follows the version, minus the release note.
 ///
 /// Hub headings read `v0.2.0 · Three forms — shipped 2026-09-03`; the title
@@ -141,10 +151,15 @@ fn parse_stages(text: &str) -> Vec<Stage> {
         if let Some((depth, head)) = heading(line) {
             match leading_version(head) {
                 Some(version) => {
+                    let tail = &head[version.len()..];
                     stages.push(Stage {
-                        version: version.to_string(),
+                        // A stage may be numbered differently from the release
+                        // it became: kasl writes `v1.9 · Title - closed, shipped
+                        // **v1.9.0**`. The tag is what git will confirm, so the
+                        // released number wins when the heading names one.
+                        version: released_version(tail).unwrap_or(version).to_string(),
                         title: stage_title(head, version),
-                        shipped_on: trailing_date(&head[version.len()..]),
+                        shipped_on: trailing_date(tail),
                         tasks: Vec::new(),
                     });
                     level = depth;
@@ -308,6 +323,21 @@ mod tests {
             let stages = parse_stages(head);
             assert_eq!(stages[0].shipped_on.as_deref(), Some("2026-08-12"), "{head}");
         }
+    }
+
+    #[test]
+    fn a_stage_takes_the_number_it_shipped_as() {
+        // kasl numbers stages and releases apart; git will carry the release.
+        let stages = parse_stages("## v1.9 · Очередь и backfill — закрыт 2026-09-03, выпущен **v1.9.0**\n");
+        assert_eq!(stages[0].version, "v1.9.0");
+        assert_eq!(stages[0].title.as_deref(), Some("Очередь и backfill"));
+        assert_eq!(stages[0].shipped_on.as_deref(), Some("2026-09-03"));
+    }
+
+    #[test]
+    fn a_stage_without_a_separate_release_keeps_its_own_number() {
+        let stages = parse_stages("## v0.2.0 · Три формы — выпущена 2026-09-03\n");
+        assert_eq!(stages[0].version, "v0.2.0");
     }
 
     #[test]
