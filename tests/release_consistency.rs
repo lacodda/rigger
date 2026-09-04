@@ -241,6 +241,56 @@ mod tests {
         }
     }
 
+    /// The docs site and the repository must show the same mark at each level:
+    /// the header logo is the L tile, the favicon the S tile. Swapping them is a
+    /// real mistake that has happened in the line - an S tile in a 40px header
+    /// reads as a solid coloured block.
+    #[test]
+    fn the_docs_site_carries_the_same_mark_as_the_repository() {
+        for (site, repo) in [
+            ("docs/src/assets/logo.svg", "assets/logo.svg"),
+            ("docs/public/favicon.svg", "assets/logo-s.svg"),
+            ("docs/public/apple-touch-icon.png", "assets/apple-touch-icon.png"),
+        ] {
+            let a = fs::read(repo_root().join(site)).unwrap_or_else(|e| panic!("cannot read {site}: {e}"));
+            let b = fs::read(repo_root().join(repo)).unwrap_or_else(|e| panic!("cannot read {repo}: {e}"));
+            assert!(a == b, "{site} differs from {repo}; the docs site shows a different mark than the repository");
+        }
+    }
+
+    /// The mark is a pair of colours drawn as one gradient. A gradient in
+    /// `objectBoundingBox` units does not render on a straight line at all (the
+    /// box has no area), so the masters use tile coordinates; a regenerated
+    /// asset that lost that would silently drop every line of the metaphor.
+    #[test]
+    fn the_svg_tiles_paint_the_pair_in_tile_coordinates() {
+        for file in ["assets/logo.svg", "assets/logo-m.svg", "assets/logo-s.svg", "assets/banner.svg"] {
+            let svg = read(file);
+            assert!(svg.contains("gradientUnits=\"userSpaceOnUse\""), "{file} does not paint the pair in tile coordinates");
+            for colour in ["#8A62F0", "#2FB3C6"] {
+                assert!(svg.contains(colour), "{file} lacks the pair colour {colour}");
+            }
+        }
+    }
+
+    /// The Windows icon carries one image per size, largest first: some
+    /// readers take the first directory entry verbatim as the window icon, and
+    /// a 16px first entry gives a title bar stretched from sixteen pixels.
+    #[test]
+    fn the_ico_lists_its_images_largest_first() {
+        let ico = fs::read(repo_root().join("assets/icon.ico")).expect("cannot read assets/icon.ico");
+        assert!(ico.len() > 6, "icon.ico is truncated");
+        assert_eq!(u16::from_le_bytes([ico[2], ico[3]]), 1, "icon.ico is not an icon resource");
+        let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
+        let sizes: Vec<u32> = (0..count)
+            .map(|i| {
+                let width = ico[6 + 16 * i];
+                if width == 0 { 256 } else { u32::from(width) }
+            })
+            .collect();
+        assert_eq!(sizes, vec![256, 128, 64, 48, 32, 24, 16], "icon.ico entries are {sizes:?}; expected every level, largest first");
+    }
+
     /// A version number in README prose goes stale the moment the next
     /// release ships. Checked here rather than by eye: the doc sweep at the
     /// end of a stage is the step most likely to be rushed.

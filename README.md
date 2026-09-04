@@ -1,4 +1,4 @@
-# rigger
+<p align="center"><img src="https://github.com/lacodda/rigger/raw/main/assets/banner.svg" alt="rigger - one seat for every project and task" width="720"></p>
 
 > One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant.
 
