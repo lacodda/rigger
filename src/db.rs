@@ -1,0 +1,229 @@
+//! The record: one SQLite file, migrated forward by version.
+//!
+//! Every fact rigger shows is a query over these tables. The schema version
+//! lives in SQLite's `user_version` pragma; migrations are applied in order
+//! and never edited once released - a change is a new migration.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
+
+/// Migrations in order. Index + 1 is the schema version they bring the
+/// database to.
+const MIGRATIONS: &[&str] = &[
+    // v1: the five entities of the model.
+    "
+    CREATE TABLE projects (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE,
+        path       TEXT NOT NULL UNIQUE,
+        remote     TEXT,
+        tier       TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE versions (
+        id           INTEGER PRIMARY KEY,
+        project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name         TEXT NOT NULL,
+        title        TEXT,
+        status       TEXT NOT NULL DEFAULT 'planned',
+        planned_week TEXT,
+        shipped_at   TEXT,
+        UNIQUE (project_id, name)
+    );
+    CREATE TABLE tasks (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        version_id INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+        title      TEXT NOT NULL,
+        status     TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL,
+        closed_at  TEXT
+    );
+    CREATE TABLE sessions (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL,
+        ended_at   TEXT
+    );
+    CREATE TABLE events (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+        version_id INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+        task_id    INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        kind       TEXT NOT NULL,
+        body       TEXT NOT NULL,
+        author     TEXT NOT NULL DEFAULT 'assistant',
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX events_by_project ON events (project_id, created_at);
+    ",
+];
+
+pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
+
+pub struct Db {
+    conn: Connection,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Project {
+    pub id: i64,
+    pub name: String,
+    pub path: String,
+    pub remote: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Counts {
+    pub projects: u64,
+    pub versions: u64,
+    pub tasks: u64,
+    pub sessions: u64,
+    pub events: u64,
+}
+
+impl Db {
+    /// Creates the database (and its directory) if needed and migrates it
+    /// to the current schema. Used by `rigger init`.
+    pub fn create(path: &Path) -> Result<Db> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        }
+        let db = Db::connect(path)?;
+        db.migrate()?;
+        Ok(db)
+    }
+
+    /// Opens an existing database; a missing file is the "run `rigger init`
+    /// first" case, reported as such rather than as a fresh empty database.
+    pub fn open(path: &Path) -> Result<Db> {
+        if !path.exists() {
+            bail!("no database at {} - run `rigger init` first", path.display());
+        }
+        let db = Db::connect(path)?;
+        db.migrate()?;
+        Ok(db)
+    }
+
+    fn connect(path: &Path) -> Result<Db> {
+        let conn = Connection::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(Db {
+            conn,
+            path: path.to_path_buf(),
+        })
+    }
+
+    fn migrate(&self) -> Result<()> {
+        let current = self.schema_version()?;
+        if current > SCHEMA_VERSION {
+            bail!(
+                "{} is at schema version {current}, newer than this rigger understands ({SCHEMA_VERSION}); update rigger",
+                self.path.display()
+            );
+        }
+        for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
+            let target = i as u32 + 1;
+            self.conn
+                .execute_batch(&format!("BEGIN; {sql} PRAGMA user_version = {target}; COMMIT;"))
+                .with_context(|| format!("migration to schema version {target} failed"))?;
+        }
+        Ok(())
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn schema_version(&self) -> Result<u32> {
+        Ok(self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+    }
+
+    pub fn add_project(&self, name: &str, path: &str, remote: Option<&str>) -> Result<Project> {
+        if let Some(existing) = self.project_by_path(path)? {
+            bail!("{} is already recorded as project '{}'", path, existing.name);
+        }
+        if self.project_by_name(name)?.is_some() {
+            bail!("a project named '{name}' already exists; pick another with --name");
+        }
+        let created_at = now();
+        self.conn.execute(
+            "INSERT INTO projects (name, path, remote, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![name, path, remote, created_at],
+        )?;
+        Ok(Project {
+            id: self.conn.last_insert_rowid(),
+            name: name.to_string(),
+            path: path.to_string(),
+            remote: remote.map(str::to_string),
+            created_at,
+        })
+    }
+
+    pub fn projects(&self) -> Result<Vec<Project>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, path, remote, created_at FROM projects ORDER BY name")?;
+        let rows = stmt.query_map([], row_to_project)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn project_by_name(&self, name: &str) -> Result<Option<Project>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, name, path, remote, created_at FROM projects WHERE name = ?1",
+                [name],
+                row_to_project,
+            )
+            .optional()?)
+    }
+
+    pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, name, path, remote, created_at FROM projects WHERE path = ?1",
+                [path],
+                row_to_project,
+            )
+            .optional()?)
+    }
+
+    pub fn counts(&self) -> Result<Counts> {
+        // SQLite counts are signed integers; a count is never negative.
+        let count = |table: &str| -> Result<u64> {
+            let n: i64 = self.conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+            Ok(n.unsigned_abs())
+        };
+        Ok(Counts {
+            projects: count("projects")?,
+            versions: count("versions")?,
+            tasks: count("tasks")?,
+            sessions: count("sessions")?,
+            events: count("events")?,
+        })
+    }
+}
+
+fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
+    Ok(Project {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        path: row.get(2)?,
+        remote: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
+/// Timestamps are stored as UTC in RFC 3339, which sorts as text.
+pub fn now() -> String {
+    jiff::Timestamp::now()
+        .round(jiff::Unit::Second)
+        .map(|t| t.to_string())
+        .unwrap_or_else(|_| jiff::Timestamp::now().to_string())
+}

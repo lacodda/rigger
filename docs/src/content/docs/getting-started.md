@@ -3,14 +3,6 @@ title: Getting Started
 description: Install rigger and record the first project.
 ---
 
-:::note[Not released yet]
-rigger is at stage 0. The installers below become live with the first release, v0.1.0. Until then, build from source:
-
-```bash
-cargo install --git https://github.com/lacodda/rigger
-```
-:::
-
 ## Install
 
 One line on Windows (PowerShell):
@@ -56,15 +48,39 @@ Both scripts read two environment variables:
 
 ## First run
 
-From v0.1.0:
-
-```bash
-rigger init            # creates the database and the default profile
-rigger project add .   # records the repository you are in
-rigger project list
+```console
+$ rigger init
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 1)
+Next: rigger project add <path>
 ```
 
-The database lives in the platform data directory (`%LOCALAPPDATA%\lacodda\rigger` on Windows, `~/Library/Application Support/lacodda/rigger` on macOS, `~/.local/share/lacodda/rigger` on Linux); `RIGGER_DATA_DIR` overrides it.
+The database lives in the platform's local data directory; `RIGGER_DATA_DIR` overrides it, and [`rigger doctor`](/rigger/reference/doctor/) prints the path in use.
+
+## Record a project
+
+Point rigger at a repository. The project is named after its directory; `--name` overrides.
+
+```console
+$ rigger project add C:\dev\sample
+Recorded 'sample' at C:\dev\sample
+  remote: https://github.com/acme/sample.git
+
+$ rigger project list
+sample  C:\dev\sample
+```
+
+## Check the state
+
+```console
+$ rigger doctor
+database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
+schema:    version 1
+projects:  1
+versions:  0
+tasks:     0
+sessions:  0
+events:    0
+```
 
 ## Next steps
 

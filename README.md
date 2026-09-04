@@ -15,6 +15,35 @@ Run more than a handful of projects and the record of them scatters: a plan in o
 
 rigger keeps the record as data, in a local SQLite file, and derives everything else from it: the five-line digest you read, the context packet the assistant starts from, the calendar of what ships when, and the queue of decisions waiting for you.
 
+## A first look
+
+```console
+$ rigger init
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 1)
+Next: rigger project add <path>
+
+$ rigger project add C:\dev\sample
+Recorded 'sample' at C:\dev\sample
+  remote: https://github.com/acme/sample.git
+
+$ rigger project show sample
+sample
+  path:    C:\dev\sample
+  remote:  https://github.com/acme/sample.git
+  since:   2026-09-04T07:41:10Z
+
+$ rigger doctor
+database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
+schema:    version 1
+projects:  1
+versions:  0
+tasks:     0
+sessions:  0
+events:    0
+```
+
+A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
+
 ## What it will do
 
 - **Projects, versions, tasks, sessions.** A project has a map of versions; a version is a stage that ends in a tag; a task is a unit of work inside a version (at home) or a ticket across several projects and branches (at work). One model, two profiles.
@@ -27,20 +56,21 @@ rigger keeps the record as data, in a local SQLite file, and derives everything 
 
 ## Status
 
-rigger is at stage 0: the repository, the release conveyor and the roadmap exist; the first command surface arrives with v0.1.0. The road to 1.0 is twelve small releases in four blocks:
+v0.1.0 is the first release: the database, projects and `doctor`. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |
-| Record | 0.1 - 0.4 | database and projects, hub import, the context packet, the MCP server |
-| Facts | 0.5 - 0.6 | tags and commits as truth, the release calendar |
-| Owner | 0.7 - 0.9 | inbox and digest, hub export, sessions with end-of-session rituals |
-| Tasks | 0.10 - 0.12 | the ticket profile, incoming materials, thin project skills |
+| Record | 0.1 - 0.5 | database and projects, hub import, the context packet, a Claude Code session from it, the MCP server |
+| Facts | 0.6 - 0.8 | tags and commits as truth, changes read from commits, search and "why" |
+| Owner | 0.9 - 0.12 | inbox and digest, the release calendar, the Monday brief, retro |
+| Sessions | 0.13 - 0.14 | sessions with an end-of-session journal, hubs exported from the database |
+| Line | 0.15 - 0.16 | thin project skills, every project of a line recorded at once |
+| Tasks | 0.17 - 0.21 | the ticket profile, task cards, activity from branches, incoming material, snooze and handoff |
+| Stabilisation | 0.22 | `--json` everywhere, docs, a signed binary where needed |
 
 **1.0 "Truth in the database":** a full week where every session on every project runs through rigger and no hub is edited by hand. A desktop window (Tauri) and code knowledge follow in 1.x.
 
 ## Install
-
-There is no release yet. When v0.1.0 ships, the usual doors open:
 
 ```powershell
 irm https://raw.githubusercontent.com/lacodda/rigger/main/tools/install.ps1 | iex
@@ -54,8 +84,6 @@ curl -fsSL https://raw.githubusercontent.com/lacodda/rigger/main/tools/install.s
 npm i -g rigger-cli
 cargo install rigger
 ```
-
-Until then, build from source with `cargo install --git https://github.com/lacodda/rigger`.
 
 ## Documentation
 
