@@ -447,9 +447,17 @@ fn open_runs_the_assistant_in_the_project_with_the_packet() {
         recorded.contains("This is where the project stands"),
         "the packet did not reach the assistant: {recorded}"
     );
+    // The tail of the path, not the whole of it: macOS reports a temporary
+    // directory through its /private symlink, and Windows shells report the
+    // drive letter in their own case.
+    let cwd = recorded
+        .lines()
+        .find_map(|l| l.strip_prefix("cwd="))
+        .unwrap_or_else(|| panic!("the assistant did not report where it ran: {recorded}"));
     assert!(
-        recorded.contains(&format!("cwd={}", root.display())),
-        "the assistant did not run in the project: {recorded}"
+        cwd.to_lowercase().ends_with("proj"),
+        "the assistant did not run in the project: ran in {cwd}, expected {}",
+        root.display()
     );
 }
 
