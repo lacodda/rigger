@@ -24,7 +24,7 @@ const exePath = path.join(__dirname, exe);
 function download(url, file, redirects, done) {
   if (redirects > 5) return done(new Error("too many redirects"));
   https
-    .get(url, { headers: { "user-agent": "rigger-cli" } }, (res) => {
+    .get(url, { headers: { "user-agent": "lacodda-rigger" } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         return download(res.headers.location, file, redirects + 1, done);
@@ -45,7 +45,7 @@ function install(done) {
   const key = `${process.platform}-${process.arch}`;
   const entry = TARGETS[key];
   if (!entry) {
-    console.error(`rigger-cli: no prebuilt binary for ${key}; install with: cargo install rigger`);
+    console.error(`@lacodda/rigger: no prebuilt binary for ${key}; install with: cargo install rigger`);
     process.exit(1);
   }
   const [target, ext] = entry;
@@ -53,10 +53,10 @@ function install(done) {
   const url = `https://github.com/${REPO}/releases/download/${TAG}/${name}.${ext}`;
   const archive = path.join(__dirname, `archive.${ext}`);
 
-  console.log(`rigger-cli: downloading ${url}`);
+  console.log(`@lacodda/rigger: downloading ${url}`);
   download(url, archive, 0, (err) => {
     if (err) {
-      console.error(`rigger-cli: download failed: ${err.message}`);
+      console.error(`@lacodda/rigger: download failed: ${err.message}`);
       process.exit(1);
     }
     // Extraction must not depend on which tar happens to be first in PATH
@@ -71,7 +71,7 @@ function install(done) {
           )
         : spawnSync("tar", ["-xzf", `archive.${ext}`], { cwd: __dirname, stdio: "inherit" });
     if (result.status !== 0) {
-      console.error("rigger-cli: cannot extract the archive");
+      console.error("@lacodda/rigger: cannot extract the archive");
       process.exit(1);
     }
     fs.renameSync(path.join(__dirname, name, exe), exePath);
@@ -80,7 +80,7 @@ function install(done) {
     if (process.platform !== "win32") {
       fs.chmodSync(exePath, 0o755);
     }
-    console.log(`rigger-cli: installed rigger ${TAG}`);
+    console.log(`@lacodda/rigger: installed rigger ${TAG}`);
     done();
   });
 }

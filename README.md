@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://crates.io/crates/rigger"><img src="https://img.shields.io/crates/v/rigger?style=flat-square" alt="crates.io"></a>
-  <a href="https://www.npmjs.com/package/rigger-cli"><img src="https://img.shields.io/npm/v/rigger-cli?style=flat-square" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@lacodda/rigger"><img src="https://img.shields.io/npm/v/@lacodda/rigger?style=flat-square" alt="npm"></a>
   <a href="https://github.com/lacodda/rigger/actions"><img src="https://img.shields.io/github/actions/workflow/status/lacodda/rigger/ci.yml?style=flat-square" alt="CI"></a>
   <a href="https://github.com/lacodda/rigger/blob/main/LICENSE"><img src="https://img.shields.io/github/license/lacodda/rigger?style=flat-square" alt="License"></a>
 </p>
@@ -81,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/lacodda/rigger/main/tools/install.s
 ```
 
 ```bash
-npm i -g rigger-cli
+npm i -g @lacodda/rigger
 cargo install rigger
 ```
 

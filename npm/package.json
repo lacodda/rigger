@@ -1,5 +1,5 @@
 {
-  "name": "rigger-cli",
+  "name": "@lacodda/rigger",
   "version": "0.1.0",
   "rigger": {
     "binary": "v0.1.0"

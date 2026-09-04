@@ -51,5 +51,6 @@ jobs:
       # second copy in the repo, where it drifts from the original.
       - name: Use the root README for the npm page
         run: cp README.md npm/README.md
-      - run: npm publish
+      # A scoped package is private by default; the line publishes in the open.
+      - run: npm publish --access public
         working-directory: npm

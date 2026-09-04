@@ -26,7 +26,7 @@ anything.
 Via npm:
 
 ```bash
-npm i -g rigger-cli
+npm i -g @lacodda/rigger
 ```
 
 Via cargo:
