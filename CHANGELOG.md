@@ -2,11 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.1] - 2026-09-04
+
+### Features
+- Install rgr beside rigger
 ## [0.7.0] - 2026-09-04
 
-### Breaking Changes
-- **Database schema version 3.** Events gained the commit they came from (with a unique index, so one commit cannot be recorded twice), and tasks gained their place in a stage. Migration is automatic on the first command after upgrading, and the database is copied aside first, named for the schema it holds (`rigger.v2-<stamp>.bak`). An older rigger refuses a version 3 database rather than damaging it, so downgrading means restoring that copy.
-- **A task is no longer identified by its text alone.** It now matches on its text *or* its position in the stage, so rewording a line in a plan updates that task instead of adding a second one. Tasks already duplicated by an earlier import stay as they are - rigger does not guess which of two rows the owner meant; remove the stale one from the plan and re-import, or leave it, since it is closed the same way as any other.
+### Documentation
+- Changelog for v0.7.0
 
 ### Features
 - Read changes out of commit messages
