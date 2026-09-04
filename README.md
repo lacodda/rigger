@@ -126,6 +126,19 @@ Asked by several projects - one answer settles each group:
   Place in the release calendar — alpha, beta, gamma
 ```
 
+And it lays the releases out over the weeks, comparing what you aimed at with what the tags say happened:
+
+```console
+$ rigger calendar --from 2026-W37 --weeks 5
+         2026-W37  2026-W38  2026-W39  2026-W40  2026-W41
+sample   *v0.1.0             >v0.2.0             ·v0.3.0    A
+widget             +v0.1.0   ·v0.2.0                        B
+
++ shipped as planned   > slipped   ! overdue   * unplanned   · planned
+
+sample   v0.2.0 — aimed at 2026-W37, 2 weeks late
+```
+
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
 ## What it will do
@@ -135,12 +148,12 @@ A project is named after its directory - the name you call it by, not the one it
 - **A context packet instead of a hub.** `rigger context <project>` prints what the assistant needs to start - state, current stage, open questions, last events, next step - within a fixed token budget.
 - **An MCP server as the assistant's only pen.** Decisions, findings, pitfalls, changes and the next step are recorded as events through tools, not by editing markdown.
 - **The owner's inbox.** Every question waiting for your answer, across all projects, in one list.
-- **A release calendar** with tiers and rhythm, derived from the same data.
+- **A release calendar** with tiers and rhythm, derived from the same data - the plan is a week, the fact is a tag, and the gap between them is named.
 - **Hubs as an export.** The markdown files you keep in Obsidian are generated from the database, not written by hand.
 
 ## Status
 
-v0.9.0 opens the first two screens meant for you rather than the assistant: `inbox` gathers every question waiting on your answer across all projects - grouping the ones several projects are asking at once - and `digest` says what moved, five lines per project. Before them: the database, `import`, the context packet, the `mcp` server, facts from git, a chronicle that writes itself, and search. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.10.0 puts the release calendar in the database. A project gets a tier and a rhythm, a version gets the week it is aimed at, and `calendar` lays the two against the tags: what shipped on time, what slipped and by how far, what is past its week with no tag at all. `next` reads one week in full, and names the projects that have quietly stopped releasing at the pace their tier asks. Before it: the database, `import`, the context packet, the `mcp` server, facts from git, a chronicle that writes itself, search, and the owner's inbox and digest. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

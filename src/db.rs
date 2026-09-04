@@ -118,6 +118,18 @@ const MIGRATIONS: &[&str] = &[
         INSERT INTO events_fts(rowid, body) VALUES (new.id, new.body);
     END;
     ",
+    // v5: how fast a project is meant to release. `tier` has been a column
+    // since v1 and was never written to - a place kept for the rotation the
+    // owner's calendar described. The rhythm joins it, because a tier alone
+    // cannot say a project has fallen behind: A is "every two or three
+    // weeks", and the number is what a check can be made of.
+    //
+    // Nullable on purpose. A project with no tier is not in the rotation by
+    // omission rather than by decision, and the calendar says so instead of
+    // inventing a default that would make it look scheduled.
+    "
+    ALTER TABLE projects ADD COLUMN rhythm_weeks INTEGER;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -134,6 +146,10 @@ pub struct Project {
     pub path: String,
     pub remote: Option<String>,
     pub created_at: String,
+    /// Where the project sits in the release rotation, once someone says.
+    pub tier: Option<String>,
+    /// Weeks it is meant to go between releases.
+    pub rhythm_weeks: Option<u32>,
 }
 
 /// What writing a record did. An import reports the three apart, so that
@@ -342,11 +358,15 @@ impl Db {
             path: path.to_string(),
             remote: remote.map(str::to_string),
             created_at,
+            tier: None,
+            rhythm_weeks: None,
         })
     }
 
     pub fn projects(&self) -> Result<Vec<Project>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, path, remote, created_at FROM projects ORDER BY name")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, remote, created_at, tier, rhythm_weeks FROM projects ORDER BY name")?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -355,7 +375,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at FROM projects WHERE name = ?1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks FROM projects WHERE name = ?1",
                 [name],
                 row_to_project,
             )
@@ -366,7 +386,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at FROM projects WHERE path = ?1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -985,6 +1005,79 @@ impl Db {
         Ok(None)
     }
 
+    /// Records where a project sits in the rotation and how fast it is
+    /// meant to release. A tier without a rhythm takes the tier's own.
+    pub fn set_tier(&self, project_id: i64, tier: &str, rhythm_weeks: Option<u32>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE projects SET tier = ?2, rhythm_weeks = ?3 WHERE id = ?1",
+            params![project_id, tier, rhythm_weeks],
+        )?;
+        Ok(())
+    }
+
+    /// Aims a version at a week, or clears the aim when given `None`.
+    ///
+    /// Only a version the record already holds can be planned: a typo would
+    /// otherwise create a row that no plan, changelog or tag knows about,
+    /// and it would sit in the calendar for ever.
+    pub fn set_planned_week(&self, project_id: i64, version: &str, week: Option<&str>) -> Result<Change> {
+        let existing: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT planned_week FROM versions WHERE project_id = ?1 AND name = ?2",
+                params![project_id, version],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(current) = existing else {
+            bail!("no version '{version}' in the record; see `rigger project show`");
+        };
+        if current.as_deref() == week {
+            return Ok(Change::Unchanged);
+        }
+        self.conn.execute(
+            "UPDATE versions SET planned_week = ?3 WHERE project_id = ?1 AND name = ?2",
+            params![project_id, version, week],
+        )?;
+        Ok(Change::Updated)
+    }
+
+    /// Every version of a project that has a place in the calendar: aimed
+    /// at a week, or shipped, or both. A version that is neither is in the
+    /// plan and not yet on the calendar, which is a different screen.
+    pub fn calendar_versions(&self, project_id: i64, project: &str) -> Result<Vec<crate::calendar::Planned>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, title, planned_week, shipped_at
+             FROM versions
+             WHERE project_id = ?1 AND (planned_week IS NOT NULL OR shipped_at IS NOT NULL)",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            let name: String = r.get(0)?;
+            let title: Option<String> = r.get(1)?;
+            let planned: Option<String> = r.get(2)?;
+            let shipped_at: Option<String> = r.get(3)?;
+            Ok((name, title, planned, shipped_at))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (version, title, planned, shipped_at) = row?;
+            out.push(crate::calendar::Planned {
+                project: project.to_string(),
+                version,
+                title,
+                // A week that cannot be read is dropped rather than
+                // refused: it came from an import or an older rigger, and
+                // one bad string should not empty the calendar.
+                planned: planned.as_deref().and_then(|w| crate::calendar::Week::parse(w).ok()),
+                shipped: shipped_at.as_deref().and_then(crate::calendar::Week::of_recorded),
+                shipped_at,
+            });
+        }
+        out.sort_by_key(|a| version_order(&a.version));
+        Ok(out)
+    }
+
     /// Every version name the record holds for a project.
     pub fn version_names(&self, project_id: i64) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT name FROM versions WHERE project_id = ?1")?;
@@ -1154,6 +1247,8 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         path: row.get(2)?,
         remote: row.get(3)?,
         created_at: row.get(4)?,
+        tier: row.get(5)?,
+        rhythm_weeks: row.get(6)?,
     })
 }
 

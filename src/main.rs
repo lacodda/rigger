@@ -3,6 +3,7 @@
 //! The command surface grows one release at a time; this release brings the
 //! database, projects and `doctor`.
 
+mod calendar;
 mod commit;
 mod context;
 mod db;
@@ -141,6 +142,32 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Plan a version: aim it at a week of the calendar
+    Version {
+        #[command(subcommand)]
+        command: VersionCommand,
+    },
+    /// Weeks by projects: what is planned, what shipped, what slipped
+    Calendar {
+        /// How many weeks to show, starting this week
+        #[arg(long, default_value_t = 6)]
+        weeks: u32,
+        /// Start from this week instead of the current one
+        #[arg(long, value_name = "WEEK")]
+        from: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// This week's focus: what is aimed at it, and what is already late
+    Next {
+        /// Read a week other than the current one
+        #[arg(long, value_name = "WEEK")]
+        week: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
     /// Answer a question or sort a wish, so it leaves the packet
@@ -222,6 +249,33 @@ enum ProjectCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Set the tier a project sits in, and how often it should release
+    Tier {
+        /// Project name
+        name: String,
+        /// A, B, C, or out for a project outside the rotation
+        tier: String,
+        /// Weeks between releases; the tier's own rhythm when omitted
+        #[arg(long, value_name = "WEEKS")]
+        rhythm: Option<u32>,
+    },
+}
+
+#[derive(Subcommand)]
+enum VersionCommand {
+    /// Aim a version at a week of the calendar
+    Plan {
+        /// Project name
+        project: String,
+        /// Version, as the record spells it
+        version: String,
+        /// The week it is aimed at, as `2026-W37`
+        #[arg(long, value_name = "WEEK")]
+        week: Option<String>,
+        /// Take the version off the calendar
+        #[arg(long, conflicts_with = "week")]
+        clear: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -241,6 +295,7 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Add { path, name } => project_add(path, name),
             ProjectCommand::List { json } => project_list(json),
             ProjectCommand::Show { name, json } => project_show(&name, json),
+            ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
         },
         Command::Import { project, hub, json } => import_hub(&project, &hub, json),
         Command::Context {
@@ -262,6 +317,11 @@ fn run(cli: Cli) -> Result<()> {
             json,
         } => find(&query, project.as_deref(), kind.as_deref(), limit, json),
         Command::Why { project, version, json } => why(&project, &version, json),
+        Command::Version { command } => match command {
+            VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear),
+        },
+        Command::Calendar { weeks, from, json } => show_calendar(weeks, from.as_deref(), json),
+        Command::Next { week, json } => show_next(week.as_deref(), json),
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -766,6 +826,341 @@ fn project_show(name: &str, json: bool) -> Result<()> {
     println!("  path:    {}", project.path);
     println!("  remote:  {}", project.remote.as_deref().unwrap_or("none"));
     println!("  since:   {}", project.created_at);
+    Ok(())
+}
+
+fn project_tier(name: &str, tier: &str, rhythm: Option<u32>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, name)?;
+    let tier = calendar::Tier::parse(tier)?;
+    // A tier carries a rhythm of its own, so setting one is a single word
+    // in the common case; `--rhythm` is for the project that keeps its
+    // tier's company but not its pace.
+    let rhythm = match rhythm {
+        Some(0) => bail!("a rhythm of 0 weeks is not a rhythm; leave it out to use the tier's"),
+        Some(weeks) => Some(weeks),
+        None => tier.default_rhythm(),
+    };
+    db.set_tier(project.id, tier.as_str(), rhythm)?;
+
+    println!("{} is tier {tier} - {}", project.name, tier.describe());
+    match rhythm {
+        Some(weeks) => println!("  a release every {}", plural(weeks as usize, "week", "weeks")),
+        None => println!("  no rhythm to keep"),
+    }
+    Ok(())
+}
+
+fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    if week.is_none() && !clear {
+        bail!("say which week with --week 2026-W37, or --clear to take it off the calendar");
+    }
+    let week = week.map(calendar::Week::parse).transpose()?;
+    let stored = week.map(|w| w.to_string());
+    let change = db.set_planned_week(project.id, version, stored.as_deref())?;
+
+    match (week, change) {
+        (_, db::Change::Unchanged) => println!("{version} was already there; nothing changed"),
+        (Some(week), _) => println!("{version} is aimed at {week} - the week of {}", week.friday()),
+        (None, _) => println!("{version} is off the calendar"),
+    }
+    Ok(())
+}
+
+/// The grid: weeks across, projects down.
+fn show_calendar(weeks: u32, from: Option<&str>, json: bool) -> Result<()> {
+    if weeks == 0 {
+        bail!("a calendar of 0 weeks shows nothing; ask for at least one");
+    }
+    let db = Db::open(&paths::db_path()?)?;
+    let now = calendar::Week::current();
+    let from = match from {
+        Some(text) => calendar::Week::parse(text)?,
+        None => now,
+    };
+
+    let mut rows = Vec::new();
+    let mut all = Vec::new();
+    for project in db.projects()? {
+        let versions = db.calendar_versions(project.id, &project.name)?;
+        let tier = project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok());
+        let row = calendar::row(&project.name, tier, project.rhythm_weeks, &versions, from, weeks, now);
+        if !row.cells.is_empty() {
+            rows.push(row);
+        }
+        all.push((project.name.clone(), versions));
+    }
+
+    let span: Vec<calendar::Week> = (0..weeks).map(|n| from.plus(i64::from(n))).collect();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "now": now,
+                "weeks": span,
+                "projects": rows,
+            }))?
+        );
+        return Ok(());
+    }
+
+    if rows.is_empty() {
+        println!("Nothing is on the calendar for these {}.", plural(weeks as usize, "week", "weeks"));
+        println!("Aim a version at a week with: rigger version plan <project> <version> --week 2026-W37");
+        return Ok(());
+    }
+
+    // Each column is as wide as the widest thing in it, so a week holding
+    // two releases does not push the rest of the grid out of line.
+    let name_width = rows.iter().map(|r| r.project.chars().count()).max().unwrap_or(0).max(7);
+    let widths: Vec<usize> = span
+        .iter()
+        .map(|week| {
+            rows.iter()
+                .map(|row| cell_text(row, *week).chars().count())
+                .max()
+                .unwrap_or(0)
+                // The heading needs room too, and this week's carries a mark.
+                .max(week.to_string().chars().count() + usize::from(*week == now))
+        })
+        .collect();
+
+    print!("{:name_width$}", "");
+    for (week, width) in span.iter().zip(&widths) {
+        // This week is marked in the heading, because a grid read on a
+        // Wednesday is read from where the reader stands.
+        let heading = if *week == now { format!("{week}*") } else { week.to_string() };
+        print!("  {heading:width$}");
+    }
+    println!();
+
+    for row in &rows {
+        print!("{:name_width$}", row.project);
+        for (week, width) in span.iter().zip(&widths) {
+            print!("  {:width$}", cell_text(row, *week));
+        }
+        if let Some(tier) = row.tier {
+            print!("   {tier}");
+        }
+        println!();
+    }
+
+    println!();
+    println!(
+        "{} shipped as planned   {} slipped   {} overdue   {} unplanned   {} planned",
+        calendar::Standing::Shipped.mark(),
+        calendar::Standing::Slipped.mark(),
+        calendar::Standing::Overdue.mark(),
+        calendar::Standing::Unplanned.mark(),
+        calendar::Standing::Planned.mark(),
+    );
+
+    // Slippage, spelt out. The grid shows that a release moved; only a
+    // number says how far, and that is what a retrospective needs.
+    let mut late: Vec<String> = Vec::new();
+    for row in &rows {
+        let Some((_, versions)) = all.iter().find(|(name, _)| *name == row.project) else {
+            continue;
+        };
+        for cell in &row.cells {
+            if !matches!(cell.standing, calendar::Standing::Slipped | calendar::Standing::Overdue) {
+                continue;
+            }
+            let Some(version) = versions.iter().find(|v| v.version == cell.version) else {
+                continue;
+            };
+            let Some(weeks) = version.slip().or_else(|| version.overdue(now)) else {
+                continue;
+            };
+            let aimed = version.planned.map(|w| w.to_string()).unwrap_or_default();
+            late.push(format!(
+                "{:name_width$}  {} — aimed at {aimed}, {}",
+                row.project,
+                cell.version,
+                weeks_late(weeks)
+            ));
+        }
+    }
+    if !late.is_empty() {
+        println!();
+        for line in &late {
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
+/// What one cell of the grid says.
+///
+/// Two releases in a week are named; more than two are counted. The real
+/// record made this necessary rather than tidy: one week of one project
+/// holds forty-six releases, and naming them all stretched the column past
+/// three hundred characters, wrapped every row and pushed the heading out
+/// of line - a grid that could not be read at all. The count keeps the
+/// shape, and `why` is where the names belong anyway.
+fn cell_text(row: &calendar::Row, week: calendar::Week) -> String {
+    let cells: Vec<&calendar::Cell> = row.cells.iter().filter(|cell| cell.week == week).collect();
+    let named = |cell: &calendar::Cell| format!("{}{}", cell.standing.mark(), cell.version);
+    match cells.len() {
+        0 => String::new(),
+        1..=2 => cells.iter().map(|c| named(c)).collect::<Vec<_>>().join(" "),
+        n => {
+            // The first and last say what the run spans; the mark is the
+            // worst standing in it, so a slipped release inside a busy week
+            // is not hidden by the ones around it.
+            let worst = cells
+                .iter()
+                .map(|c| c.standing)
+                .max_by_key(|s| severity(*s))
+                .unwrap_or(calendar::Standing::Shipped);
+            format!(
+                "{}{}..{} ({n})",
+                worst.mark(),
+                cells.first().map(|c| c.version.as_str()).unwrap_or(""),
+                cells.last().map(|c| c.version.as_str()).unwrap_or("")
+            )
+        }
+    }
+}
+
+/// How much a standing wants to be seen when a cell can only show one.
+fn severity(standing: calendar::Standing) -> u8 {
+    match standing {
+        calendar::Standing::Overdue => 4,
+        calendar::Standing::Slipped => 3,
+        calendar::Standing::Planned => 2,
+        calendar::Standing::Unplanned => 1,
+        calendar::Standing::Shipped => 0,
+    }
+}
+
+fn weeks_late(weeks: i64) -> String {
+    match weeks {
+        1 => "a week late".to_string(),
+        n if n < 0 => format!("{} early", plural(n.unsigned_abs() as usize, "week", "weeks")),
+        n => format!("{} late", plural(n as usize, "week", "weeks")),
+    }
+}
+
+/// The focus of a week: what is aimed at it, and what should have shipped
+/// before it.
+fn show_next(week: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let now = match week {
+        Some(text) => calendar::Week::parse(text)?,
+        None => calendar::Week::current(),
+    };
+
+    let mut focus = Vec::new();
+    let mut overdue = Vec::new();
+    let mut rhythms = Vec::new();
+    for project in db.projects()? {
+        let versions = db.calendar_versions(project.id, &project.name)?;
+        let tier = project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok());
+
+        for version in &versions {
+            if version.planned == Some(now) && version.shipped.is_none() {
+                focus.push(calendar::Focus {
+                    project: project.name.clone(),
+                    tier,
+                    version: version.version.clone(),
+                    title: version.title.clone(),
+                    planned: now,
+                    overdue_weeks: None,
+                });
+            } else if let Some(weeks) = version.overdue(now) {
+                overdue.push(calendar::Focus {
+                    project: project.name.clone(),
+                    tier,
+                    version: version.version.clone(),
+                    title: version.title.clone(),
+                    planned: version.planned.unwrap_or(now),
+                    overdue_weeks: Some(weeks),
+                });
+            }
+        }
+
+        // The rhythm check needs a tier and a number to check against; a
+        // project with neither is out of the rotation by omission.
+        if let (Some(tier), Some(rhythm)) = (tier, project.rhythm_weeks)
+            && tier != calendar::Tier::Out
+        {
+            let last = versions
+                .iter()
+                .filter_map(|v| v.shipped.map(|week| (db::version_order(&v.version), week)))
+                .max()
+                .map(|(_, week)| week);
+            rhythms.push((project.name.clone(), tier, rhythm, last));
+        }
+    }
+    focus.sort_by(|a, b| a.tier.cmp(&b.tier).then_with(|| a.project.cmp(&b.project)));
+    overdue.sort_by(|a, b| b.overdue_weeks.cmp(&a.overdue_weeks).then_with(|| a.project.cmp(&b.project)));
+    let lapsed = calendar::lapsed(&rhythms, now);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "week": now,
+                "friday": now.friday().to_string(),
+                "focus": focus,
+                "overdue": overdue,
+                "lapsed": lapsed,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("{now} — releases on {}", now.friday());
+    println!();
+
+    if focus.is_empty() {
+        println!("Nothing is aimed at this week.");
+    } else {
+        for item in &focus {
+            let tier = item.tier.map(|t| format!(" [{t}]")).unwrap_or_default();
+            let title = item.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default();
+            println!("{}{tier}  {}{title}", item.project, item.version);
+        }
+    }
+
+    if !overdue.is_empty() {
+        println!();
+        println!("Past their week:");
+        for item in &overdue {
+            let weeks = item.overdue_weeks.unwrap_or_default();
+            let ago = if weeks == 1 {
+                "a week ago".to_string()
+            } else {
+                format!("{} ago", plural(weeks.max(0) as usize, "week", "weeks"))
+            };
+            println!("{}  {} — was due {} ({ago})", item.project, item.version, item.planned);
+        }
+    }
+
+    // A project that has kept no rhythm is not late for a week, it is late
+    // for its tier - the failure the written calendar could never see,
+    // because nothing ever compared the rotation to the tags.
+    if !lapsed.is_empty() {
+        println!();
+        println!("Behind their rhythm:");
+        for item in &lapsed {
+            let since = match item.since {
+                Some(week) => format!("last shipped {week}"),
+                None => "never shipped".to_string(),
+            };
+            println!(
+                "{} [{}]  {since}, {} without a release, rhythm is {}",
+                item.project,
+                item.tier,
+                plural(item.weeks.max(0) as usize, "week", "weeks"),
+                plural(item.rhythm_weeks as usize, "week", "weeks")
+            );
+        }
+    }
     Ok(())
 }
 
