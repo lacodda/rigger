@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [0.4.1] - 2026-09-04
 
+### Bug Fixes
+- Make the assistant launch work on every platform
+
 ### Documentation
 - Changelog for v0.4.0
 
