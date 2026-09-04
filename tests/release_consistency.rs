@@ -266,7 +266,10 @@ mod tests {
     fn the_svg_tiles_paint_the_pair_in_tile_coordinates() {
         for file in ["assets/logo.svg", "assets/logo-m.svg", "assets/logo-s.svg", "assets/banner.svg"] {
             let svg = read(file);
-            assert!(svg.contains("gradientUnits=\"userSpaceOnUse\""), "{file} does not paint the pair in tile coordinates");
+            assert!(
+                svg.contains("gradientUnits=\"userSpaceOnUse\""),
+                "{file} does not paint the pair in tile coordinates"
+            );
             for colour in ["#8A62F0", "#2FB3C6"] {
                 assert!(svg.contains(colour), "{file} lacks the pair colour {colour}");
             }
@@ -288,7 +291,11 @@ mod tests {
                 if width == 0 { 256 } else { u32::from(width) }
             })
             .collect();
-        assert_eq!(sizes, vec![256, 128, 64, 48, 32, 24, 16], "icon.ico entries are {sizes:?}; expected every level, largest first");
+        assert_eq!(
+            sizes,
+            vec![256, 128, 64, 48, 32, 24, 16],
+            "icon.ico entries are {sizes:?}; expected every level, largest first"
+        );
     }
 
     /// A version number in README prose goes stale the moment the next
