@@ -452,7 +452,9 @@ fn open_runs_the_assistant_in_the_project_with_the_packet() {
     // drive letter in their own case.
     let cwd = recorded
         .lines()
-        .find_map(|l| l.strip_prefix("cwd="))
+        // PowerShell writes a byte-order mark at the head of the file, so the
+        // first line does not start with the text it appears to start with.
+        .find_map(|l| l.trim_start_matches('\u{feff}').strip_prefix("cwd="))
         .unwrap_or_else(|| panic!("the assistant did not report where it ran: {recorded}"));
     assert!(
         cwd.to_lowercase().ends_with("proj"),
