@@ -2,7 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.10.0] - 2026-09-04
+
+### Features
+- Put the release calendar in the record
 ## [0.9.0] - 2026-09-04
+
+### Documentation
+- Changelog for v0.9.0
 
 ### Features
 - Show the owner what waits and what moved
