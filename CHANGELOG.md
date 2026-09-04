@@ -2,7 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-09-04
+
+### Breaking Changes
+- **Database schema version 2.** `sync` needs somewhere to record a project's activity and, on each version, where its shipping date came from - an imported hub carries dates written by hand, and they look exactly like a tag's. Migration is automatic on the first command after upgrading, and the database is copied aside first, named for the schema it holds (`rigger.v1-<stamp>.bak`); nothing has to be done by hand. An older rigger refuses a version 2 database rather than damaging it, so downgrading means restoring that copy.
+- **A tag now outranks the plan.** A version with a tag is recorded as shipped on the date of the tag's commit, whatever an imported hub said about it - including its date. Where a hub claimed a release git cannot confirm, the claim is left alone and reported by `rigger doctor`.
+
+### Features
+- Read tags and commits into facts
 ## [0.5.0] - 2026-09-04
+
+### Documentation
+- Changelog for v0.5.0
 
 ### Features
 - Serve the record to an assistant over MCP

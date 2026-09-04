@@ -285,7 +285,7 @@ fn render_state(p: &Packet) -> String {
     // says: a project can be busy in commits and silent in events, and the
     // owner's question is how long it has actually been still.
     match (p.state.commits_since_tag, p.state.days_since_commit) {
-        (Some(0), Some(days)) if days > 0 => out.push_str(&format!("Nothing committed since the last release, {days} days ago\n")),
+        (Some(0), Some(days)) if days > 0 => out.push_str(&format!("Nothing committed since the last release, {}\n", days_ago(days))),
         (Some(commits), Some(days)) if commits > 0 => {
             let plural = if commits == 1 { "commit" } else { "commits" };
             out.push_str(&format!("{commits} {plural} since the last release, the last one {}\n", days_ago(days)))
