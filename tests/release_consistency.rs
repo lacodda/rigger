@@ -180,6 +180,23 @@ mod tests {
         }
     }
 
+    /// The Windows installer edits the user PATH in the registry and must keep
+    /// its type. `[Environment]::SetEnvironmentVariable` rewrites REG_EXPAND_SZ
+    /// as REG_SZ, which turns every `%VAR%` entry into literal text - found on
+    /// the v0.1.0 installer of this very product, and on its siblings.
+    #[test]
+    fn the_windows_installer_keeps_the_path_expandable() {
+        let installer = read("tools/install.ps1");
+        assert!(
+            !installer.contains("SetEnvironmentVariable"),
+            "install.ps1 uses [Environment]::SetEnvironmentVariable, which downgrades PATH to a plain string"
+        );
+        assert!(
+            installer.contains("-Type ExpandString") && installer.contains("DoNotExpandEnvironmentNames"),
+            "install.ps1 must read the raw PATH and write it back as an expandable string"
+        );
+    }
+
     /// The installers must ask for release assets that release.yml actually
     /// builds. kasl's installer requested targets that never existed and
     /// answered 404 on every Unix machine for months.
