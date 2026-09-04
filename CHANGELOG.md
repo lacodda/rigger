@@ -2,10 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.4.0] - 2026-09-04
+## [0.4.1] - 2026-09-04
+
+### Documentation
+- Changelog for v0.4.0
 
 ### Features
 - Start an assistant session with the packet in hand
+
+### Testing
+- Compare the assistant's directory by its tail
+- Read past the byte-order mark PowerShell writes
 ## [0.4.0] - 2026-09-04
 
 ### Features
