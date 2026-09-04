@@ -212,6 +212,16 @@ fn tools() -> Vec<Value> {
             &["project", "text"],
         ),
         tool(
+            "resolve",
+            "Answer a question waiting for the owner, or mark a wish sorted into the plan, so it leaves the packet. Ids come from the packet. Answer a question only when the owner has actually said something - this records their answer, not your guess at it.",
+            json!({
+                "project": project_arg(),
+                "id": { "type": "integer", "description": "Id of the question or wish, as the packet lists it" },
+                "answer": text_arg("What the owner decided; recorded as a decision. Omit for a wish."),
+            }),
+            &["project", "id"],
+        ),
+        tool(
             "close_task",
             "Mark a task of the current stage done. Ids come from `plan`.",
             json!({
@@ -275,6 +285,20 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
         "plan" => {
             let project = project(db)?;
             Ok(render_plan(db, &project)?)
+        }
+        "resolve" => {
+            let project = project(db)?;
+            let Some(id) = args.get("id").and_then(Value::as_i64) else {
+                bail!("this tool needs an `id`; the packet lists them");
+            };
+            let answer = args.get("answer").and_then(Value::as_str).map(str::trim).filter(|a| !a.is_empty());
+            let (kind, body) = db.resolve_event(project.id, id, answer)?;
+            let first_line = body.lines().next().unwrap_or(&body);
+            Ok(match (kind.as_str(), answer) {
+                ("question", Some(_)) => format!("Answered [{id}]: {first_line}\nThe answer is recorded as a decision."),
+                ("question", None) => format!("Closed question [{id}]: {first_line}"),
+                _ => format!("Sorted [{id}]: {first_line}"),
+            })
         }
         "close_task" => {
             let project = project(db)?;
@@ -448,6 +472,7 @@ mod tests {
             "set_next_step",
             "ask_owner",
             "wish",
+            "resolve",
             "close_task",
         ] {
             assert!(names.contains(&promised.to_string()), "{promised} is missing from {names:?}");

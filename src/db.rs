@@ -74,6 +74,18 @@ const MIGRATIONS: &[&str] = &[
     -- imported hub carries dates too.
     ALTER TABLE versions ADD COLUMN shipped_source TEXT;
     ",
+    // v3: the commit an event came from. A commit is read again on every
+    // sync, so the hash - not the text - is what makes recording it twice
+    // impossible; a rewritten message would otherwise arrive as a second
+    // event about the same change.
+    "
+    ALTER TABLE events ADD COLUMN commit_hash TEXT;
+    CREATE UNIQUE INDEX events_by_commit ON events (project_id, commit_hash) WHERE commit_hash IS NOT NULL;
+    -- Where a task sits in its stage. A plan is edited: rewording a line
+    -- used to add a second task and leave the first one open for ever,
+    -- because the text was the only thing identifying it.
+    ALTER TABLE tasks ADD COLUMN position INTEGER;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -116,6 +128,15 @@ pub struct CurrentStage {
 pub struct Task {
     pub id: i64,
     pub title: String,
+}
+
+/// An event as the packet reads it back.
+pub struct RecentEvent {
+    pub kind: String,
+    pub date: String,
+    pub body: String,
+    /// Read from a commit message rather than written by a person.
+    pub from_git: bool,
 }
 
 /// A version row as `mark_shipped` needs to see it: what the record
@@ -349,28 +370,51 @@ impl Db {
     /// Records a task of a version. The pair (version, title) identifies it:
     /// the hub has no ids, and the text of a line is what the owner edits
     /// least once a stage is written.
-    pub fn upsert_task(&self, project_id: i64, version_id: i64, task: &crate::hub::Task) -> Result<Change> {
+    pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task) -> Result<Change> {
         let status = if task.done { "done" } else { "open" };
-        let existing: Option<(i64, String)> = self
+        let position = position as i64;
+
+        // The text first: a line that moved within its stage is the same
+        // line, and matching it by text keeps its history when a task is
+        // inserted above it.
+        let existing: Option<(i64, String, String, Option<i64>)> = self
             .conn
             .query_row(
-                "SELECT id, status FROM tasks WHERE version_id = ?1 AND title = ?2",
+                "SELECT id, status, title, position FROM tasks WHERE version_id = ?1 AND title = ?2",
                 params![version_id, task.title],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
-            .optional()?;
+            .optional()?
+            // Then the position: a line that was reworded in place is also
+            // the same line. Without this, editing a plan added a second
+            // task and left the first open for ever - and a packet went on
+            // showing the old wording of work already under way.
+            .or(self
+                .conn
+                .query_row(
+                    "SELECT id, status, title, position FROM tasks WHERE version_id = ?1 AND position = ?2",
+                    params![version_id, position],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional()?);
+
         match existing {
-            Some((_, was)) if was == status => Ok(Change::Unchanged),
-            Some((id, _)) => {
+            Some((id, was, title, at)) => {
+                if was == status && title == task.title && at == Some(position) {
+                    return Ok(Change::Unchanged);
+                }
                 let closed_at = task.done.then(now);
-                self.conn
-                    .execute("UPDATE tasks SET status = ?1, closed_at = ?2 WHERE id = ?3", params![status, closed_at, id])?;
+                self.conn.execute(
+                    "UPDATE tasks SET status = ?1, closed_at = ?2, title = ?3, position = ?4 WHERE id = ?5",
+                    params![status, closed_at, task.title, position, id],
+                )?;
                 Ok(Change::Updated)
             }
             None => {
                 self.conn.execute(
-                    "INSERT INTO tasks (project_id, version_id, title, status, created_at, closed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![project_id, version_id, task.title, status, now(), task.done.then(now)],
+                    "INSERT INTO tasks (project_id, version_id, title, status, created_at, closed_at, position)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![project_id, version_id, task.title, status, now(), task.done.then(now), position],
                 )?;
                 Ok(Change::Added)
             }
@@ -413,6 +457,58 @@ impl Db {
             params![project_id, kind, body, author, created_at],
         )?;
         Ok(Change::Added)
+    }
+
+    /// Closes an open question or wish, optionally recording the answer.
+    ///
+    /// The event is not deleted: the record is a history, and a question
+    /// that was asked stays asked. It changes kind, so it leaves the
+    /// packet's "waiting for the owner" list, and an answer becomes a
+    /// decision in its own right - which is what an answer to a question
+    /// about a project actually is.
+    pub fn resolve_event(&self, project_id: i64, id: i64, answer: Option<&str>) -> Result<(String, String)> {
+        let found: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT kind, body FROM events WHERE id = ?1 AND project_id = ?2",
+                params![id, project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((kind, body)) = found else {
+            bail!("no open question or wish [{id}] in this project; the packet lists the ids");
+        };
+        if !matches!(kind.as_str(), "question" | "wish") {
+            bail!("[{id}] is a {kind}, not a question or a wish; only those are answered");
+        }
+
+        // `answered` and `sorted` keep the kind readable in the record: one
+        // says the owner replied, the other that a wish found its place in
+        // the plan.
+        let resolved = if kind == "question" { "answered" } else { "sorted" };
+        self.conn.execute("UPDATE events SET kind = ?1 WHERE id = ?2", params![resolved, id])?;
+
+        if let Some(answer) = answer {
+            let text = format!("{body}\n\n{answer}");
+            self.record_event(project_id, "decision", &text, &now(), "owner")?;
+        }
+        Ok((kind, body))
+    }
+
+    /// Records a change read from a commit, unless that commit is already
+    /// recorded.
+    ///
+    /// The hash is the key, not the text: `sync` reads the same history on
+    /// every run, and a message amended between runs would otherwise arrive
+    /// as a second event about one change. A unique index enforces it, so
+    /// two syncs racing cannot both insert.
+    pub fn record_commit_event(&self, project_id: i64, hash: &str, body: &str, created_at: &str) -> Result<Change> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO events (project_id, kind, body, author, created_at, commit_hash)
+             VALUES (?1, 'change', ?2, 'git', ?3, ?4)",
+            params![project_id, body, created_at, hash],
+        )?;
+        Ok(if changed > 0 { Change::Added } else { Change::Unchanged })
     }
 
     /// The newest version the record says shipped, with its date.
@@ -672,16 +768,25 @@ impl Db {
     /// The most recent events worth reading at the start of a session:
     /// what was decided, found, tripped over or changed. Questions and
     /// wishes have their own sections, and the next step its own line.
-    pub fn recent_events(&self, project_id: i64, limit: u32) -> Result<Vec<(String, String, String)>> {
+    pub fn recent_events(&self, project_id: i64, limit: u32) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
-            "SELECT kind, created_at, body FROM events
+            "SELECT kind, created_at, body, author FROM events
              WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next')
              ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_id, limit], |r| {
             let date: String = r.get(1)?;
-            // Timestamps are stored whole; a packet only needs the day.
-            Ok((r.get(0)?, date.split('T').next().unwrap_or(&date).to_string(), r.get(2)?))
+            let author: String = r.get(3)?;
+            Ok(RecentEvent {
+                kind: r.get(0)?,
+                // Timestamps are stored whole; a packet only needs the day.
+                date: date.split('T').next().unwrap_or(&date).to_string(),
+                body: r.get(2)?,
+                // A change read from a commit can be read again in git; one
+                // written by hand exists nowhere else. The packet needs to
+                // tell them apart to decide what to drop first.
+                from_git: author == "git",
+            })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

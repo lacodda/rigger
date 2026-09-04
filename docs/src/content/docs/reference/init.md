@@ -11,7 +11,7 @@ Creates the data directory and the database inside it, migrated to the current s
 
 ```console
 $ rigger init
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 2)
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 3)
 Next: rigger project add <path>
 
 $ rigger init

@@ -35,6 +35,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `set_next_step` | The one line the next session starts from; the newest wins |
 | `ask_owner` | A question only the owner can settle; it waits in the packet |
 | `wish` | Something to sort into the plan later |
+| `resolve` | Answers a question or sorts a wish, so it leaves the packet |
 | `close_task` | Marks a task of the current stage done |
 
 Every tool takes a `project` - the name [`rigger project list`](/rigger/reference/project/) shows. The recording tools take a `text`; an empty one is refused, because a record with nothing in it helps nobody.
@@ -72,4 +73,5 @@ Only a malformed request is a JSON-RPC error - an unknown method, a call without
 
 - [`context`](/rigger/reference/context/) - the same packet, on the command line.
 - [`note`](/rigger/reference/note/) - the same recording, for the owner and for scripts.
+- [`resolve`](/rigger/reference/resolve/) - what the `resolve` tool does on the command line.
 - [`open`](/rigger/reference/open/) - starting a session with the packet already in it.

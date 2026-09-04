@@ -3,6 +3,7 @@
 //! The command surface grows one release at a time; this release brings the
 //! database, projects and `doctor`.
 
+mod commit;
 mod context;
 mod db;
 mod hub;
@@ -93,6 +94,15 @@ enum Command {
     },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
+    /// Answer a question or sort a wish, so it leaves the packet
+    Resolve {
+        /// Project name
+        project: String,
+        /// Id of the question or wish, as the packet lists it
+        id: i64,
+        /// The answer; a question answered this way becomes a decision
+        answer: Option<String>,
+    },
     /// Record a wish: something to sort into the plan later
     Wish {
         /// Project name
@@ -194,6 +204,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
         Command::Sync { project, json } => sync_projects(project.as_deref(), json),
         Command::Mcp => mcp::serve(),
+        Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
         Command::Backup => backup(),
         Command::Doctor { json } => doctor(json),
@@ -327,6 +338,11 @@ fn print_sync(report: &sync::Report, many: bool) {
         let note = if unplanned { "  (not in the plan)" } else { "" };
         println!("  shipped    {} on {}{note}", shipped.version, shipped.date);
     }
+    if report.changes_recorded > 0 {
+        let n = report.changes_recorded;
+        let plural = if n == 1 { "change" } else { "changes" };
+        println!("  read       {n} {plural} from commit messages");
+    }
     for version in &report.untagged {
         println!("  no tag     {version} is closed in the plan");
     }
@@ -353,6 +369,21 @@ fn note(project: &str, kind: &str, text: &str) -> Result<()> {
     let project = open_project(&db, project)?;
     db.record_event(project.id, kind, text, &db::now(), "assistant")?;
     println!("Recorded a {kind} for {}", project.name);
+    Ok(())
+}
+
+fn resolve(project: &str, id: i64, answer: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let (kind, body) = db.resolve_event(project.id, id, answer)?;
+    let first_line = body.lines().next().unwrap_or(&body);
+    match kind.as_str() {
+        "question" => println!("Answered [{id}]: {first_line}"),
+        _ => println!("Sorted [{id}]: {first_line}"),
+    }
+    if answer.is_some() {
+        println!("  the answer is recorded as a decision");
+    }
     Ok(())
 }
 

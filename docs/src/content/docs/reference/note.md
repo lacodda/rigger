@@ -30,7 +30,9 @@ Recorded a next for sample
 
 `finding` is the default. Decisions, findings, pitfalls and changes appear under **Recent** in the [context packet](/rigger/reference/context/); the newest `next` becomes its **Next step** and is not repeated among the events.
 
-A question is not a kind here: questions are addressed to the owner, and they arrive from the hub or from an assistant calling [`ask_owner`](/rigger/reference/mcp/).
+A question is not a kind here: questions are addressed to the owner, and they arrive from the hub or from an assistant calling [`ask_owner`](/rigger/reference/mcp/). Answering one is [`rigger resolve`](/rigger/reference/resolve/).
+
+A `change` can also arrive on its own: [`rigger sync`](/rigger/reference/sync/) reads them from commit messages.
 
 ## `rigger wish`
 
@@ -41,9 +43,10 @@ $ rigger wish sample "Show how many days the project has gone without a commit."
 Recorded a wish for sample
 ```
 
-Wishes have their own section in the packet, and the same text recorded twice stays one wish - unlike a dated event, a wish is identified by what it says.
+Wishes have their own section in the packet, and the same text recorded twice stays one wish - unlike a dated event, a wish is identified by what it says. Once a wish is in the plan, [`rigger resolve`](/rigger/reference/resolve/) takes it off the list.
 
 ## Related
 
 - [`context`](/rigger/reference/context/) - where these events are read back.
 - [`mcp`](/rigger/reference/mcp/) - the same recording, as an assistant's tools.
+- [`resolve`](/rigger/reference/resolve/) - closing a question or a wish.

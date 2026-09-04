@@ -33,6 +33,8 @@ pub struct Report {
     pub untagged: Vec<String>,
     pub commits_since_tag: u32,
     pub last_commit_at: Option<String>,
+    /// Changes read from commit messages that the record did not have.
+    pub changes_recorded: u32,
     /// Said rather than failed: a project can be recorded before its
     /// repository exists, and a hub can be imported from a directory that
     /// was never a checkout.
@@ -49,7 +51,7 @@ pub struct Shipped {
 
 impl Report {
     pub fn changed(&self) -> bool {
-        self.shipped.iter().any(|s| s.newly) || !self.unplanned.is_empty()
+        self.shipped.iter().any(|s| s.newly) || !self.unplanned.is_empty() || self.changes_recorded > 0
     }
 }
 
@@ -130,10 +132,21 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
     }
 
     let newest = tags.iter().max_by_key(|t| version_order(&t.version));
-    let (count, last) = activity(&repo, newest.map(|t| t.version.as_str()))?;
-    report.commits_since_tag = count;
-    report.last_commit_at = last.clone();
-    db.record_activity(project.id, count, last.as_deref())?;
+    let history = read_history(&repo, newest.map(|t| t.version.as_str()))?;
+    report.commits_since_tag = history.commits_since_tag;
+    report.last_commit_at = history.last_commit_at.clone();
+    db.record_activity(project.id, history.commits_since_tag, history.last_commit_at.as_deref())?;
+
+    // Changes are recorded oldest first, so that the record reads forwards
+    // even though history is walked backwards.
+    for change in history.changes.iter().rev() {
+        // The timestamp is the commit's day: an event about a change that
+        // landed in August must not date from the sync that read it.
+        let at = format!("{}T00:00:00Z", change.date);
+        if db.record_commit_event(project.id, &change.hash, &change.body, &at)? == Change::Added {
+            report.changes_recorded += 1;
+        }
+    }
 
     Ok(report)
 }
@@ -180,40 +193,93 @@ fn names_a_version(name: &str) -> bool {
     name.strip_prefix('v').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-/// How many commits have landed since the newest tagged version, and when
-/// the last one was.
+/// One pass over history: what has landed since the newest release, and the
+/// changes worth recording along the way.
 ///
-/// Counting stops at the tag's own commit: the answer is "work since the
-/// release", not the length of history. With no tags at all, every commit
-/// counts - a project before its first release is all activity.
-fn activity(repo: &gix::Repository, newest_tag: Option<&str>) -> Result<(u32, Option<String>)> {
+/// One walk rather than two. The counting stops at the newest tag - the
+/// answer is "work since the release", not the length of history - but the
+/// reading goes further back, so that a project synced for the first time
+/// arrives with its recent changes rather than with only what happened since
+/// Friday.
+struct History {
+    commits_since_tag: u32,
+    last_commit_at: Option<String>,
+    changes: Vec<CommitChange>,
+}
+
+/// A commit that changed the product, ready to be recorded.
+struct CommitChange {
+    hash: String,
+    body: String,
+    date: String,
+}
+
+/// How far back changes are read. Deep enough that a first sync brings a
+/// project's recent history, shallow enough that syncing the whole line
+/// stays a thing you run at the start of a session. Older changes are not
+/// lost - they are in git, which is where a question about 2024 belongs.
+const READ_DEPTH: u32 = 300;
+
+fn read_history(repo: &gix::Repository, newest_tag: Option<&str>) -> Result<History> {
     let Ok(head) = repo.head_commit() else {
         // An empty repository: no commits, and nothing to say about them.
-        return Ok((0, None));
+        return Ok(History {
+            commits_since_tag: 0,
+            last_commit_at: None,
+            changes: Vec::new(),
+        });
     };
-    let last = head.time().ok().map(|t| day(t.seconds));
+    let last_commit_at = head.time().ok().map(|t| day(t.seconds));
 
     let boundary = newest_tag.and_then(|name| {
         let mut reference = repo.find_reference(&format!("refs/tags/{name}")).ok()?;
         reference.peel_to_id().ok().map(|id| id.detach())
     });
 
-    let mut count = 0u32;
+    let mut commits_since_tag = 0u32;
+    let mut past_the_tag = false;
+    let mut changes = Vec::new();
+    let mut seen = 0u32;
+
     let walk = head.ancestors().all().context("cannot walk the history")?;
     for step in walk {
         let Ok(info) = step else { break };
         if Some(info.id) == boundary {
-            break;
+            past_the_tag = true;
         }
-        count += 1;
-        // A very old repository need not be walked to its root to answer
-        // "how much since the last release"; a number this large is already
-        // "a lot" to every reader of it.
-        if count >= 10_000 {
+        if !past_the_tag {
+            commits_since_tag += 1;
+        }
+
+        if let Some(change) = read_change(repo, info.id) {
+            changes.push(change);
+        }
+
+        seen += 1;
+        if seen >= READ_DEPTH {
             break;
         }
     }
-    Ok((count, last))
+    Ok(History {
+        commits_since_tag,
+        last_commit_at,
+        changes,
+    })
+}
+
+/// A commit, if its message says it changed the product.
+fn read_change(repo: &gix::Repository, id: gix::ObjectId) -> Option<CommitChange> {
+    let commit = repo.find_object(id).ok()?.try_into_commit().ok()?;
+    let message = commit.message_raw().ok()?.to_string();
+    let parsed = crate::commit::parse(&message)?;
+    if !parsed.is_a_change() {
+        return None;
+    }
+    Some(CommitChange {
+        hash: id.to_hex().to_string(),
+        body: parsed.body(),
+        date: commit.time().ok().map(|t| day(t.seconds)).unwrap_or_default(),
+    })
 }
 
 /// A UNIX timestamp as the day it fell on, in UTC.

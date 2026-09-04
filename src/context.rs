@@ -142,13 +142,31 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     let reserve = estimate_tokens("\n## Recent\n(999 older events left out by the budget)\n");
     let mut spent = estimate_tokens(&render(&packet)) + reserve;
     packet.events_omitted = beyond_window;
-    for (kind, date, body) in recent {
-        let body = summarise(&body);
-        let event = Event { kind, date, body };
+
+    // Changes read from commits get a share of what is left; everything
+    // written by a person competes for the rest.
+    //
+    // Without this the chronicle crowds out the reasoning: kasl's packet came
+    // back as seventy commit lines against nineteen decisions, with ninety-one
+    // events dropped. A commit can always be read again in git; a decision or
+    // a pitfall exists nowhere else, and losing one costs a session the
+    // argument behind the code it is about to change.
+    let mut git_left = budget.saturating_sub(spent) / 4;
+
+    for recent in recent {
+        let from_git = recent.from_git;
+        let event = Event {
+            kind: recent.kind,
+            date: recent.date,
+            body: summarise(&recent.body),
+        };
         let cost = estimate_tokens(&render_event(&event));
-        if spent + cost > budget {
+        if spent + cost > budget || (from_git && cost > git_left) {
             packet.events_omitted += 1;
             continue;
+        }
+        if from_git {
+            git_left -= cost;
         }
         spent += cost;
         packet.events.push(event);

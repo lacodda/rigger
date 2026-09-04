@@ -12,7 +12,7 @@ Prints the database path, its schema version and how many records of each kind i
 ```console
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 2
+schema:    version 3
 projects:  1
 versions:  0
 tasks:     0
@@ -26,7 +26,7 @@ With `--json`:
 {
   "database": "C:\\Users\\you\\AppData\\Local\\lacodda\\rigger\\data\\rigger.db",
   "initialised": true,
-  "schema_version": 2,
+  "schema_version": 3,
   "counts": { "projects": 1, "versions": 0, "tasks": 0, "sessions": 0, "events": 0 }
 }
 ```
@@ -38,7 +38,7 @@ Once [`rigger sync`](/rigger/reference/sync/) has read a project, `doctor` lists
 ```console
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 2
+schema:    version 3
 projects:  1
 versions:  3
 tasks:     1

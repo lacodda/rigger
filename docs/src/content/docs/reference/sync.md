@@ -15,9 +15,7 @@ Git is read in-process through [gix](https://github.com/GitoxideLabs/gitoxide); 
 $ rigger sync sample
 sample:
   shipped    v0.1.0 on 2026-09-04
-  shipped    v0.2.0 on 2026-09-04
-  shipped    v0.3.0 on 2026-09-04
-  activity   1 commit since v0.3.0, last on 2026-09-04
+  read       2 changes from commit messages
 ```
 
 Running it again says so plainly. This command is meant to run at the start of a session, and a command that prints a screen every time is a command nobody reads:
@@ -48,7 +46,7 @@ claimed:
 ```console
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 2
+schema:    version 3
 projects:  1
 versions:  3
 tasks:     1
@@ -70,6 +68,18 @@ A release the plan never mentioned is reported as `(not in the plan)` - but only
 
 Annotated and lightweight tags both work. The date is always the commit's, because a lightweight tag - what `git tag v0.5.0` makes - has no date of its own.
 
+## Changes from commit messages
+
+The line writes [Conventional Commits](https://www.conventionalcommits.org/), so a commit already says what kind of change it is. `sync` reads that and records it, which means the changelog side of the record stays current without anyone opening a session.
+
+Only what changed the product is recorded: `feat`, `fix`, and anything marked breaking with `!` or a `BREAKING CHANGE:` footer. `chore`, `docs`, `test`, `refactor`, `style` and `ci` are how the work was done rather than what shipped - they are in git, which is where a question about them belongs. A message that does not follow the convention at all is not an error; it is simply not a fact this can read.
+
+An event is dated by its commit, not by the sync that read it, so a project synced for the first time arrives with its history spread across the months it actually happened in.
+
+The commit's hash is what makes recording it twice impossible - not its text, which can be amended between one sync and the next.
+
+Changes reach the [context packet](/rigger/reference/context/) like any other event, but they are capped at a share of its budget. A commit can always be read again in git; a decision or a pitfall exists nowhere else, and a chronicle that filled the packet would cost a session the reasoning behind the code it is about to change.
+
 ## Activity
 
 The commits since the newest tag, and when the last one landed. It answers a question the record cannot: a project can be busy in commits and silent in events, and "nobody wrote a note" is not the same as "nobody worked".
@@ -82,7 +92,26 @@ The commits since the newest tag, and when the last one landed. It answers a que
 
 ## Schema
 
-This release adds schema version 2. The database is copied aside before migrating - the copy is named for the schema it holds - and an older rigger refuses a database it does not understand rather than damaging it.
+Schema version 3 adds the commit an event came from, and where a task sits in its stage. The database is copied aside before migrating - the copy is named for the schema it holds - and an older rigger refuses a database it does not understand rather than damaging it.
+
+## Running it on a schedule
+
+`sync` is a plain binary, so a scheduler runs it directly - no wrapper script, which matters where PowerShell's execution policy refuses one.
+
+On Windows, once a day at nine:
+
+```console
+> schtasks /create /tn "rigger sync" /tr "%LOCALAPPDATA%\Programs\rigger\rigger.exe sync" /sc daily /st 09:00
+SUCCESS: The scheduled task "rigger sync" has successfully been created.
+```
+
+On Linux or macOS, the same as a crontab line:
+
+```
+0 9 * * * ~/.local/bin/rigger sync
+```
+
+Running it when nothing has changed costs a walk of recent history and prints nothing, so a daily schedule is not something you have to think about again.
 
 ## Related
 

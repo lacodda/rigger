@@ -48,8 +48,8 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     for stage in hub.closed_stages.iter().chain(hub.open_stages.iter()) {
         let (version_id, change) = db.upsert_version(project_id, stage)?;
         tally(change, &mut report.versions_added, &mut report.versions_updated);
-        for task in &stage.tasks {
-            let change = db.upsert_task(project_id, version_id, task)?;
+        for (position, task) in stage.tasks.iter().enumerate() {
+            let change = db.upsert_task(project_id, version_id, position, task)?;
             tally(change, &mut report.tasks_added, &mut report.tasks_updated);
         }
     }
