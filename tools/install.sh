@@ -54,6 +54,24 @@ mkdir -p "$BIN_DIR"
 install -m 755 "$TMP/$NAME/rigger" "$BIN_DIR/rigger"
 echo "Installed rigger $TAG to $BIN_DIR/rigger"
 
+# Short alias `rgr`, unless something else in PATH already answers to that name
+# (ours from a previous run does not count). RIGGER_NO_ALIAS=1 skips it.
+# A symlink, never a second binary: one set of bytes answers to both names, so
+# `rgr` can never fall behind the version `rigger` was updated to. The archive
+# carries one binary and no `rgr` of its own.
+#
+# The name is `rgr` rather than `rr`, which would have matched the mark: `rr`
+# is Mozilla's record-and-replay debugger, packaged in every distribution.
+if [ -z "${RIGGER_NO_ALIAS:-}" ]; then
+    EXISTING=$(command -v rgr 2>/dev/null || true)
+    if [ -z "$EXISTING" ] || [ "$EXISTING" = "$BIN_DIR/rgr" ]; then
+        ln -sf rigger "$BIN_DIR/rgr"
+        echo "Alias rgr -> rigger"
+    else
+        echo "Note: 'rgr' already resolves to $EXISTING - alias skipped."
+    fi
+fi
+
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "Note: add $BIN_DIR to your PATH." ;;

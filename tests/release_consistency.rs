@@ -332,4 +332,64 @@ mod tests {
             "the README shows an old version in a sample: {stale:?} (this release is {version})"
         );
     }
+
+    /// The alias is a link, never a second binary.
+    ///
+    /// Declaring it as its own `[[bin]]` would put two identical
+    /// multi-megabyte executables in every archive and download, to give one
+    /// program a second name. A sibling project shipped that way and had to
+    /// undo it.
+    #[test]
+    fn the_alias_is_not_a_second_binary() {
+        // A declaration, not a mention: the comment above it in Cargo.toml
+        // names `[[bin]]` precisely to say there is none.
+        let manifest = read("Cargo.toml");
+        let declared = manifest.lines().any(|line| line.trim() == "[[bin]]");
+        assert!(
+            !declared,
+            "Cargo.toml declares a [[bin]]; the `rgr` alias is a link the installers create, not an executable of its own"
+        );
+    }
+
+    /// Every way of installing has to produce the alias, or it exists only
+    /// on the machine of whoever wrote the release notes.
+    #[test]
+    fn every_installer_creates_the_alias() {
+        for (file, wanted) in [
+            // A link, not a copy: a copy goes stale the moment the binary is
+            // replaced by an update.
+            ("tools/install.ps1", vec!["rgr.exe", "HardLink", "RIGGER_NO_ALIAS"]),
+            ("tools/install.sh", vec!["rgr", "ln -sf", "RIGGER_NO_ALIAS"]),
+        ] {
+            let script = read(file);
+            for needle in wanted {
+                assert!(script.contains(needle), "{file} does not mention `{needle}`; the alias would not be installed");
+            }
+        }
+
+        // npm installs its own shims from `bin`, so a name missing there is
+        // missing for everyone who installed that way, however well the
+        // release archives are packed.
+        let npm = read("npm/package.json");
+        for name in ["rigger", "rgr"] {
+            assert!(
+                npm.contains(&format!("\"{name}\": \"run.js\"")),
+                "npm/package.json does not expose `{name}`; an npm install would not have it"
+            );
+        }
+    }
+
+    /// An installer must not take a name that already belongs to something
+    /// else - `rgr` is free today, but PATH is not ours to overwrite.
+    #[test]
+    fn an_existing_command_of_that_name_is_left_alone() {
+        assert!(
+            read("tools/install.sh").contains("alias skipped"),
+            "install.sh would overwrite someone else's `rgr`"
+        );
+        assert!(
+            read("tools/install.ps1").contains("alias skipped"),
+            "install.ps1 would overwrite someone else's `rgr`"
+        );
+    }
 }

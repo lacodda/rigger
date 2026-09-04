@@ -1,6 +1,6 @@
 [package]
 name = "rigger"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.88"
 description = "One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant"
@@ -23,6 +23,13 @@ exclude = [
     "assets/apple-touch-icon.png",
     "assets/favicon-32.png",
 ]
+
+# There is deliberately no second `[[bin]]` for the `rgr` alias. Shipping it as
+# its own binary would put two identical multi-megabyte executables in every
+# archive and every download, to give one program a second name. The installers
+# create `rgr` as a link instead - a hard link on Windows, a symlink elsewhere -
+# so one set of bytes answers to both names and neither can go stale. The npm
+# wrapper points both of its `bin` entries at the same launcher. See tools/install.*
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

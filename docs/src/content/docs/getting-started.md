@@ -37,14 +37,30 @@ cargo install rigger
 
 Or download the archive for your platform from [Releases](https://github.com/lacodda/rigger/releases/latest) (Windows x86_64, Linux x86_64, macOS arm64), unpack and put `rigger` on your `PATH`.
 
+### The short name
+
+Every installer leaves `rgr` beside `rigger`: the same program, half the typing.
+
+```console
+> rgr --version
+rigger 0.7.1
+```
+
+It is a link, not a second copy - a hard link on Windows, a symlink elsewhere - so one set of bytes answers to both names and `rgr` can never report a version `rigger` has moved past.
+
+If `rgr` already means something else on your machine, the installer says so and leaves it alone; `RIGGER_NO_ALIAS=1` skips it outright. `cargo install rigger` installs `rigger` only, since cargo builds what the manifest declares and the manifest deliberately declares one binary.
+
+The name is `rgr` rather than `rr`, which would have matched the mark: `rr` is Mozilla's record-and-replay debugger, packaged in every Linux distribution.
+
 ### Installer options
 
-Both scripts read two environment variables:
+Both scripts read these environment variables:
 
 | Variable | Effect |
 | --- | --- |
 | `RIGGER_VERSION` | Install this tag (e.g. `v0.1.0`) instead of the newest release |
 | `RIGGER_INSTALL_DIR` | Where the binary lands; defaults to `%LOCALAPPDATA%\Programs\rigger` on Windows and `~/.local/bin` elsewhere |
+| `RIGGER_NO_ALIAS` | Set to `1` to skip the `rgr` alias |
 
 ## First run
 

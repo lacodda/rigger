@@ -45,6 +45,32 @@ try {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Short alias `rgr` as a hard link, not a copy: a copy doubles the install for
+# no new code and goes stale the moment an update replaces the binary. A
+# symlink would need elevation on Windows; a hard link does not, as long as
+# both names are on one volume - and they are, since the alias lands beside
+# the binary. Skipped when another `rgr` already answers in PATH;
+# $env:RIGGER_NO_ALIAS=1 opts out.
+$alias = Join-Path $dir "rgr.exe"
+if (-not $env:RIGGER_NO_ALIAS) {
+    $existing = Get-Command rgr -ErrorAction SilentlyContinue
+    if (-not $existing -or $existing.Source -eq $alias) {
+        # A link cannot be created over an existing name.
+        Remove-Item $alias -Force -ErrorAction SilentlyContinue
+        try {
+            New-Item -ItemType HardLink -Path $alias -Target (Join-Path $dir "rigger.exe") -ErrorAction Stop | Out-Null
+            Write-Host "Alias rgr -> rigger"
+        } catch {
+            # A different volume, or a filesystem without hard links: a copy
+            # still works, it just has to be refreshed by the installer.
+            Copy-Item (Join-Path $dir "rigger.exe") $alias -Force
+            Write-Host "Alias rgr -> rigger (copied - this filesystem has no hard links)"
+        }
+    } else {
+        Write-Host "Note: 'rgr' already resolves to $($existing.Source) - alias skipped."
+    }
+}
+
 # Add the directory to the user PATH in the registry, keeping the value's
 # type. PATH is almost always REG_EXPAND_SZ, with entries like %JAVA_HOME%\bin
 # stored unexpanded; the .NET environment API rewrites it as a plain string

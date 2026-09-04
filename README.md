@@ -139,6 +139,8 @@ npm i -g @lacodda/rigger
 cargo install rigger
 ```
 
+Every installer also leaves `rgr` beside `rigger` - the same program under a shorter name, as a link rather than a second copy, so it cannot fall behind. It is skipped when `rgr` already means something else on your machine, and `RIGGER_NO_ALIAS=1` turns it off. `cargo install` produces `rigger` only.
+
 ## Documentation
 
 https://lacodda.github.io/rigger/ - getting started, concepts, and a reference page per command. Architecture decisions live in https://github.com/lacodda/rigger/tree/main/docs/adr.
