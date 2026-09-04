@@ -10,6 +10,7 @@ mod hub;
 mod import;
 mod mcp;
 mod open;
+mod owner;
 mod paths;
 mod repo;
 mod search;
@@ -89,6 +90,26 @@ enum Command {
     Sync {
         /// Project name; every project when omitted
         project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Questions waiting for your answer, across every project
+    Inbox {
+        /// Only this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// What moved lately, five lines per project
+    Digest {
+        /// Project name; every project that moved when omitted
+        project: Option<String>,
+        /// How far back to look, as days: 7d, 30d
+        #[arg(long, default_value = "7d")]
+        since: String,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -231,6 +252,8 @@ fn run(cli: Cli) -> Result<()> {
         Command::Open { project, print, budget } => open_session(&project, print, budget),
         Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
         Command::Sync { project, json } => sync_projects(project.as_deref(), json),
+        Command::Inbox { project, json } => inbox(project.as_deref(), json),
+        Command::Digest { project, since, json } => digest(project.as_deref(), &since, json),
         Command::Find {
             query,
             project,
@@ -499,6 +522,180 @@ fn why(project: &str, version: &str, json: bool) -> Result<()> {
         print!("{}", search::render_event(event, false));
     }
     Ok(())
+}
+
+/// The questions waiting for the owner, gathered from every project.
+fn inbox(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    if let Some(name) = project {
+        open_project(&db, name)?;
+    }
+    let mut waiting = db.open_questions()?;
+    if let Some(name) = project {
+        waiting.retain(|q| q.project == name);
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "waiting": waiting,
+                "shared": owner::shared_subjects(&waiting),
+            }))?
+        );
+        return Ok(());
+    }
+
+    if waiting.is_empty() {
+        match project {
+            Some(name) => println!("{name} is waiting on nothing."),
+            None => println!("Nothing is waiting on you."),
+        }
+        return Ok(());
+    }
+
+    let projects: std::collections::BTreeSet<&str> = waiting.iter().map(|q| q.project.as_str()).collect();
+    match project {
+        Some(_) => println!(
+            "{}
+",
+            plural(waiting.len(), "question", "questions")
+        ),
+        None => println!(
+            "{} in {}
+",
+            plural(waiting.len(), "question", "questions"),
+            plural(projects.len(), "project", "projects")
+        ),
+    }
+
+    // Grouped by project, because answering is done a project at a time -
+    // and within one, oldest first, since that is what has waited longest.
+    let mut last: Option<&str> = None;
+    for question in &waiting {
+        let name = if last == Some(question.project.as_str()) {
+            String::new()
+        } else {
+            question.project.clone()
+        };
+        last = Some(&question.project);
+        println!("{name:<12} [{:>3}] {}  {}", question.id, question.date, owner::subject(&question.body));
+    }
+
+    // One answer that settles three projects is the most valuable thing on
+    // this screen, and without saying so it looks like three separate jobs.
+    let shared = owner::shared_subjects(&waiting);
+    if !shared.is_empty() {
+        println!(
+            "
+Asked by several projects - one answer settles each group:"
+        );
+        for group in &shared {
+            println!("  {} — {}", group.subject, group.projects.join(", "));
+        }
+    }
+    println!(
+        "
+Answer one with: rigger resolve <project> <id> \"<answer>\""
+    );
+    Ok(())
+}
+
+/// What moved lately, per project.
+fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let days = parse_days(since)?;
+    let from = day_before(days);
+
+    let projects = match project {
+        Some(name) => vec![open_project(&db, name)?],
+        None => db.projects()?,
+    };
+
+    let mut reports = Vec::new();
+    for project in &projects {
+        let facts = db.digest(project.id, &from)?;
+        let stage = db.current_stage(project.id)?;
+        let next = stage.map(|s| match s.title {
+            Some(title) => format!("{} · {title}", s.version),
+            None => s.version,
+        });
+        let quiet = db.last_event_at(project.id)?.as_deref().and_then(days_since_utc);
+        let lines = owner::digest_lines(&facts, next.as_deref(), quiet);
+        reports.push((project.name.clone(), facts, next, lines));
+    }
+
+    if json {
+        let payload: Vec<_> = reports
+            .iter()
+            .map(|(name, facts, next, lines)| serde_json::json!({ "project": name, "facts": facts, "next": next, "lines": lines }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "since": from, "projects": payload }))?);
+        return Ok(());
+    }
+
+    println!(
+        "Since {from}
+"
+    );
+
+    // A project with nothing but its next stage to report has not moved:
+    // naming it in one line beats five lines that say nothing happened.
+    let (moved, still): (Vec<_>, Vec<_>) = reports
+        .iter()
+        .partition(|(_, facts, _, _)| !facts.shipped.is_empty() || facts.decisions + facts.findings + facts.changes > 0);
+
+    let listed = if project.is_some() {
+        reports.iter().collect::<Vec<_>>()
+    } else {
+        moved.clone()
+    };
+    for (name, _, _, lines) in &listed {
+        println!("{name}");
+        for line in lines.iter() {
+            println!("  {line}");
+        }
+    }
+    if listed.is_empty() {
+        println!("Nothing moved.");
+    }
+    if project.is_none() && !still.is_empty() {
+        let names: Vec<&str> = still.iter().map(|(name, _, _, _)| name.as_str()).collect();
+        println!(
+            "
+Quiet: {}",
+            names.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// `7d`, `30d`, or a bare number of days.
+fn parse_days(since: &str) -> Result<i64> {
+    let digits = since.trim().trim_end_matches(['d', 'D']);
+    digits
+        .parse::<i64>()
+        .ok()
+        .filter(|d| *d >= 0)
+        .with_context(|| format!("{since:?} is not a number of days; write it as `7d` or `30`"))
+}
+
+/// The day `days` before today, in UTC.
+fn day_before(days: i64) -> String {
+    let seconds = jiff::Timestamp::now().as_second() - days * 86_400;
+    jiff::Timestamp::from_second(seconds)
+        .map(|t| t.to_string().split('T').next().unwrap_or_default().to_string())
+        .unwrap_or_default()
+}
+
+/// Whole days between a recorded timestamp and now.
+fn days_since_utc(timestamp: &str) -> Option<i64> {
+    let then: jiff::Timestamp = timestamp.parse().ok()?;
+    Some(((jiff::Timestamp::now().as_second() - then.as_second()) / 86_400).max(0))
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 fn backup() -> Result<()> {

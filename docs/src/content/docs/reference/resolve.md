@@ -9,7 +9,7 @@ rigger resolve <PROJECT> <ID> [ANSWER]
 
 Closes a question waiting for you, or a wish that has found its place in the plan. Both are recorded easily and, until this, could not be closed at all - so a wish you had already built went on appearing in every packet, suggesting work that was done.
 
-Ids come from the [context packet](/rigger/reference/context/), which lists them in brackets:
+Ids come from [`rigger inbox`](/rigger/reference/inbox/), or from the [context packet](/rigger/reference/context/), which lists them in brackets:
 
 ```
 ## Waiting for the owner
@@ -53,6 +53,7 @@ The MCP server offers the same as a `resolve` tool. An assistant should use it f
 
 ## Related
 
+- [`inbox`](/rigger/reference/inbox/) - the whole queue, across every project.
 - [`note`](/rigger/reference/note/) - `rigger wish`, which records the other end.
 - [`context`](/rigger/reference/context/) - where the ids come from.
 - [`mcp`](/rigger/reference/mcp/) - the same, as an assistant's tool.

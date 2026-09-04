@@ -162,6 +162,25 @@ pub struct Task {
     pub title: String,
 }
 
+/// A question waiting for the owner, and where it came from.
+#[derive(Debug, Clone, Serialize)]
+pub struct Waiting {
+    pub project: String,
+    pub id: i64,
+    pub date: String,
+    pub body: String,
+}
+
+/// What a window holds for one project.
+#[derive(Debug, Clone, Serialize)]
+pub struct DigestFacts {
+    pub shipped: Vec<String>,
+    pub decisions: u32,
+    pub findings: u32,
+    pub changes: u32,
+    pub waiting: u32,
+}
+
 /// An event as a search returns it.
 #[derive(Debug, Clone, Serialize)]
 pub struct Found {
@@ -696,6 +715,82 @@ impl Db {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every question waiting for an answer, across all projects.
+    ///
+    /// Oldest first: a question that has waited three weeks is more overdue
+    /// than one asked this morning, and the order should say so.
+    pub fn open_questions(&self) -> Result<Vec<Waiting>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.name, e.id, e.created_at, e.body
+             FROM events e JOIN projects p ON p.id = e.project_id
+             WHERE e.kind = 'question'
+             ORDER BY e.created_at, p.name, e.id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let date: String = r.get(2)?;
+            Ok(Waiting {
+                project: r.get(0)?,
+                id: r.get(1)?,
+                date: date.split('T').next().unwrap_or(&date).to_string(),
+                body: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What happened to one project inside a window: releases, the events
+    /// worth a line, and how much of the rest there was.
+    pub fn digest(&self, project_id: i64, since: &str) -> Result<DigestFacts> {
+        let shipped: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT name FROM versions
+                 WHERE project_id = ?1 AND status = 'shipped' AND shipped_at >= ?2",
+            )?;
+            let rows = stmt.query_map(params![project_id, since], |r| r.get::<_, String>(0))?;
+            let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+            names.sort_by_key(|n| version_order(n));
+            names
+        };
+
+        // Counted by kind: a digest says how much was decided, not what.
+        let mut decisions = 0u32;
+        let mut findings = 0u32;
+        let mut changes = 0u32;
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, COUNT(*) FROM events
+             WHERE project_id = ?1 AND created_at >= ?2 AND kind <> 'next'
+             GROUP BY kind",
+        )?;
+        let rows = stmt.query_map(params![project_id, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?;
+        for row in rows {
+            let (kind, n) = row?;
+            match kind.as_str() {
+                "decision" => decisions += n,
+                "finding" | "pitfall" => findings += n,
+                "change" => changes += n,
+                _ => {}
+            }
+        }
+
+        Ok(DigestFacts {
+            shipped,
+            decisions,
+            findings,
+            changes,
+            waiting: self.count_open_events(project_id, "question")?,
+        })
+    }
+
+    /// How many events of a kind are open for a project.
+    pub fn count_open_events(&self, project_id: i64, kind: &str) -> Result<u32> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND kind = ?2",
+            params![project_id, kind],
+            |r| r.get(0),
+        )?;
+        Ok(n.unsigned_abs() as u32)
     }
 
     /// Records a change read from a commit, unless that commit is already

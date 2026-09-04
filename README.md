@@ -112,6 +112,20 @@ the work after v0.2.0 (2026-09-04)
 2026-09-04  change    feat: rank what a person wrote above a commit
 ```
 
+And it answers the question the notes never could - what is waiting on you, across everything at once:
+
+```console
+$ rigger inbox
+6 questions in 3 projects
+
+alpha        [  1] 2026-09-04  Place in the release calendar
+             [  2] 2026-09-04  Sign the binaries?
+beta         [  3] 2026-09-04  Place in the release calendar
+
+Asked by several projects - one answer settles each group:
+  Place in the release calendar — alpha, beta, gamma
+```
+
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
 ## What it will do
@@ -126,7 +140,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.8.0 lets the record answer questions: `find` searches every project's events at once, and `why` shows the decisions, findings and changes that went into any version. Before them: the database, projects, `import`, `backup`, `context`, `note`, `open`, the `mcp` server, facts from git and a chronicle that writes itself. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.9.0 opens the first two screens meant for you rather than the assistant: `inbox` gathers every question waiting on your answer across all projects - grouping the ones several projects are asking at once - and `digest` says what moved, five lines per project. Before them: the database, `import`, the context packet, the `mcp` server, facts from git, a chronicle that writes itself, and search. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

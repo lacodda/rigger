@@ -20,7 +20,8 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger sync`](/rigger/reference/sync/) | v0.6.0 | Read tags and commits into facts |
 | [`rigger find`](/rigger/reference/find/) | v0.8.0 | Search every project's events |
 | [`rigger why`](/rigger/reference/why/) | v0.8.0 | The work that went into a version |
-| `rigger inbox`, `rigger digest` | planned v0.9.0 | Questions waiting for the owner; the five-line digest |
+| [`rigger inbox`](/rigger/reference/inbox/) | v0.9.0 | Questions waiting for your answer |
+| [`rigger digest`](/rigger/reference/digest/) | v0.9.0 | What moved lately, five lines per project |
 | `rigger calendar`, `rigger next` | planned v0.10.0 | Weeks by projects; this week's focus |
 | `rigger week`, `rigger release-day` | planned v0.11.0 | The Monday brief; the Friday queue |
 | `rigger retro` | planned v0.12.0 | Planned against shipped, per cycle |
