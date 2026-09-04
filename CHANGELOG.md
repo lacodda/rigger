@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.1.0] - 2026-09-04
 
-Stage 0: repository, release conveyor, documentation site and the roadmap to 1.0. The first command surface arrives with v0.1.0.
+### Features
+- Adopt the lacodda line mark
+- Record projects in a local database
+
+### style
+- Format the release consistency tests
