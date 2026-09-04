@@ -43,7 +43,7 @@ Every installer leaves `rgr` beside `rigger`: the same program, half the typing.
 
 ```console
 > rgr --version
-rigger 0.7.1
+rigger 0.8.0
 ```
 
 It is a link, not a second copy - a hard link on Windows, a symlink elsewhere - so one set of bytes answers to both names and `rgr` can never report a version `rigger` has moved past.
