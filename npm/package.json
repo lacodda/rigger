@@ -1,8 +1,8 @@
 {
   "name": "@lacodda/rigger",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "rigger": {
-    "binary": "v0.2.0"
+    "binary": "v0.3.0"
   },
   "description": "One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant",
   "license": "MIT",

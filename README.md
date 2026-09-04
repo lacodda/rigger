@@ -43,12 +43,32 @@ sessions:  0
 events:    2
 ```
 
-Years of notes arrive in one command, and running it again is quiet:
+Years of notes arrive in one command, and running it again is quiet. Then a session starts from the packet rather than from the notes:
 
 ```console
-$ rigger import sample --hub C:\dev\sample\hub
-sample: nothing changed
+$ rigger context sample
+# sample
+
+C:\dev\sample
+https://github.com/acme/sample.git
+Last shipped: v0.2.0 on 2026-09-03
+1 versions planned, 2 tasks open
+
+## Current stage: v0.3.0 · Search
+- full-text index
+- a query language
+
+## Waiting for the owner
+- [2] Pick the release day.
+
+## Recent
+- 2026-09-03 · decision · The record is the database — Prose cannot be filtered.
+
+## Next step
+Ship the importer next.
 ```
+
+That packet costs 96 tokens here and holds a 3000-token budget on a project with years of history - against tens of thousands for reading the notes it came from, which past a certain size no longer fit at all.
 
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
@@ -64,7 +84,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.2.0 reads a notes hub into the record: the database, projects, `import` and `backup`. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.3.0 gives the assistant its door: the database, projects, `import`, `backup`, `context` and `note`. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

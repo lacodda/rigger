@@ -297,6 +297,122 @@ fn import_of_an_unknown_project_fails() {
 }
 
 #[test]
+fn context_shows_where_the_project_stands_and_what_is_next() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+
+    rigger(data.path()).args(["context", "proj"]).assert().success().stdout(
+        // The state line, the stage in progress with its open tasks, the
+        // owner's queue and the decision - in that order.
+        predicate::str::contains("Last shipped: v0.2.0 on 2026-09-03")
+            .and(predicate::str::contains("## Current stage: v0.3.0 · Third stage"))
+            .and(predicate::str::contains("- first task"))
+            .and(predicate::str::contains("## Waiting for the owner"))
+            .and(predicate::str::contains("Pick a colour."))
+            .and(predicate::str::contains("The record is the database")),
+    );
+}
+
+#[test]
+fn a_recorded_note_reaches_the_packet_and_a_next_step_stands_alone() {
+    let data = tempfile::tempdir().unwrap();
+    imported_project(data.path());
+
+    rigger(data.path())
+        .args(["note", "proj", "The parser must take hubs as they are.", "--kind", "finding"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recorded a finding for proj"));
+    rigger(data.path())
+        .args(["note", "proj", "Ship the importer next.", "--kind", "next"])
+        .assert()
+        .success();
+    rigger(data.path()).args(["wish", "proj", "Show days without a commit."]).assert().success();
+
+    rigger(data.path()).args(["context", "proj"]).assert().success().stdout(
+        predicate::str::contains("finding · The parser must take hubs as they are.")
+            .and(predicate::str::contains("## Wishes, not yet sorted"))
+            .and(predicate::str::contains("Show days without a commit."))
+            .and(predicate::str::contains("## Next step\nShip the importer next."))
+            // A next step is not repeated among the recent events.
+            .and(predicate::str::contains("next · Ship").not()),
+    );
+}
+
+/// The budget is a gate, not a hope: a project with a long history must still
+/// produce a packet that fits, and say what it left out.
+/// The token cost of a packet, from its own `--explain` line.
+fn packet_cost(data: &Path, args: &[&str]) -> (usize, String) {
+    let mut cmd = rigger(data);
+    cmd.args(["context", "proj", "--explain"]).args(args);
+    let text = String::from_utf8(cmd.output().unwrap().stdout).unwrap();
+    let total = text
+        .lines()
+        .find(|l| l.starts_with("total"))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no total line in:\n{text}"));
+    (total, text)
+}
+
+#[test]
+fn the_packet_holds_the_budget_and_reports_what_it_dropped() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+
+    // Enough decisions, each as long as the real hubs carry, that no budget
+    // could hold them all - the packet must choose and say so.
+    let body = "**A decision that took a paragraph.**\n\n".to_string() + &"Reasoning that runs on and on. ".repeat(40);
+    for i in 0..60 {
+        rigger(data.path())
+            .args(["note", "proj", &format!("{body} number {i} of sixty"), "--kind", "decision"])
+            .assert()
+            .success();
+    }
+
+    let (total, text) = packet_cost(data.path(), &[]);
+    assert!(total <= 3000, "packet is {total} tokens, over the budget:\n{text}");
+
+    // Under a budget that cannot hold them, the packet says how many it left
+    // out - the silent truncation this command exists to avoid.
+    let (total, text) = packet_cost(data.path(), &["--budget", "600"]);
+    assert!(total <= 600, "packet is {total} tokens, over the 600 asked for:\n{text}");
+    assert!(
+        text.contains("older events left out by the budget"),
+        "the packet did not say what it dropped:\n{text}"
+    );
+}
+
+/// A budget too small even for the fixed sections still produces a usable
+/// packet: state, the current stage and the owner's queue are never dropped.
+#[test]
+fn the_essentials_survive_an_impossible_budget() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+
+    let (_, text) = packet_cost(data.path(), &["--budget", "1"]);
+    assert!(text.contains("## Current stage: v0.3.0"), "{text}");
+    assert!(text.contains("## Waiting for the owner"), "{text}");
+    assert!(text.contains("left out by the budget"), "{text}");
+}
+
+#[test]
+fn context_as_json_carries_the_same_facts() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+
+    rigger(data.path()).args(["context", "proj", "--json"]).assert().success().stdout(
+        predicate::str::contains("\"project\": \"proj\"")
+            .and(predicate::str::contains("\"version\": \"v0.3.0\""))
+            .and(predicate::str::contains("\"events_omitted\": 0")),
+    );
+}
+
+#[test]
 fn backup_copies_the_database_beside_itself() {
     let data = tempfile::tempdir().unwrap();
     rigger(data.path()).arg("init").assert().success();

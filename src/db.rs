@@ -88,6 +88,14 @@ pub enum Change {
     Unchanged,
 }
 
+/// The version being built and the tasks still open under it.
+#[derive(Debug)]
+pub struct CurrentStage {
+    pub version: String,
+    pub title: Option<String>,
+    pub tasks: Vec<String>,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Counts {
     pub projects: u64,
@@ -298,14 +306,15 @@ impl Db {
 
     /// Records an event unless the same one is already there.
     ///
-    /// Events carry no natural key. A dated one - a decision read from the
-    /// hub - is identified by project, kind, date and body, which is exactly
-    /// what a re-import would produce again. An undated one - a question,
-    /// which the hub states without saying when - is identified by its text
-    /// alone, because its timestamp is the moment of import and would differ
-    /// on every run.
+    /// Events carry no natural key, and the right one depends on where the
+    /// event's date comes from. A decision read from the hub carries the date
+    /// the owner wrote, so project, kind, date and body identify it, and a
+    /// re-import produces the same four. A question or a wish has no date of
+    /// its own - the timestamp is the moment it was recorded, which differs
+    /// on every run - so the text alone identifies it, and re-importing a hub
+    /// does not pile up copies of the same open question.
     pub fn record_event(&self, project_id: i64, kind: &str, body: &str, created_at: &str, author: &str) -> Result<Change> {
-        let dated = kind != "question";
+        let dated = !matches!(kind, "question" | "wish");
         let seen: Option<i64> = if dated {
             self.conn
                 .query_row(
@@ -331,6 +340,106 @@ impl Db {
             params![project_id, kind, body, author, created_at],
         )?;
         Ok(Change::Added)
+    }
+
+    /// The newest version the record says shipped, with its date.
+    pub fn last_shipped_version(&self, project_id: i64) -> Result<Option<(String, String)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT name, shipped_at FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL ORDER BY shipped_at DESC, id DESC LIMIT 1",
+                [project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// The stage being built: the oldest planned version, with its open tasks.
+    ///
+    /// Oldest rather than newest, because a plan is a queue - the next stage
+    /// is the one that has waited longest, not the one written last.
+    pub fn current_stage(&self, project_id: i64) -> Result<Option<CurrentStage>> {
+        let stage: Option<(i64, String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT id, name, title FROM versions WHERE project_id = ?1 AND status = 'planned' ORDER BY id LIMIT 1",
+                [project_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((id, name, title)) = stage else { return Ok(None) };
+        let mut stmt = self
+            .conn
+            .prepare("SELECT title FROM tasks WHERE version_id = ?1 AND status = 'open' ORDER BY id")?;
+        let tasks = stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(Some(CurrentStage { version: name, title, tasks }))
+    }
+
+    pub fn count_versions(&self, project_id: i64, status: &str) -> Result<u64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM versions WHERE project_id = ?1 AND status = ?2",
+            params![project_id, status],
+            |r| r.get(0),
+        )?;
+        Ok(n.unsigned_abs())
+    }
+
+    pub fn count_open_tasks(&self, project_id: i64) -> Result<u64> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status = 'open'", [project_id], |r| {
+                r.get(0)
+            })?;
+        Ok(n.unsigned_abs())
+    }
+
+    /// Events of a kind that are still open - questions and wishes are
+    /// answered by being resolved, which a later release will do.
+    pub fn open_events(&self, project_id: i64, kind: &str) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, body FROM events WHERE project_id = ?1 AND kind = ?2 ORDER BY created_at, id")?;
+        let rows = stmt.query_map(params![project_id, kind], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn latest_event_body(&self, project_id: i64, kind: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT body FROM events WHERE project_id = ?1 AND kind = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![project_id, kind],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// The most recent events worth reading at the start of a session:
+    /// what was decided, found, tripped over or changed. Questions and
+    /// wishes have their own sections, and the next step its own line.
+    pub fn recent_events(&self, project_id: i64, limit: u32) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, created_at, body FROM events
+             WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next')
+             ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![project_id, limit], |r| {
+            let date: String = r.get(1)?;
+            // Timestamps are stored whole; a packet only needs the day.
+            Ok((r.get(0)?, date.split('T').next().unwrap_or(&date).to_string(), r.get(2)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// How many events the packet's "recent" section could draw on, so that
+    /// it can say how many it left out rather than quietly ending its list.
+    pub fn count_recent_events(&self, project_id: i64) -> Result<u64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next')",
+            [project_id],
+            |r| r.get(0),
+        )?;
+        Ok(n.unsigned_abs())
     }
 
     pub fn counts(&self) -> Result<Counts> {

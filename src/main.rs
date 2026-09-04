@@ -3,6 +3,7 @@
 //! The command surface grows one release at a time; this release brings the
 //! database, projects and `doctor`.
 
+mod context;
 mod db;
 mod hub;
 mod import;
@@ -44,6 +45,37 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Print what an assistant needs to start a session on a project
+    Context {
+        /// Project name
+        project: String,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+        /// Show what each section of the packet costs
+        #[arg(long)]
+        explain: bool,
+        /// Token budget for the packet
+        #[arg(long, default_value_t = context::DEFAULT_BUDGET)]
+        budget: usize,
+    },
+    /// Record an event: a decision, a finding, a pitfall, a change, a next step
+    Note {
+        /// Project name
+        project: String,
+        /// What happened
+        text: String,
+        /// Kind of event
+        #[arg(long, value_name = "KIND", default_value = "finding")]
+        kind: NoteKind,
+    },
+    /// Record a wish: something to sort into the plan later
+    Wish {
+        /// Project name
+        project: String,
+        /// What you want
+        text: String,
+    },
     /// Copy the database aside, stamped with the moment and its schema
     Backup,
     /// Show the database path, schema version and record counts
@@ -52,6 +84,35 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// The kinds a `note` can record. A question is not among them: it is
+/// addressed to the owner and arrives from the hub or, later, from the
+/// assistant's `ask_owner` tool.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum NoteKind {
+    /// A decision and its reason
+    Decision,
+    /// Something learnt about the code or the domain
+    Finding,
+    /// A trap worth remembering
+    Pitfall,
+    /// Something that changed in the product
+    Change,
+    /// The one line the next session starts from
+    Next,
+}
+
+impl NoteKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            NoteKind::Decision => "decision",
+            NoteKind::Finding => "finding",
+            NoteKind::Pitfall => "pitfall",
+            NoteKind::Change => "change",
+            NoteKind::Next => "next",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -99,6 +160,14 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Show { name, json } => project_show(&name, json),
         },
         Command::Import { project, hub, json } => import_hub(&project, &hub, json),
+        Command::Context {
+            project,
+            json,
+            explain,
+            budget,
+        } => show_context(&project, json, explain, budget),
+        Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
+        Command::Wish { project, text } => note(&project, "wish", &text),
         Command::Backup => backup(),
         Command::Doctor { json } => doctor(json),
     }
@@ -137,6 +206,42 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     if report.questions_added > 0 {
         println!("  {:<10} {} added", "questions", report.questions_added);
     }
+    Ok(())
+}
+
+fn open_project(db: &Db, name: &str) -> Result<db::Project> {
+    match db.project_by_name(name)? {
+        Some(project) => Ok(project),
+        None => bail!("no project named '{name}'; see `rigger project list`"),
+    }
+}
+
+fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let packet = context::build(&db, &project, budget)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&packet)?);
+        return Ok(());
+    }
+    let text = context::render(&packet);
+    print!("{text}");
+    if explain {
+        println!("\n## Cost");
+        for cost in context::costs(&packet) {
+            println!("{:<14} {:>5} tokens", cost.section, cost.tokens);
+        }
+        println!("{:<14} {:>5} tokens of {budget}", "total", context::estimate_tokens(&text));
+    }
+    Ok(())
+}
+
+fn note(project: &str, kind: &str, text: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    db.record_event(project.id, kind, text, &db::now(), "assistant")?;
+    println!("Recorded a {kind} for {}", project.name);
     Ok(())
 }
 
