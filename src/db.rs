@@ -61,6 +61,19 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX events_by_project ON events (project_id, created_at);
     ",
+    // v2: what git says about a project, refreshed by `sync`. Kept on the
+    // project rather than derived on every read: a walk of history costs
+    // more than a column, and the packet wants the number, not the walk.
+    "
+    ALTER TABLE projects ADD COLUMN commits_since_tag INTEGER;
+    ALTER TABLE projects ADD COLUMN last_commit_at TEXT;
+    ALTER TABLE projects ADD COLUMN synced_at TEXT;
+    -- Where a shipped version's date came from. 'tag' is proof; anything
+    -- else is a claim read from a plan, and the difference is the whole
+    -- point of `sync` - a date alone cannot tell them apart, because an
+    -- imported hub carries dates too.
+    ALTER TABLE versions ADD COLUMN shipped_source TEXT;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -103,6 +116,23 @@ pub struct CurrentStage {
 pub struct Task {
     pub id: i64,
     pub title: String,
+}
+
+/// A version row as `mark_shipped` needs to see it: what the record
+/// currently holds, before a tag overrules it.
+struct VersionRow {
+    id: i64,
+    status: String,
+    shipped_at: Option<String>,
+    source: Option<String>,
+}
+
+/// What git said about a project when it was last read.
+#[derive(Debug, Clone, Serialize)]
+pub struct Activity {
+    pub commits_since_tag: u32,
+    pub last_commit_at: Option<String>,
+    pub synced_at: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -457,6 +487,147 @@ impl Db {
         self.conn
             .execute("UPDATE tasks SET status = 'done', closed_at = ?1 WHERE id = ?2", params![now(), task_id])?;
         Ok((title, Change::Updated))
+    }
+
+    /// Records that a version shipped, because a tag proves it.
+    ///
+    /// A tag outranks the plan: the status is set whatever the plan said,
+    /// and the date comes from the tag's commit rather than from prose.
+    /// A version the plan never mentioned is added - the release happened
+    /// whether or not anyone wrote it down - and reported as `Added` so the
+    /// caller can say so.
+    pub fn mark_shipped(&self, project_id: i64, version: &str, date: &str) -> Result<Change> {
+        // Matched by number, not by text: hubs spell one version several
+        // ways (`v1.9` for the stage, `v1.9.0` for the release), and a tag
+        // must land on the row that already exists rather than beside it.
+        let existing: Option<VersionRow> = self
+            .conn
+            .query_row(
+                "SELECT id, status, shipped_at, shipped_source FROM versions WHERE project_id = ?1 AND name = ?2",
+                params![project_id, version],
+                |r| {
+                    Ok(VersionRow {
+                        id: r.get(0)?,
+                        status: r.get(1)?,
+                        shipped_at: r.get(2)?,
+                        source: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?
+            .or(self.version_by_number(project_id, version)?);
+
+        match existing {
+            Some(VersionRow {
+                id,
+                status,
+                shipped_at,
+                source,
+            }) => {
+                if status == "shipped" && shipped_at.as_deref() == Some(date) && source.as_deref() == Some("tag") {
+                    return Ok(Change::Unchanged);
+                }
+                self.conn.execute(
+                    "UPDATE versions SET status = 'shipped', shipped_at = ?1, shipped_source = 'tag' WHERE id = ?2",
+                    params![date, id],
+                )?;
+                Ok(Change::Updated)
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO versions (project_id, name, status, shipped_at, shipped_source) VALUES (?1, ?2, 'shipped', ?3, 'tag')",
+                    params![project_id, version, date],
+                )?;
+                Ok(Change::Added)
+            }
+        }
+    }
+
+    /// A version of this project whose number matches, however it is spelt.
+    fn version_by_number(&self, project_id: i64, version: &str) -> Result<Option<VersionRow>> {
+        let wanted = version_order(version);
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, status, shipped_at, shipped_source FROM versions WHERE project_id = ?1")?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok((
+                r.get::<_, String>(1)?,
+                VersionRow {
+                    id: r.get(0)?,
+                    status: r.get(2)?,
+                    shipped_at: r.get(3)?,
+                    source: r.get(4)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (name, version_row) = row?;
+            if version_order(&name) == wanted {
+                return Ok(Some(version_row));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Every version name the record holds for a project.
+    pub fn version_names(&self, project_id: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT name FROM versions WHERE project_id = ?1")?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every version the record claims shipped, newest first.
+    pub fn shipped_versions(&self, project_id: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT name FROM versions WHERE project_id = ?1 AND status = 'shipped'")?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?;
+        let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+        names.sort_by_key(|n| std::cmp::Reverse(version_order(n)));
+        Ok(names)
+    }
+
+    /// Versions the record calls shipped that no tag has confirmed.
+    ///
+    /// The date cannot answer this on its own: an imported hub carries dates
+    /// written by hand, and they look exactly like a tag's. Only the
+    /// provenance `sync` stamps separates a proven release from a claimed
+    /// one. Read from the record rather than by walking history - `doctor`
+    /// reports what the last `sync` found, and does not go looking itself.
+    pub fn shipped_without_a_tag(&self, project_id: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM versions
+             WHERE project_id = ?1 AND status = 'shipped' AND (shipped_source IS NULL OR shipped_source <> 'tag')",
+        )?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?;
+        let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+        names.sort_by_key(|n| std::cmp::Reverse(version_order(n)));
+        Ok(names)
+    }
+
+    /// What git said about the project's activity when it was last read.
+    pub fn record_activity(&self, project_id: i64, commits: u32, last_commit_at: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE projects SET commits_since_tag = ?1, last_commit_at = ?2, synced_at = ?3 WHERE id = ?4",
+            params![commits, last_commit_at, now(), project_id],
+        )?;
+        Ok(())
+    }
+
+    /// The activity recorded by the last sync, if there was one.
+    pub fn activity(&self, project_id: i64) -> Result<Option<Activity>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT commits_since_tag, last_commit_at, synced_at FROM projects WHERE id = ?1 AND synced_at IS NOT NULL",
+                [project_id],
+                |r| {
+                    Ok(Activity {
+                        commits_since_tag: r.get(0)?,
+                        last_commit_at: r.get(1)?,
+                        synced_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     pub fn count_versions(&self, project_id: i64, status: &str) -> Result<u64> {

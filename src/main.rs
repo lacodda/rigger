@@ -11,6 +11,7 @@ mod mcp;
 mod open;
 mod paths;
 mod repo;
+mod sync;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -81,6 +82,14 @@ enum Command {
         /// Token budget for the packet
         #[arg(long, default_value_t = context::DEFAULT_BUDGET)]
         budget: usize,
+    },
+    /// Read tags and commits into facts: what shipped, and what has happened since
+    Sync {
+        /// Project name; every project when omitted
+        project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
@@ -183,6 +192,7 @@ fn run(cli: Cli) -> Result<()> {
         } => show_context(&project, json, explain, budget),
         Command::Open { project, print, budget } => open_session(&project, print, budget),
         Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
+        Command::Sync { project, json } => sync_projects(project.as_deref(), json),
         Command::Mcp => mcp::serve(),
         Command::Wish { project, text } => note(&project, "wish", &text),
         Command::Backup => backup(),
@@ -273,6 +283,69 @@ fn open_session(project: &str, print: bool, budget: usize) -> Result<()> {
         std::process::exit(code);
     }
     Ok(())
+}
+
+/// Reads git for one project, or for every recorded project.
+fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let projects = match project {
+        Some(name) => vec![open_project(&db, name)?],
+        None => db.projects()?,
+    };
+    let mut reports = Vec::new();
+    for project in &projects {
+        reports.push(sync::sync(&db, project)?);
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
+    for report in &reports {
+        print_sync(report, projects.len() > 1);
+    }
+    Ok(())
+}
+
+/// One project's sync, as a line or as a paragraph.
+///
+/// A quiet project prints nothing when several are synced at once: a run
+/// across the whole line is read for what changed, and seventeen "nothing
+/// changed" lines hide the two that did.
+fn print_sync(report: &sync::Report, many: bool) {
+    let quiet = !report.changed() && report.untagged.is_empty() && report.warnings.is_empty();
+    if many && quiet {
+        return;
+    }
+    println!("{}:", report.project);
+    for warning in &report.warnings {
+        println!("  note: {warning}");
+    }
+    let newly: Vec<&sync::Shipped> = report.shipped.iter().filter(|s| s.newly).collect();
+    for shipped in &newly {
+        let unplanned = report.unplanned.contains(&shipped.version);
+        let note = if unplanned { "  (not in the plan)" } else { "" };
+        println!("  shipped    {} on {}{note}", shipped.version, shipped.date);
+    }
+    for version in &report.untagged {
+        println!("  no tag     {version} is closed in the plan");
+    }
+    // Activity is state, not news: it says the same thing on every run until
+    // someone commits. Printed when there is something else to say, so a run
+    // that changed nothing does not end with a line that looks like it did.
+    if report.commits_since_tag > 0 && !quiet {
+        let since = match report.shipped.iter().max_by_key(|s| db::version_order(&s.version)) {
+            Some(newest) => format!(" since {}", newest.version),
+            None => String::new(),
+        };
+        let when = report.last_commit_at.as_deref().unwrap_or("unknown");
+        let commits = report.commits_since_tag;
+        let plural = if commits == 1 { "commit" } else { "commits" };
+        println!("  activity   {commits} {plural}{since}, last on {when}");
+    }
+    if quiet {
+        println!("  nothing changed");
+    }
 }
 
 fn note(project: &str, kind: &str, text: &str) -> Result<()> {
@@ -367,6 +440,22 @@ fn doctor(json: bool) -> Result<()> {
     let db = Db::open(&path)?;
     let schema = db.schema_version()?;
     let counts = db.counts()?;
+
+    // Where the plan and git disagree. Reported, never corrected: the record
+    // cannot prove a tag's absence - it may simply not have been fetched -
+    // and a silent correction would erase what the owner wrote (ADR 0005).
+    let mut mismatches = Vec::new();
+    let mut unsynced = Vec::new();
+    for project in db.projects()? {
+        if db.activity(project.id)?.is_none() {
+            unsynced.push(project.name.clone());
+            continue;
+        }
+        for version in db.shipped_without_a_tag(project.id)? {
+            mismatches.push((project.name.clone(), version));
+        }
+    }
+
     if json {
         println!(
             "{}",
@@ -375,6 +464,11 @@ fn doctor(json: bool) -> Result<()> {
                 "initialised": true,
                 "schema_version": schema,
                 "counts": counts,
+                "closed_without_a_tag": mismatches
+                    .iter()
+                    .map(|(project, version)| serde_json::json!({ "project": project, "version": version }))
+                    .collect::<Vec<_>>(),
+                "never_synced": unsynced,
             }))?
         );
         return Ok(());
@@ -386,5 +480,26 @@ fn doctor(json: bool) -> Result<()> {
     println!("tasks:     {}", counts.tasks);
     println!("sessions:  {}", counts.sessions);
     println!("events:    {}", counts.events);
+
+    if !unsynced.is_empty() {
+        println!(
+            "
+never synced ({}): {}",
+            unsynced.len(),
+            unsynced.join(", ")
+        );
+        println!("  run `rigger sync` to read what git says about them");
+    }
+    if !mismatches.is_empty() {
+        println!(
+            "
+closed in the plan, no tag in git ({}):",
+            mismatches.len()
+        );
+        for (project, version) in &mismatches {
+            println!("  {project:<12} {version}");
+        }
+        println!("  a tag would settle it; rigger does not change what you wrote");
+    }
     Ok(())
 }

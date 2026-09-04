@@ -50,7 +50,7 @@ Both scripts read two environment variables:
 
 ```console
 $ rigger init
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 1)
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 2)
 Next: rigger project add <path>
 ```
 
@@ -74,7 +74,7 @@ sample  C:\dev\sample
 ```console
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 1
+schema:    version 2
 projects:  1
 versions:  0
 tasks:     0

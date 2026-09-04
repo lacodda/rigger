@@ -84,6 +84,15 @@ $ claude mcp add rigger -- rigger mcp
 Added stdio MCP server rigger with command: rigger mcp to local config
 ```
 
+What actually shipped is not taken on trust. `sync` reads the repository's tags and commits in-process and writes what they prove; where the plan says a version shipped and no tag agrees, the disagreement is reported rather than corrected:
+
+```console
+$ rigger sync claimed
+claimed:
+  shipped    v0.1.0 on 2026-09-04
+  no tag     v0.2.0 is closed in the plan
+```
+
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
 ## What it will do
@@ -98,7 +107,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.5.0 closes the first block: the database, projects, `import`, `backup`, `context`, `note`, `open` and the `mcp` server - an assistant now reads the record and writes to it without touching markdown. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.6.0 makes git the source for what shipped: `sync` reads tags and commits in-process, a tag closes a version whatever the plan said, and a version closed without one is reported by `doctor` rather than corrected. Before it: the database, projects, `import`, `backup`, `context`, `note`, `open` and the `mcp` server. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

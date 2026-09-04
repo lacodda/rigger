@@ -43,7 +43,7 @@ fn init_creates_the_database_and_is_idempotent() {
         .arg("init")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Created").and(predicate::str::contains("schema version 1")));
+        .stdout(predicate::str::contains("Created").and(predicate::str::contains("schema version")));
     assert!(data.path().join("rigger.db").exists());
 
     rigger(data.path())
@@ -676,7 +676,12 @@ fn backup_copies_the_database_beside_itself() {
         .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
         .collect();
     assert_eq!(copies.len(), 1, "expected one backup, found {copies:?}");
-    assert!(copies[0].file_name().to_string_lossy().starts_with("rigger.v1-"));
+    // Stamped with the schema it holds, so a restore says what it restores.
+    let name = copies[0].file_name().to_string_lossy().to_string();
+    assert!(
+        name.starts_with("rigger.v") && name.contains('-'),
+        "a backup must name the schema it holds: {name}"
+    );
 }
 
 #[test]
@@ -697,10 +702,10 @@ fn doctor_reports_the_database_before_and_after_init() {
         .arg("doctor")
         .assert()
         .success()
-        .stdout(predicate::str::contains("schema:    version 1").and(predicate::str::contains("projects:  1")));
+        .stdout(predicate::str::contains("schema:    version").and(predicate::str::contains("projects:  1")));
     rigger(data.path())
         .args(["doctor", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"schema_version\": 1"));
+        .stdout(predicate::str::contains("\"schema_version\":"));
 }

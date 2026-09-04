@@ -48,9 +48,14 @@ pub struct State {
     pub versions_planned: u64,
     pub tasks_open: u64,
     /// Days since anything was recorded about this project. A project that
-    /// has gone quiet is worth noticing at the top of a session; the real
-    /// count of days without a commit arrives with `sync`.
+    /// has gone quiet is worth noticing at the top of a session.
     pub days_quiet: Option<i64>,
+    /// Commits since the newest tag, as the last `sync` read them.
+    pub commits_since_tag: Option<u32>,
+    /// Days since the last commit - the owner's question: how long has this
+    /// project actually been still? Quiet in the record and quiet in git are
+    /// different things, and only the second one means nobody has worked.
+    pub days_since_commit: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,6 +86,7 @@ pub struct Cost {
 }
 
 pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
+    let activity = db.activity(project.id)?;
     let state = State {
         path: project.path.clone(),
         remote: project.remote.clone(),
@@ -89,6 +95,8 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         versions_planned: db.count_versions(project.id, "planned")?,
         tasks_open: db.count_open_tasks(project.id)?,
         days_quiet: db.last_event_at(project.id)?.as_deref().and_then(days_since),
+        commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
+        days_since_commit: activity.as_ref().and_then(|a| a.last_commit_at.as_deref()).and_then(days_since_day),
     };
 
     let current = db.current_stage(project.id)?.map(|s| Stage {
@@ -196,6 +204,21 @@ fn first_sentence(text: &str) -> String {
     }
 }
 
+/// "today", "yesterday" or "N days ago" - a session reads a word faster
+/// than it reads a number it has to subtract from the date.
+fn days_ago(days: i64) -> String {
+    match days {
+        0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        n => format!("{n} days ago"),
+    }
+}
+
+/// Whole days between a recorded day (`YYYY-MM-DD`) and today.
+fn days_since_day(day: &str) -> Option<i64> {
+    days_since(&format!("{day}T00:00:00Z"))
+}
+
 /// Whole days between a recorded timestamp and now.
 fn days_since(timestamp: &str) -> Option<i64> {
     let then: jiff::Timestamp = timestamp.parse().ok()?;
@@ -258,6 +281,17 @@ fn render_state(p: &Packet) -> String {
         _ => out.push_str("Nothing shipped yet\n"),
     }
     out.push_str(&format!("{} versions planned, {} tasks open\n", p.state.versions_planned, p.state.tasks_open));
+    // What git says, which is a different question from what the record
+    // says: a project can be busy in commits and silent in events, and the
+    // owner's question is how long it has actually been still.
+    match (p.state.commits_since_tag, p.state.days_since_commit) {
+        (Some(0), Some(days)) if days > 0 => out.push_str(&format!("Nothing committed since the last release, {days} days ago\n")),
+        (Some(commits), Some(days)) if commits > 0 => {
+            let plural = if commits == 1 { "commit" } else { "commits" };
+            out.push_str(&format!("{commits} {plural} since the last release, the last one {}\n", days_ago(days)))
+        }
+        _ => {}
+    }
     // Said only when it means something. A day or two of quiet is the normal
     // rhythm of a project; a fortnight is worth seeing before starting work.
     if let Some(days) = p.state.days_quiet
