@@ -18,7 +18,8 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger open`](/rigger/reference/open/) | v0.4.0 | Start a Claude Code session with the packet |
 | [`rigger mcp`](/rigger/reference/mcp/) | v0.5.0 | Serve the packet and the recording tools over MCP |
 | [`rigger sync`](/rigger/reference/sync/) | v0.6.0 | Read tags and commits into facts |
-| `rigger find`, `rigger why` | planned v0.8.0 | Search events; trace the decisions behind a version or task |
+| [`rigger find`](/rigger/reference/find/) | v0.8.0 | Search every project's events |
+| [`rigger why`](/rigger/reference/why/) | v0.8.0 | The work that went into a version |
 | `rigger inbox`, `rigger digest` | planned v0.9.0 | Questions waiting for the owner; the five-line digest |
 | `rigger calendar`, `rigger next` | planned v0.10.0 | Weeks by projects; this week's focus |
 | `rigger week`, `rigger release-day` | planned v0.11.0 | The Monday brief; the Friday queue |

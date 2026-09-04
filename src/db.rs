@@ -86,6 +86,38 @@ const MIGRATIONS: &[&str] = &[
     -- because the text was the only thing identifying it.
     ALTER TABLE tasks ADD COLUMN position INTEGER;
     ",
+    // v4: a full-text index over event bodies, kept in step with the table
+    // by triggers rather than by remembering to write to both.
+    //
+    // `content=` makes it an external-content index: the text is not stored
+    // twice, the index holds only what it needs to search. `unicode61`
+    // folds case and strips diacritics for Cyrillic as well as Latin, which
+    // matters because these events are written in both.
+    "
+    -- The moment a version shipped, beside the day it shipped on.
+    -- `shipped_at` is a day because that is what a changelog and a calendar
+    -- speak in; but this line ships several versions on one day, and `why`
+    -- has to know which events belong to which release. The day cannot tell
+    -- them apart, so the tag's own timestamp is kept as well.
+    ALTER TABLE versions ADD COLUMN shipped_ts TEXT;
+    CREATE VIRTUAL TABLE events_fts USING fts5(
+        body,
+        content='events',
+        content_rowid='id',
+        tokenize='unicode61'
+    );
+    INSERT INTO events_fts(rowid, body) SELECT id, body FROM events;
+    CREATE TRIGGER events_fts_insert AFTER INSERT ON events BEGIN
+        INSERT INTO events_fts(rowid, body) VALUES (new.id, new.body);
+    END;
+    CREATE TRIGGER events_fts_delete AFTER DELETE ON events BEGIN
+        INSERT INTO events_fts(events_fts, rowid, body) VALUES ('delete', old.id, old.body);
+    END;
+    CREATE TRIGGER events_fts_update AFTER UPDATE OF body ON events BEGIN
+        INSERT INTO events_fts(events_fts, rowid, body) VALUES ('delete', old.id, old.body);
+        INSERT INTO events_fts(rowid, body) VALUES (new.id, new.body);
+    END;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -130,6 +162,29 @@ pub struct Task {
     pub title: String,
 }
 
+/// An event as a search returns it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Found {
+    pub project: String,
+    pub kind: String,
+    pub date: String,
+    pub body: String,
+    pub from_git: bool,
+    pub commit_hash: Option<String>,
+}
+
+/// What the record knows about one version.
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionFacts {
+    pub name: String,
+    pub title: Option<String>,
+    pub status: String,
+    pub shipped_at: Option<String>,
+    /// The moment the tag was made, where one is known. Several versions of
+    /// this line ship on one day, so the day cannot bound their work.
+    pub shipped_ts: Option<String>,
+}
+
 /// An event as the packet reads it back.
 pub struct RecentEvent {
     pub kind: String,
@@ -145,6 +200,7 @@ struct VersionRow {
     id: i64,
     status: String,
     shipped_at: Option<String>,
+    shipped_ts: Option<String>,
     source: Option<String>,
 }
 
@@ -495,6 +551,153 @@ impl Db {
         Ok((kind, body))
     }
 
+    /// Events matching a query, best first.
+    ///
+    /// Ranked by FTS5's own relevance, but with what a person wrote lifted
+    /// above what a commit message said. Both are searched - "when did we
+    /// fix that?" is as real a question as "where did we decide that?" - and
+    /// the answer to the second must not arrive under three commits that
+    /// happen to share a word.
+    pub fn find_events(&self, query: &str, project: Option<&str>, kind: Option<&str>, limit: u32) -> Result<Vec<Found>> {
+        // `snippet` returns the text around the match rather than the start
+        // of the body. A decision here runs to fifteen hundred characters and
+        // states its subject in a heading, so the first line often does not
+        // contain the word that was searched for - and a result you cannot
+        // see the reason for reads as a wrong result.
+        let mut sql = String::from(
+            "SELECT p.name, e.kind, e.created_at,
+                    snippet(events_fts, 0, '', '', '…', 12), e.author, e.commit_hash
+             FROM events_fts f
+             JOIN events e ON e.id = f.rowid
+             JOIN projects p ON p.id = e.project_id
+             WHERE events_fts MATCH ?1",
+        );
+        if project.is_some() {
+            sql.push_str(" AND p.name = ?2");
+        }
+        if kind.is_some() {
+            sql.push_str(if project.is_some() { " AND e.kind = ?3" } else { " AND e.kind = ?2" });
+        }
+        // A hand-written event outranks a commit line of equal relevance:
+        // the commit can be read again in git, the reasoning cannot.
+        sql.push_str(" ORDER BY (e.author = 'git'), rank, e.created_at DESC LIMIT ?LIMIT");
+
+        let limit_pos = 2 + usize::from(project.is_some()) + usize::from(kind.is_some());
+        let sql = sql.replace("?LIMIT", &format!("?{limit_pos}"));
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(query.to_string())];
+        if let Some(project) = project {
+            params.push(Box::new(project.to_string()));
+        }
+        if let Some(kind) = kind {
+            params.push(Box::new(kind.to_string()));
+        }
+        params.push(Box::new(limit));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(refs.as_slice(), |r| {
+            let date: String = r.get(2)?;
+            let author: String = r.get(4)?;
+            Ok(Found {
+                project: r.get(0)?,
+                kind: r.get(1)?,
+                date: date.split('T').next().unwrap_or(&date).to_string(),
+                body: r.get(3)?,
+                from_git: author == "git",
+                commit_hash: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The version by that name, with the release before it.
+    ///
+    /// "Before it" is by number, not by date: two versions often ship on one
+    /// day, and the plan's order is what "the work that led here" means.
+    pub fn version_and_predecessor(&self, project_id: i64, name: &str) -> Result<Option<(VersionFacts, Option<VersionFacts>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, title, status, shipped_at, shipped_ts FROM versions WHERE project_id = ?1")?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(VersionFacts {
+                name: r.get(0)?,
+                title: r.get(1)?,
+                status: r.get(2)?,
+                shipped_at: r.get(3)?,
+                shipped_ts: r.get(4)?,
+            })
+        })?;
+        let mut all: Vec<VersionFacts> = rows.collect::<rusqlite::Result<_>>()?;
+        all.sort_by_key(|v| version_order(&v.name));
+
+        let wanted = version_order(name);
+        let at = all.iter().position(|v| version_order(&v.name) == wanted);
+        let Some(at) = at else { return Ok(None) };
+
+        // The previous *shipped* release, not merely the previous row: a
+        // planned version in between never bounded any work.
+        let before = all[..at].iter().rev().find(|v| v.shipped_at.is_some()).cloned();
+        Ok(Some((all[at].clone(), before)))
+    }
+
+    /// Events recorded in a window of time, oldest first.
+    ///
+    /// The window is how a version and its events are joined: no event
+    /// carries a version of its own, and the work that went into a release
+    /// is what happened between the release before it and itself.
+    pub fn events_between(&self, project_id: i64, after: Option<&str>, until: Option<&str>) -> Result<Vec<Found>> {
+        let mut sql = String::from(
+            "SELECT p.name, e.kind, e.created_at, e.body, e.author, e.commit_hash
+             FROM events e JOIN projects p ON p.id = e.project_id
+             WHERE e.project_id = ?1 AND e.kind <> 'next'",
+        );
+        // Both ends are compared as text, which sorts correctly for RFC 3339.
+        // A bound may be a whole timestamp (from a tag) or a bare day (from a
+        // hub, which writes dates by hand): a day is padded so that "the work
+        // up to and including that day" still means what it says.
+        //
+        // The lower bound is exclusive and the upper inclusive, and that is
+        // not symmetry for its own sake: a tag points *at* a commit, so a
+        // release and its last commit share a moment. Inclusive at the top
+        // keeps that commit in the release it shipped; exclusive at the
+        // bottom keeps it out of the next one.
+        if after.is_some() {
+            sql.push_str(" AND e.created_at > ?2");
+        }
+        if until.is_some() {
+            sql.push_str(if after.is_some() {
+                " AND e.created_at <= ?3"
+            } else {
+                " AND e.created_at <= ?2"
+            });
+        }
+        sql.push_str(" ORDER BY e.created_at, e.id");
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
+        if let Some(after) = after {
+            params.push(Box::new(after.to_string()));
+        }
+        if let Some(until) = until {
+            params.push(Box::new(until.to_string()));
+        }
+        let mut stmt = self.conn.prepare(&sql)?;
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(refs.as_slice(), |r| {
+            let date: String = r.get(2)?;
+            let author: String = r.get(4)?;
+            Ok(Found {
+                project: r.get(0)?,
+                kind: r.get(1)?,
+                date: date.split('T').next().unwrap_or(&date).to_string(),
+                body: r.get(3)?,
+                from_git: author == "git",
+                commit_hash: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Records a change read from a commit, unless that commit is already
     /// recorded.
     ///
@@ -508,7 +711,23 @@ impl Db {
              VALUES (?1, 'change', ?2, 'git', ?3, ?4)",
             params![project_id, body, created_at, hash],
         )?;
-        Ok(if changed > 0 { Change::Added } else { Change::Unchanged })
+        if changed > 0 {
+            return Ok(Change::Added);
+        }
+
+        // Already recorded - but perhaps by a rigger that kept only the day,
+        // which placed every change of a day at midnight, before any tag
+        // made that day. `why` bounds a version's work by tag moments, so a
+        // midnight stamp files a change under the wrong release. Correcting
+        // it is not a rewrite of history: it is the same commit, dated by
+        // itself rather than by what the reader could store at the time.
+        self.conn.execute(
+            "UPDATE events SET created_at = ?1
+             WHERE project_id = ?2 AND commit_hash = ?3 AND created_at <> ?1
+               AND substr(created_at, 1, 10) = substr(?1, 1, 10)",
+            params![created_at, project_id, hash],
+        )?;
+        Ok(Change::Unchanged)
     }
 
     /// The newest version the record says shipped, with its date.
@@ -592,21 +811,22 @@ impl Db {
     /// A version the plan never mentioned is added - the release happened
     /// whether or not anyone wrote it down - and reported as `Added` so the
     /// caller can say so.
-    pub fn mark_shipped(&self, project_id: i64, version: &str, date: &str) -> Result<Change> {
+    pub fn mark_shipped(&self, project_id: i64, version: &str, date: &str, moment: &str) -> Result<Change> {
         // Matched by number, not by text: hubs spell one version several
         // ways (`v1.9` for the stage, `v1.9.0` for the release), and a tag
         // must land on the row that already exists rather than beside it.
         let existing: Option<VersionRow> = self
             .conn
             .query_row(
-                "SELECT id, status, shipped_at, shipped_source FROM versions WHERE project_id = ?1 AND name = ?2",
+                "SELECT id, status, shipped_at, shipped_ts, shipped_source FROM versions WHERE project_id = ?1 AND name = ?2",
                 params![project_id, version],
                 |r| {
                     Ok(VersionRow {
                         id: r.get(0)?,
                         status: r.get(1)?,
                         shipped_at: r.get(2)?,
-                        source: r.get(3)?,
+                        shipped_ts: r.get(3)?,
+                        source: r.get(4)?,
                     })
                 },
             )
@@ -618,21 +838,25 @@ impl Db {
                 id,
                 status,
                 shipped_at,
+                shipped_ts,
                 source,
             }) => {
-                if status == "shipped" && shipped_at.as_deref() == Some(date) && source.as_deref() == Some("tag") {
+                // The moment is part of "unchanged": a version recorded
+                // before rigger kept the moment has the right day and no
+                // way to be told apart from its same-day neighbours.
+                if status == "shipped" && shipped_at.as_deref() == Some(date) && shipped_ts.as_deref() == Some(moment) && source.as_deref() == Some("tag") {
                     return Ok(Change::Unchanged);
                 }
                 self.conn.execute(
-                    "UPDATE versions SET status = 'shipped', shipped_at = ?1, shipped_source = 'tag' WHERE id = ?2",
-                    params![date, id],
+                    "UPDATE versions SET status = 'shipped', shipped_at = ?1, shipped_ts = ?2, shipped_source = 'tag' WHERE id = ?3",
+                    params![date, moment, id],
                 )?;
                 Ok(Change::Updated)
             }
             None => {
                 self.conn.execute(
-                    "INSERT INTO versions (project_id, name, status, shipped_at, shipped_source) VALUES (?1, ?2, 'shipped', ?3, 'tag')",
-                    params![project_id, version, date],
+                    "INSERT INTO versions (project_id, name, status, shipped_at, shipped_ts, shipped_source) VALUES (?1, ?2, 'shipped', ?3, ?4, 'tag')",
+                    params![project_id, version, date, moment],
                 )?;
                 Ok(Change::Added)
             }
@@ -644,7 +868,7 @@ impl Db {
         let wanted = version_order(version);
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, status, shipped_at, shipped_source FROM versions WHERE project_id = ?1")?;
+            .prepare("SELECT id, name, status, shipped_at, shipped_ts, shipped_source FROM versions WHERE project_id = ?1")?;
         let rows = stmt.query_map([project_id], |r| {
             Ok((
                 r.get::<_, String>(1)?,
@@ -652,7 +876,8 @@ impl Db {
                     id: r.get(0)?,
                     status: r.get(2)?,
                     shipped_at: r.get(3)?,
-                    source: r.get(4)?,
+                    shipped_ts: r.get(4)?,
+                    source: r.get(5)?,
                 },
             ))
         })?;

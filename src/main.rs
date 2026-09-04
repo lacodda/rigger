@@ -12,6 +12,7 @@ mod mcp;
 mod open;
 mod paths;
 mod repo;
+mod search;
 mod sync;
 
 use std::path::{Path, PathBuf};
@@ -88,6 +89,33 @@ enum Command {
     Sync {
         /// Project name; every project when omitted
         project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search the record: where was this decided, when was that fixed
+    Find {
+        /// What to look for; FTS5 syntax, so `budget AND packet` works
+        query: String,
+        /// Only this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Only this kind of event
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
+        /// How many results to show
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The events that led to a version: what was decided, found and hit
+    Why {
+        /// Project name
+        project: String,
+        /// Version, as the record spells it
+        version: String,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -203,6 +231,14 @@ fn run(cli: Cli) -> Result<()> {
         Command::Open { project, print, budget } => open_session(&project, print, budget),
         Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
         Command::Sync { project, json } => sync_projects(project.as_deref(), json),
+        Command::Find {
+            query,
+            project,
+            kind,
+            limit,
+            json,
+        } => find(&query, project.as_deref(), kind.as_deref(), limit, json),
+        Command::Why { project, version, json } => why(&project, &version, json),
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -383,6 +419,84 @@ fn resolve(project: &str, id: i64, answer: Option<&str>) -> Result<()> {
     }
     if answer.is_some() {
         println!("  the answer is recorded as a decision");
+    }
+    Ok(())
+}
+
+/// Searches every project's events at once.
+fn find(query: &str, project: Option<&str>, kind: Option<&str>, limit: u32, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    // A project that does not exist is a typo, not an empty result: saying
+    // "nothing found" would send someone looking for the wrong thing.
+    if let Some(name) = project {
+        open_project(&db, name)?;
+    }
+    let found = db
+        .find_events(&search::as_fts_query(query), project, kind, limit)
+        .with_context(|| format!("{query:?} is not a search FTS5 understands"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&found)?);
+        return Ok(());
+    }
+    if found.is_empty() {
+        println!("{}", search::nothing_found(query, project, kind));
+        return Ok(());
+    }
+    // The project column is dead weight when the search was for one project.
+    let show_project = project.is_none();
+    for event in &found {
+        print!("{}", search::render_event(event, show_project));
+    }
+    if found.len() as u32 == limit {
+        println!("({limit} shown; --limit for more)");
+    }
+    Ok(())
+}
+
+/// The work that went into one version.
+fn why(project: &str, version: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let why = search::why(&db, &project, version)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&why)?);
+        return Ok(());
+    }
+
+    let mut heading = why.version.name.clone();
+    if let Some(title) = &why.version.title {
+        heading.push_str(&format!(" · {title}"));
+    }
+    match &why.version.shipped_at {
+        Some(on) => println!("{heading} — shipped {on}"),
+        None => println!("{heading} — being built"),
+    }
+    match &why.after {
+        Some(before) => println!("the work after {} ({})", before.name, before.shipped_at.as_deref().unwrap_or("undated")),
+        None => println!("the work from the start of the record"),
+    }
+    println!();
+
+    if why.events.is_empty() {
+        println!("Nothing was recorded in that window.");
+        // Two releases can share a moment - a tag points at a commit, and
+        // this line sometimes tags two of them in the same second. Saying so
+        // is better than an empty answer that looks like a missing record.
+        if let Some(before) = &why.after
+            && before.shipped_ts.is_some()
+            && before.shipped_ts == why.version.shipped_ts
+        {
+            println!(
+                "{} and {} were tagged in the same second, so no work falls between them.",
+                before.name, why.version.name
+            );
+        }
+        return Ok(());
+    }
+    for event in &why.events {
+        print!("{}", search::render_event(event, false));
     }
     Ok(())
 }

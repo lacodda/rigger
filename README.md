@@ -19,7 +19,7 @@ rigger keeps the record as data, in a local SQLite file, and derives everything 
 
 ```console
 $ rigger init
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 3)
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 4)
 Next: rigger project add <path>
 
 $ rigger project add C:\dev\sample
@@ -35,7 +35,7 @@ sample:
 
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 3
+schema:    version 4
 projects:  1
 versions:  3
 tasks:     2
@@ -96,6 +96,22 @@ claimed:
 
 Those changes come out of the commit messages themselves - `feat`, `fix` and anything breaking, dated by the commit rather than by the sync - so the chronicle stays current whether or not anyone opens a session.
 
+Once there is a record, it answers questions - which is the point of keeping it as data:
+
+```console
+$ rigger find budget
+sample       2026-09-04  decision  The budget is a gate, not a suggestion.
+sample       2026-09-04  pitfall   A wide window hides what the budget dropped.
+
+$ rigger why sample v0.3.0
+v0.3.0 — shipped 2026-09-04
+the work after v0.2.0 (2026-09-04)
+
+2026-09-04  decision  The budget is a gate, not a suggestion.
+2026-09-04  pitfall   A wide window hides what the budget dropped.
+2026-09-04  change    feat: rank what a person wrote above a commit
+```
+
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
 ## What it will do
@@ -110,7 +126,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.7.0 keeps the record current without a session: `sync` reads changes out of commit messages, so the chronicle writes itself, and `resolve` finally closes a question or a wish. Before them: the database, projects, `import`, `backup`, `context`, `note`, `open`, the `mcp` server and facts from git. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.8.0 lets the record answer questions: `find` searches every project's events at once, and `why` shows the decisions, findings and changes that went into any version. Before them: the database, projects, `import`, `backup`, `context`, `note`, `open`, the `mcp` server, facts from git and a chronicle that writes itself. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

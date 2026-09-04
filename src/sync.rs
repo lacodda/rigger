@@ -59,6 +59,10 @@ impl Report {
 struct Tag {
     version: String,
     date: String,
+    /// The commit's whole timestamp. The day is what a changelog speaks in,
+    /// but this line ships several versions on one day, so the moment is
+    /// what tells their work apart.
+    moment: String,
 }
 
 pub fn sync(db: &Db, project: &Project) -> Result<Report> {
@@ -85,7 +89,7 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
     let tags = read_tags(&repo)?;
     for tag in &tags {
         // A tag is proof the version shipped; the plan does not get a vote.
-        let change = db.mark_shipped(project.id, &tag.version, &tag.date)?;
+        let change = db.mark_shipped(project.id, &tag.version, &tag.date, &tag.moment)?;
         match change {
             Change::Unchanged => report.shipped.push(Shipped {
                 version: tag.version.clone(),
@@ -140,10 +144,10 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
     // Changes are recorded oldest first, so that the record reads forwards
     // even though history is walked backwards.
     for change in history.changes.iter().rev() {
-        // The timestamp is the commit's day: an event about a change that
-        // landed in August must not date from the sync that read it.
-        let at = format!("{}T00:00:00Z", change.date);
-        if db.record_commit_event(project.id, &change.hash, &change.body, &at)? == Change::Added {
+        // The timestamp is the commit's own: an event about a change that
+        // landed in August must not date from the sync that read it, and a
+        // change made after a tag must not sort before it.
+        if db.record_commit_event(project.id, &change.hash, &change.body, &change.moment)? == Change::Added {
             report.changes_recorded += 1;
         }
     }
@@ -178,6 +182,7 @@ fn read_tags(repo: &gix::Repository) -> Result<Vec<Tag>> {
         tags.push(Tag {
             version: name,
             date: day(time.seconds),
+            moment: moment(time.seconds),
         });
     }
     Ok(tags)
@@ -211,7 +216,10 @@ struct History {
 struct CommitChange {
     hash: String,
     body: String,
-    date: String,
+    /// The commit's whole timestamp. The day alone would place every change
+    /// of a day at midnight, before any tag made that day - and `why` bounds
+    /// a version's work by the moments its tags were made.
+    moment: String,
 }
 
 /// How far back changes are read. Deep enough that a first sync brings a
@@ -278,8 +286,13 @@ fn read_change(repo: &gix::Repository, id: gix::ObjectId) -> Option<CommitChange
     Some(CommitChange {
         hash: id.to_hex().to_string(),
         body: parsed.body(),
-        date: commit.time().ok().map(|t| day(t.seconds)).unwrap_or_default(),
+        moment: commit.time().ok().map(|t| moment(t.seconds)).unwrap_or_default(),
     })
+}
+
+/// A UNIX timestamp whole, in UTC - the moment, not the day.
+fn moment(seconds: i64) -> String {
+    jiff::Timestamp::from_second(seconds).map(|t| t.to_string()).unwrap_or_default()
 }
 
 /// A UNIX timestamp as the day it fell on, in UTC.

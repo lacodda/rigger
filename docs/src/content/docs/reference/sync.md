@@ -46,7 +46,7 @@ claimed:
 ```console
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 3
+schema:    version 4
 projects:  1
 versions:  3
 tasks:     1
@@ -92,7 +92,7 @@ The commits since the newest tag, and when the last one landed. It answers a que
 
 ## Schema
 
-Schema version 3 adds the commit an event came from, and where a task sits in its stage. The database is copied aside before migrating - the copy is named for the schema it holds - and an older rigger refuses a database it does not understand rather than damaging it.
+Schema version 4 adds the full-text index that [`rigger find`](/rigger/reference/find/) searches, and the moment a version was tagged - the day alone cannot tell apart releases that shipped hours apart. The database is copied aside before migrating - the copy is named for the schema it holds - and an older rigger refuses a database it does not understand rather than damaging it.
 
 ## Running it on a schedule
 

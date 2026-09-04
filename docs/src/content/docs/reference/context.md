@@ -68,5 +68,8 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 
 ## Related
 
+- [`find`](/rigger/reference/find/) - searching the events this packet samples from.
+- [`why`](/rigger/reference/why/) - the whole story behind one version.
+
 - [`note`](/rigger/reference/note/) - record what this session found, decided or is leaving for the next one.
 - [`import`](/rigger/reference/import/) - fill the record from a hub before the first packet.
