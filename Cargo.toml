@@ -1,6 +1,6 @@
 [package]
 name = "rigger"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant"
@@ -33,7 +33,10 @@ clap = { version = "4.5", features = ["derive"] }
 directories = "6"
 dunce = "1"
 jiff = "0.2"
-rusqlite = { version = "0.38", features = ["bundled"] }
+# bundled: no system SQLite to find or version-match on any platform.
+# backup: the database is copied through SQLite's own API before a migration,
+# which is consistent even while another process holds it open.
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

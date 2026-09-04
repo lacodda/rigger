@@ -4,10 +4,12 @@
 //! database, projects and `doctor`.
 
 mod db;
+mod hub;
+mod import;
 mod paths;
 mod repo;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
@@ -31,6 +33,19 @@ enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Read a notes hub into versions, tasks and events
+    Import {
+        /// Project name
+        project: String,
+        /// Directory of the hub to read
+        #[arg(long)]
+        hub: PathBuf,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copy the database aside, stamped with the moment and its schema
+    Backup,
     /// Show the database path, schema version and record counts
     Doctor {
         /// Print as JSON
@@ -83,8 +98,53 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::List { json } => project_list(json),
             ProjectCommand::Show { name, json } => project_show(&name, json),
         },
+        Command::Import { project, hub, json } => import_hub(&project, &hub, json),
+        Command::Backup => backup(),
         Command::Doctor { json } => doctor(json),
     }
+}
+
+fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let Some(project) = db.project_by_name(project)? else {
+        bail!("no project named '{project}'; see `rigger project list`");
+    };
+    let hub = hub::read(hub_dir)?;
+    let report = import::import(&db, project.id, &hub)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    for warning in &report.warnings {
+        println!("note: {warning}");
+    }
+    if !report.changed() {
+        println!("{}: nothing changed", project.name);
+        return Ok(());
+    }
+    println!("{}:", project.name);
+    let line = |label: &str, added: u32, updated: u32| {
+        if added + updated > 0 {
+            println!("  {label:<10} {added} added, {updated} updated");
+        }
+    };
+    line("versions", report.versions_added, report.versions_updated);
+    line("tasks", report.tasks_added, report.tasks_updated);
+    if report.decisions_added > 0 {
+        println!("  {:<10} {} added", "decisions", report.decisions_added);
+    }
+    if report.questions_added > 0 {
+        println!("  {:<10} {} added", "questions", report.questions_added);
+    }
+    Ok(())
+}
+
+fn backup() -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let target = db.backup()?;
+    println!("Copied to {}", target.display());
+    Ok(())
 }
 
 fn init() -> Result<()> {

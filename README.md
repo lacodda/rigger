@@ -26,20 +26,28 @@ $ rigger project add C:\dev\sample
 Recorded 'sample' at C:\dev\sample
   remote: https://github.com/acme/sample.git
 
-$ rigger project show sample
-sample
-  path:    C:\dev\sample
-  remote:  https://github.com/acme/sample.git
-  since:   2026-09-04T07:41:10Z
+$ rigger import sample --hub C:\dev\sample\hub
+sample:
+  versions   3 added, 0 updated
+  tasks      2 added, 0 updated
+  decisions  1 added
+  questions  1 added
 
 $ rigger doctor
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
 schema:    version 1
 projects:  1
-versions:  0
-tasks:     0
+versions:  3
+tasks:     2
 sessions:  0
-events:    0
+events:    2
+```
+
+Years of notes arrive in one command, and running it again is quiet:
+
+```console
+$ rigger import sample --hub C:\dev\sample\hub
+sample: nothing changed
 ```
 
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
@@ -56,7 +64,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.1.0 is the first release: the database, projects and `doctor`. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.2.0 reads a notes hub into the record: the database, projects, `import` and `backup`. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

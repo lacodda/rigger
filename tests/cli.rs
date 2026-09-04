@@ -164,6 +164,157 @@ fn show_of_an_unknown_project_fails_with_a_pointer() {
         .stderr(predicate::str::contains("no project named 'ghost'"));
 }
 
+/// A hub in the shape the real ones have: a plan with open stages and
+/// questions, a changelog of shipped ones, a dated decision log.
+fn hub(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("План.md"),
+        "# План разработки\n\n## Ждёт решения владельца\n\n1. Pick a colour.\n2. Sign the binary.\n\n## v0.3.0 · Third stage\n\n- [ ] first task\n- [ ] second task\n\n## Бэклог без версии\n\n- [ ] someday, not a task of a stage\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Изменения.md"),
+        "# Изменения\n\n## v0.2.0 · Second stage — выпущена 2026-09-03\n\n- Something shipped.\n\n## v0.1.0 · First stage — выпущен 2026-09-01\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Решения.md"),
+        "# Журнал решений\n\n---\n\n## 2026-09-03 · The record is the database\n\nBecause prose cannot be filtered.\n",
+    )
+    .unwrap();
+}
+
+/// A database with one project named `proj`, whose repository carries a hub.
+fn imported_project(data: &Path) -> std::path::PathBuf {
+    let root = data.join("proj");
+    repo(&root);
+    hub(&root.join("hub"));
+    rigger(data).arg("init").assert().success();
+    rigger(data).args(["project", "add"]).arg(&root).assert().success();
+    root
+}
+
+#[test]
+fn import_reads_stages_tasks_decisions_and_questions() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+
+    rigger(data.path())
+        .args(["import", "proj", "--hub"])
+        .arg(root.join("hub"))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("versions   3 added")
+                .and(predicate::str::contains("tasks      2 added"))
+                .and(predicate::str::contains("decisions  1 added"))
+                .and(predicate::str::contains("questions  2 added")),
+        );
+
+    rigger(data.path()).arg("doctor").assert().success().stdout(
+        predicate::str::contains("versions:  3")
+            .and(predicate::str::contains("tasks:     2"))
+            .and(predicate::str::contains("events:    3")),
+    );
+}
+
+#[test]
+fn importing_an_unchanged_hub_again_changes_nothing() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    let hub_dir = root.join("hub");
+
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(&hub_dir).assert().success();
+    rigger(data.path())
+        .args(["import", "proj", "--hub"])
+        .arg(&hub_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing changed"));
+
+    // And the record did not grow behind the report.
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("versions:  3").and(predicate::str::contains("events:    3")));
+}
+
+#[test]
+fn a_stage_that_shipped_is_updated_rather_than_duplicated() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    let hub_dir = root.join("hub");
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(&hub_dir).assert().success();
+
+    // The stage moves from the plan to the changelog, as it does when a
+    // version ships: same version, now with a date.
+    std::fs::write(hub_dir.join("План.md"), "# План\n\n## Ждёт решения владельца\n\n- (пусто)\n").unwrap();
+    std::fs::write(
+        hub_dir.join("Изменения.md"),
+        "# Изменения\n\n## v0.3.0 · Third stage — выпущена 2026-09-05\n\n## v0.2.0 · Second stage — выпущена 2026-09-03\n\n## v0.1.0 · First stage — выпущен 2026-09-01\n",
+    )
+    .unwrap();
+
+    rigger(data.path())
+        .args(["import", "proj", "--hub"])
+        .arg(&hub_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("versions   0 added, 1 updated"));
+
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("versions:  3"));
+}
+
+#[test]
+fn import_of_a_missing_hub_reports_the_files_it_wanted() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+
+    rigger(data.path())
+        .args(["import", "proj", "--hub"])
+        .arg(root.join("no-such-hub"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("План.md is missing").and(predicate::str::contains("nothing changed")));
+}
+
+#[test]
+fn import_of_an_unknown_project_fails() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path())
+        .args(["import", "ghost", "--hub"])
+        .arg(root.join("hub"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no project named 'ghost'"));
+}
+
+#[test]
+fn backup_copies_the_database_beside_itself() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path())
+        .arg("backup")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Copied to"));
+
+    let copies: Vec<_> = std::fs::read_dir(data.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+        .collect();
+    assert_eq!(copies.len(), 1, "expected one backup, found {copies:?}");
+    assert!(copies[0].file_name().to_string_lossy().starts_with("rigger.v1-"));
+}
+
 #[test]
 fn doctor_reports_the_database_before_and_after_init() {
     let data = tempfile::tempdir().unwrap();

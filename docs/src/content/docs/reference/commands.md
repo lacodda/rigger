@@ -10,7 +10,8 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger init`](/rigger/reference/init/) | v0.1.0 | Create the database |
 | [`rigger project`](/rigger/reference/project/) | v0.1.0 | Add, list and show projects |
 | [`rigger doctor`](/rigger/reference/doctor/) | v0.1.0 | Show the database path, schema version and record counts |
-| `rigger import` | planned v0.2.0 | Import a notes hub into versions, tasks and events |
+| [`rigger import`](/rigger/reference/import/) | v0.2.0 | Read a notes hub into versions, tasks and events |
+| [`rigger backup`](/rigger/reference/backup/) | v0.2.0 | Copy the database aside |
 | `rigger context` | planned v0.3.0 | Print the context packet for a project or task |
 | `rigger note`, `rigger wish` | planned v0.3.0 | Record an event or a wish from the command line |
 | `rigger open` | planned v0.4.0 | Start a Claude Code session with the packet |

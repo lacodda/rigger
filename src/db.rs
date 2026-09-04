@@ -79,6 +79,15 @@ pub struct Project {
     pub created_at: String,
 }
 
+/// What writing a record did. An import reports the three apart, so that
+/// running it twice on an unchanged hub visibly does nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    Added,
+    Updated,
+    Unchanged,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Counts {
     pub projects: u64,
@@ -128,6 +137,16 @@ impl Db {
                 self.path.display()
             );
         }
+        // A migration rewrites the record, and the record is the truth here:
+        // copy it aside first, so a migration that goes wrong costs nothing.
+        // Copying a fresh empty database would only be noise.
+        if current > 0 && current < SCHEMA_VERSION {
+            let backup = self.backup()?;
+            eprintln!(
+                "Migrating schema {current} -> {SCHEMA_VERSION}; the previous database is saved as {}",
+                backup.display()
+            );
+        }
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
             let target = i as u32 + 1;
             self.conn
@@ -139,6 +158,23 @@ impl Db {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Copies the database beside itself, stamped with the moment and the
+    /// schema it holds. SQLite's own backup API is used rather than a file
+    /// copy: it is consistent even while something else is connected.
+    pub fn backup(&self) -> Result<PathBuf> {
+        let stamp = now().replace([':', '-'], "").replace('T', "-").replace('Z', "");
+        let name = format!(
+            "{}.v{}-{stamp}.bak",
+            self.path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_else(|| "rigger".into()),
+            self.schema_version()?
+        );
+        let target = self.path.with_file_name(name);
+        let mut out = Connection::open(&target).with_context(|| format!("cannot create {}", target.display()))?;
+        let backup = rusqlite::backup::Backup::new(&self.conn, &mut out).context("cannot start the backup")?;
+        backup.step(-1).context("the backup did not finish")?;
+        Ok(target)
     }
 
     pub fn schema_version(&self) -> Result<u32> {
@@ -192,6 +228,109 @@ impl Db {
                 row_to_project,
             )
             .optional()?)
+    }
+
+    /// Records a stage, or updates the one already recorded under that
+    /// version. Returns its id and whether anything changed - the import
+    /// report counts on the difference, and a second import of an unchanged
+    /// hub must report nothing.
+    pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage) -> Result<(i64, Change)> {
+        let existing: Option<(i64, Option<String>, String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT id, title, status, shipped_at FROM versions WHERE project_id = ?1 AND name = ?2",
+                params![project_id, stage.version],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let status = if stage.shipped_on.is_some() { "shipped" } else { "planned" };
+        match existing {
+            Some((id, title, was_status, shipped_at)) => {
+                if title.as_deref() == stage.title.as_deref() && was_status == status && shipped_at == stage.shipped_on {
+                    return Ok((id, Change::Unchanged));
+                }
+                self.conn.execute(
+                    "UPDATE versions SET title = ?1, status = ?2, shipped_at = ?3 WHERE id = ?4",
+                    params![stage.title, status, stage.shipped_on, id],
+                )?;
+                Ok((id, Change::Updated))
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO versions (project_id, name, title, status, shipped_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![project_id, stage.version, stage.title, status, stage.shipped_on],
+                )?;
+                Ok((self.conn.last_insert_rowid(), Change::Added))
+            }
+        }
+    }
+
+    /// Records a task of a version. The pair (version, title) identifies it:
+    /// the hub has no ids, and the text of a line is what the owner edits
+    /// least once a stage is written.
+    pub fn upsert_task(&self, project_id: i64, version_id: i64, task: &crate::hub::Task) -> Result<Change> {
+        let status = if task.done { "done" } else { "open" };
+        let existing: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, status FROM tasks WHERE version_id = ?1 AND title = ?2",
+                params![version_id, task.title],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match existing {
+            Some((_, was)) if was == status => Ok(Change::Unchanged),
+            Some((id, _)) => {
+                let closed_at = task.done.then(now);
+                self.conn
+                    .execute("UPDATE tasks SET status = ?1, closed_at = ?2 WHERE id = ?3", params![status, closed_at, id])?;
+                Ok(Change::Updated)
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO tasks (project_id, version_id, title, status, created_at, closed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![project_id, version_id, task.title, status, now(), task.done.then(now)],
+                )?;
+                Ok(Change::Added)
+            }
+        }
+    }
+
+    /// Records an event unless the same one is already there.
+    ///
+    /// Events carry no natural key. A dated one - a decision read from the
+    /// hub - is identified by project, kind, date and body, which is exactly
+    /// what a re-import would produce again. An undated one - a question,
+    /// which the hub states without saying when - is identified by its text
+    /// alone, because its timestamp is the moment of import and would differ
+    /// on every run.
+    pub fn record_event(&self, project_id: i64, kind: &str, body: &str, created_at: &str, author: &str) -> Result<Change> {
+        let dated = kind != "question";
+        let seen: Option<i64> = if dated {
+            self.conn
+                .query_row(
+                    "SELECT id FROM events WHERE project_id = ?1 AND kind = ?2 AND created_at = ?3 AND body = ?4",
+                    params![project_id, kind, created_at, body],
+                    |r| r.get(0),
+                )
+                .optional()?
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT id FROM events WHERE project_id = ?1 AND kind = ?2 AND body = ?3",
+                    params![project_id, kind, body],
+                    |r| r.get(0),
+                )
+                .optional()?
+        };
+        if seen.is_some() {
+            return Ok(Change::Unchanged);
+        }
+        self.conn.execute(
+            "INSERT INTO events (project_id, kind, body, author, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![project_id, kind, body, author, created_at],
+        )?;
+        Ok(Change::Added)
     }
 
     pub fn counts(&self) -> Result<Counts> {
