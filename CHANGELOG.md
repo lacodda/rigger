@@ -2,7 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] - 2026-09-04
+
+### Breaking Changes
+- **Database schema version 4.** Adds the full-text index `rigger find` searches, kept in step with the events table by triggers, and the moment a version was tagged - the day alone cannot tell apart releases that shipped hours apart, and this line ships several in an afternoon. Migration is automatic on the first command after upgrading, and the database is copied aside first, named for the schema it holds (`rigger.v3-<stamp>.bak`). An older rigger refuses a version 4 database rather than damaging it, so downgrading means restoring that copy.
+- **A change recorded before this release carries only the day it landed.** The first `rigger sync` after upgrading gives each one back its commit's own time, in place, so that `rigger why` can file it under the release it belongs to. Nothing else about the event changes, and the correction is confined to the day already recorded.
+
+### Features
+- Ask the record where and why
 ## [0.7.1] - 2026-09-04
+
+### Documentation
+- Changelog for v0.7.1
 
 ### Features
 - Install rgr beside rigger
