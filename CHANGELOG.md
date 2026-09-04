@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.2] - 2026-09-04
+
+### Bug Fixes
+- Name the newest release by its number, not by its row
 ## [0.4.1] - 2026-09-04
 
 ### Bug Fixes
@@ -9,6 +13,7 @@ All notable changes to this project are documented in this file.
 
 ### Documentation
 - Changelog for v0.4.0
+- Changelog for v0.4.1
 
 ### Features
 - Start an assistant session with the packet in hand
