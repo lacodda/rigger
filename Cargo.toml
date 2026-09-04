@@ -1,0 +1,41 @@
+[package]
+name = "rigger"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant"
+license = "MIT"
+repository = "https://github.com/lacodda/rigger"
+homepage = "https://github.com/lacodda/rigger"
+readme = "README.md"
+keywords = ["cli", "developer-tools", "project-management", "mcp", "release"]
+categories = ["command-line-utilities", "development-tools"]
+authors = ["Kirill Lakhtachev <lahtachev@gmail.com>"]
+# assets/icon.ico is required by build.rs on Windows; the rest of the brand
+# artwork only serves GitHub and the docs site.
+exclude = [
+    "docs/",
+    ".github/",
+    "cliff.toml",
+    "rustfmt.toml",
+    "assets/social-preview.png",
+    "assets/logo-512.png",
+    "assets/apple-touch-icon.png",
+    "assets/favicon-32.png",
+]
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+# Line-table debug info keeps backtraces readable while cutting the .pdb weight
+# that dominates target/debug. Full debug info is a one-line revert when needed.
+[profile.dev]
+debug = 1

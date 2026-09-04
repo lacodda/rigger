@@ -1,0 +1,12 @@
+/target
+
+# Docs site (Astro Starlight)
+docs/node_modules/
+docs/dist/
+docs/.astro/
+
+# npm wrapper: binaries downloaded by install.js
+npm/rigger
+npm/rigger.exe
+npm/archive.*
+npm/node_modules/

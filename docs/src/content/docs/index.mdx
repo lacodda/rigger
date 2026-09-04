@@ -1,0 +1,66 @@
+---
+title: rigger
+description: One seat for all your projects and tasks - a local record of what is done, what is next and when it ships, read by you and your coding assistant.
+template: splash
+hero:
+  tagline: One seat for all your projects and tasks. A local record of what is done, what is next and when it ships - read by you and your coding assistant.
+  image:
+    html: |
+      <div class="rg-install">
+        <div class="rg-install__bar">
+          <span class="rg-install__dot"></span>
+          <span class="rg-install__dot"></span>
+          <span class="rg-install__dot"></span>
+          <span class="rg-install__os">from v0.1.0</span>
+        </div>
+        <pre class="rg-install__body"><span class="rg-install__prompt">$</span> npm i -g rigger-cli
+      <span class="rg-install__prompt">$</span> cargo install rigger
+
+      <span class="rg-install__comment"># then, once:</span>
+      <span class="rg-install__prompt">$</span> rigger init
+      <span class="rg-install__prompt">$</span> rigger project add .</pre>
+      </div>
+  actions:
+    - text: Get started
+      link: /rigger/getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/lacodda/rigger
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## The problem
+
+Run more than a handful of projects and the record scatters: a plan here, a changelog there, a session log the assistant writes for itself, a release calendar kept by hand. You stop reading it, because prose cannot be filtered or summed across projects. The assistant reads it every session at full price, and the biggest project no longer fits in a context window. The facts about what shipped live in git, where nobody looks.
+
+rigger keeps the record as data in a local SQLite file and derives everything else from it.
+
+## What rigger does
+
+<CardGrid stagger>
+	<Card title="One model, two profiles" icon="puzzle">
+		Projects, versions, tasks and sessions. At home a version is a stage that ends in a tag; at work a task is a ticket across several projects and branches. The same binary serves both through a profile.
+	</Card>
+	<Card title="Facts from git" icon="seti:git">
+		A pushed tag means the version shipped, on that date. Commits since the last tag are activity. The plan cannot claim more than git confirms; a mismatch is reported, never silently fixed.
+	</Card>
+	<Card title="A context packet, not a hub" icon="document">
+		`rigger context` prints what the assistant needs to start - state, current stage, open questions, last events, next step - inside a fixed token budget that is tested, not hoped for.
+	</Card>
+	<Card title="An MCP server as the only pen" icon="seti:json">
+		Decisions, findings, pitfalls, changes and the next step are recorded through tools, as events with a date and a session. Nothing is written by editing markdown.
+	</Card>
+	<Card title="The owner's inbox" icon="information">
+		Every question waiting for your answer, across all projects, in one list. Answer it and the answer becomes a decision on record.
+	</Card>
+	<Card title="Hubs as an export" icon="open-book">
+		The markdown you keep in your notes is generated from the database: stable bytes for a stable database, so the history in git stays readable.
+	</Card>
+</CardGrid>
+
+## Status
+
+Stage 0: the repository, the release conveyor and the roadmap exist. The first command surface arrives with v0.1.0. See the [roadmap](https://github.com/lacodda/rigger#status).
