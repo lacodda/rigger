@@ -413,6 +413,108 @@ fn context_as_json_carries_the_same_facts() {
 }
 
 #[test]
+fn open_print_shows_the_message_the_assistant_would_receive() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+
+    rigger(data.path()).args(["open", "proj", "--print"]).assert().success().stdout(
+        // The instruction first, so the packet is read as state rather
+        // than as something to summarise; then the packet itself.
+        predicate::str::contains("This is where the project stands")
+            .and(predicate::str::contains("rigger note"))
+            .and(predicate::str::contains("## Current stage: v0.3.0 · Third stage")),
+    );
+}
+
+/// `open` runs whatever assistant the owner uses. Here that is a script that
+/// records its arguments, which proves three things at once: the packet
+/// arrives as one argument, the working directory is the project, and the
+/// assistant's exit status becomes ours.
+#[test]
+fn open_runs_the_assistant_in_the_project_with_the_packet() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    let log = data.path().join("assistant.log");
+
+    let (stub, args) = stub_assistant(data.path(), &log, 0);
+    let mut cmd = rigger(data.path());
+    cmd.env(open_env(), format!("{stub} {args}"));
+    cmd.args(["open", "proj"]).assert().success();
+
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        recorded.contains("This is where the project stands"),
+        "the packet did not reach the assistant: {recorded}"
+    );
+    assert!(
+        recorded.contains(&format!("cwd={}", root.display())),
+        "the assistant did not run in the project: {recorded}"
+    );
+}
+
+#[test]
+fn open_passes_on_the_assistants_exit_status() {
+    let data = tempfile::tempdir().unwrap();
+    imported_project(data.path());
+    let log = data.path().join("assistant.log");
+
+    let (stub, args) = stub_assistant(data.path(), &log, 3);
+    let mut cmd = rigger(data.path());
+    cmd.env(open_env(), format!("{stub} {args}"));
+    cmd.args(["open", "proj"]).assert().code(3);
+}
+
+#[test]
+fn open_reports_a_missing_assistant_by_name() {
+    let data = tempfile::tempdir().unwrap();
+    imported_project(data.path());
+
+    let mut cmd = rigger(data.path());
+    cmd.env(open_env(), "no-such-assistant-binary");
+    cmd.args(["open", "proj"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot run `no-such-assistant-binary`"));
+}
+
+fn open_env() -> &'static str {
+    "RIGGER_ASSISTANT"
+}
+
+/// Writes a script that appends its working directory and arguments to `log`
+/// and exits with `code`. Returns the interpreter and its leading arguments,
+/// so the caller can build the command line rigger will run.
+fn stub_assistant(dir: &Path, log: &Path, code: i32) -> (String, String) {
+    let log = log.display().to_string().replace('\\', "/");
+    if cfg!(windows) {
+        let script = dir.join("stub.ps1");
+        std::fs::write(
+            &script,
+            format!("\"cwd=$((Get-Location).Path)\" | Out-File -Append -Encoding utf8 '{log}'\n$args | Out-File -Append -Encoding utf8 '{log}'\nexit {code}\n"),
+        )
+        .unwrap();
+        (
+            "powershell.exe".to_string(),
+            format!("-NoProfile -ExecutionPolicy Bypass -File {}", script.display()),
+        )
+    } else {
+        let script = dir.join("stub.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho \"cwd=$(pwd)\" >> '{log}'\necho \"$@\" >> '{log}'\nexit {code}\n"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        ("sh".to_string(), script.display().to_string())
+    }
+}
+
+#[test]
 fn backup_copies_the_database_beside_itself() {
     let data = tempfile::tempdir().unwrap();
     rigger(data.path()).arg("init").assert().success();

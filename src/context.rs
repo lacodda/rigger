@@ -47,6 +47,10 @@ pub struct State {
     pub last_shipped_on: Option<String>,
     pub versions_planned: u64,
     pub tasks_open: u64,
+    /// Days since anything was recorded about this project. A project that
+    /// has gone quiet is worth noticing at the top of a session; the real
+    /// count of days without a commit arrives with `sync`.
+    pub days_quiet: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,6 +88,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         last_shipped_on: db.last_shipped_version(project.id)?.map(|(_, on)| on),
         versions_planned: db.count_versions(project.id, "planned")?,
         tasks_open: db.count_open_tasks(project.id)?,
+        days_quiet: db.last_event_at(project.id)?.as_deref().and_then(days_since),
     };
 
     let current = db.current_stage(project.id)?.map(|s| Stage {
@@ -191,6 +196,13 @@ fn first_sentence(text: &str) -> String {
     }
 }
 
+/// Whole days between a recorded timestamp and now.
+fn days_since(timestamp: &str) -> Option<i64> {
+    let then: jiff::Timestamp = timestamp.parse().ok()?;
+    let seconds = jiff::Timestamp::now().as_second() - then.as_second();
+    Some((seconds / 86_400).max(0))
+}
+
 /// Trims at a word boundary, saying how much was left out.
 fn shorten(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
@@ -246,6 +258,13 @@ fn render_state(p: &Packet) -> String {
         _ => out.push_str("Nothing shipped yet\n"),
     }
     out.push_str(&format!("{} versions planned, {} tasks open\n", p.state.versions_planned, p.state.tasks_open));
+    // Said only when it means something. A day or two of quiet is the normal
+    // rhythm of a project; a fortnight is worth seeing before starting work.
+    if let Some(days) = p.state.days_quiet
+        && days >= 7
+    {
+        out.push_str(&format!("Quiet for {days} days\n"));
+    }
     out
 }
 

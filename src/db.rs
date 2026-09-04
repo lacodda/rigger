@@ -431,6 +431,15 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// When anything was last recorded about a project, of any kind.
+    pub fn last_event_at(&self, project_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT MAX(created_at) FROM events WHERE project_id = ?1", [project_id], |r| r.get(0))
+            .optional()?
+            .flatten())
+    }
+
     /// How many events the packet's "recent" section could draw on, so that
     /// it can say how many it left out rather than quietly ending its list.
     pub fn count_recent_events(&self, project_id: i64) -> Result<u64> {

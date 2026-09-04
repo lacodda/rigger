@@ -7,6 +7,7 @@ mod context;
 mod db;
 mod hub;
 mod import;
+mod open;
 mod paths;
 mod repo;
 
@@ -68,6 +69,17 @@ enum Command {
         /// Kind of event
         #[arg(long, value_name = "KIND", default_value = "finding")]
         kind: NoteKind,
+    },
+    /// Start an assistant session in the project, with the packet in hand
+    Open {
+        /// Project name
+        project: String,
+        /// Print the first message instead of starting a session
+        #[arg(long)]
+        print: bool,
+        /// Token budget for the packet
+        #[arg(long, default_value_t = context::DEFAULT_BUDGET)]
+        budget: usize,
     },
     /// Record a wish: something to sort into the plan later
     Wish {
@@ -166,6 +178,7 @@ fn run(cli: Cli) -> Result<()> {
             explain,
             budget,
         } => show_context(&project, json, explain, budget),
+        Command::Open { project, print, budget } => open_session(&project, print, budget),
         Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
         Command::Wish { project, text } => note(&project, "wish", &text),
         Command::Backup => backup(),
@@ -233,6 +246,27 @@ fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Resu
             println!("{:<14} {:>5} tokens", cost.section, cost.tokens);
         }
         println!("{:<14} {:>5} tokens of {budget}", "total", context::estimate_tokens(&text));
+    }
+    Ok(())
+}
+
+fn open_session(project: &str, print: bool, budget: usize) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let packet = context::build(&db, &project, budget)?;
+    let message = open::first_message(&context::render(&packet));
+
+    if print {
+        print!("{message}");
+        return Ok(());
+    }
+    let dir = Path::new(&project.path);
+    open::check_dir(dir)?;
+    let (program, _) = open::assistant();
+    eprintln!("Starting {program} in {} with the packet for {}", project.path, project.name);
+    let code = open::run(dir, &message)?;
+    if code != 0 {
+        std::process::exit(code);
     }
     Ok(())
 }

@@ -14,7 +14,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger backup`](/rigger/reference/backup/) | v0.2.0 | Copy the database aside |
 | [`rigger context`](/rigger/reference/context/) | v0.3.0 | Print the context packet for a project |
 | [`rigger note`](/rigger/reference/note/), `rigger wish` | v0.3.0 | Record an event or a wish |
-| `rigger open` | planned v0.4.0 | Start a Claude Code session with the packet |
+| [`rigger open`](/rigger/reference/open/) | v0.4.0 | Start a Claude Code session with the packet |
 | `rigger mcp` | planned v0.5.0 | Serve the packet and the recording tools over MCP |
 | `rigger sync` | planned v0.6.0 | Read tags, branches and commits into facts |
 | `rigger find`, `rigger why` | planned v0.8.0 | Search events; trace the decisions behind a version or task |
