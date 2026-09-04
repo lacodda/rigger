@@ -158,6 +158,19 @@ pub fn first_message(packet: &str) -> String {
     )
 }
 
+/// The same packet, handed over by the MCP server.
+///
+/// The instruction differs in one thing that matters: an assistant reached
+/// through MCP has the recording tools in hand, so it is pointed at those
+/// rather than at a command it would have to shell out to.
+pub fn first_message_over_mcp(packet: &str) -> String {
+    format!(
+        "This is where the project stands, from rigger. Pick up from the next step; record what you decide \
+         or find with `record_decision` and `record_finding` as it happens, leave the next session a line \
+         with `set_next_step`, and send anything only the owner can settle to `ask_owner`.\n\n{packet}"
+    )
+}
+
 /// Checks the directory is there before launching anything, so a stale path
 /// in the record is reported as such rather than as a missing assistant.
 pub fn check_dir(dir: &Path) -> Result<()> {

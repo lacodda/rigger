@@ -77,6 +77,13 @@ $ rigger open sample
 Starting claude in C:\dev\sample with the packet for sample
 ```
 
+Connect the MCP server instead, and the assistant reads the same packet and writes back to the record as it works - decisions, findings and pitfalls become events, not lines in a transcript nobody opens again:
+
+```console
+$ claude mcp add rigger -- rigger mcp
+Added stdio MCP server rigger to local config
+```
+
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
 ## What it will do
@@ -91,7 +98,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.4.0 opens the session itself: the database, projects, `import`, `backup`, `context`, `note` and `open`. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.5.0 closes the first block: the database, projects, `import`, `backup`, `context`, `note`, `open` and the `mcp` server - an assistant now reads the record and writes to it without touching markdown. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

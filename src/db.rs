@@ -93,7 +93,16 @@ pub enum Change {
 pub struct CurrentStage {
     pub version: String,
     pub title: Option<String>,
-    pub tasks: Vec<String>,
+    pub tasks: Vec<Task>,
+}
+
+/// A task as the plan holds it. The id travels with the title because an
+/// assistant that is shown the stage is the one that closes its lines, and
+/// a title is not a name: two stages can spell the same step.
+#[derive(Debug, Clone, Serialize)]
+pub struct Task {
+    pub id: i64,
+    pub title: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -415,9 +424,39 @@ impl Db {
         };
         let mut stmt = self
             .conn
-            .prepare("SELECT title FROM tasks WHERE version_id = ?1 AND status = 'open' ORDER BY id")?;
-        let tasks = stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+            .prepare("SELECT id, title FROM tasks WHERE version_id = ?1 AND status = 'open' ORDER BY id")?;
+        let tasks = stmt
+            .query_map([id], |r| {
+                Ok(Task {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<Task>>>()?;
         Ok(Some(CurrentStage { version: name, title, tasks }))
+    }
+
+    /// Marks a task done. The project is part of the lookup so that an id
+    /// from another project's plan is refused rather than silently closing
+    /// someone else's line.
+    pub fn close_task(&self, project_id: i64, task_id: i64) -> Result<(String, Change)> {
+        let found: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT title, status FROM tasks WHERE id = ?1 AND project_id = ?2",
+                params![task_id, project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((title, status)) = found else {
+            bail!("no task {task_id} in this project; the plan lists the ids");
+        };
+        if status == "done" {
+            return Ok((title, Change::Unchanged));
+        }
+        self.conn
+            .execute("UPDATE tasks SET status = 'done', closed_at = ?1 WHERE id = ?2", params![now(), task_id])?;
+        Ok((title, Change::Updated))
     }
 
     pub fn count_versions(&self, project_id: i64, status: &str) -> Result<u64> {

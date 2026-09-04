@@ -13,7 +13,7 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::db::{Db, Project};
+use crate::db::{Db, Project, Task};
 
 /// Tokens are approximated from characters. A tokeniser would be exact for
 /// one model and wrong for the next, and this number decides only how much
@@ -57,7 +57,7 @@ pub struct State {
 pub struct Stage {
     pub version: String,
     pub title: Option<String>,
-    pub tasks: Vec<String>,
+    pub tasks: Vec<Task>,
 }
 
 #[derive(Debug, Serialize)]
@@ -275,7 +275,7 @@ fn render_stage(stage: &Stage) -> String {
     }
     out.push('\n');
     for task in &stage.tasks {
-        out.push_str(&format!("- {task}\n"));
+        out.push_str(&format!("- {}\n", task.title));
     }
     out
 }

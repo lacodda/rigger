@@ -8,7 +8,7 @@ rigger note <PROJECT> <TEXT> [--kind <KIND>]
 rigger wish <PROJECT> <TEXT>
 ```
 
-Records an event against a project. This is how the record grows during a session, instead of by editing markdown afterwards - and what the assistant's tools will call once the MCP server arrives.
+Records an event against a project. This is how the record grows during a session, instead of by editing markdown afterwards. An assistant does the same through the [MCP server](/rigger/reference/mcp/); this is the door for the owner and for scripts.
 
 ```console
 $ rigger note sample "The parser must take hubs as they are." --kind finding
@@ -30,7 +30,7 @@ Recorded a next for sample
 
 `finding` is the default. Decisions, findings, pitfalls and changes appear under **Recent** in the [context packet](/rigger/reference/context/); the newest `next` becomes its **Next step** and is not repeated among the events.
 
-A question is not a kind here: questions are addressed to the owner, and they arrive from the hub - or, once the MCP server lands, from the assistant asking one directly.
+A question is not a kind here: questions are addressed to the owner, and they arrive from the hub or from an assistant calling [`ask_owner`](/rigger/reference/mcp/).
 
 ## `rigger wish`
 
@@ -46,3 +46,4 @@ Wishes have their own section in the packet, and the same text recorded twice st
 ## Related
 
 - [`context`](/rigger/reference/context/) - where these events are read back.
+- [`mcp`](/rigger/reference/mcp/) - the same recording, as an assistant's tools.

@@ -7,6 +7,7 @@ mod context;
 mod db;
 mod hub;
 mod import;
+mod mcp;
 mod open;
 mod paths;
 mod repo;
@@ -81,6 +82,8 @@ enum Command {
         #[arg(long, default_value_t = context::DEFAULT_BUDGET)]
         budget: usize,
     },
+    /// Serve the record over MCP, on stdin and stdout
+    Mcp,
     /// Record a wish: something to sort into the plan later
     Wish {
         /// Project name
@@ -180,6 +183,7 @@ fn run(cli: Cli) -> Result<()> {
         } => show_context(&project, json, explain, budget),
         Command::Open { project, print, budget } => open_session(&project, print, budget),
         Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
+        Command::Mcp => mcp::serve(),
         Command::Wish { project, text } => note(&project, "wish", &text),
         Command::Backup => backup(),
         Command::Doctor { json } => doctor(json),

@@ -82,6 +82,15 @@ sessions:  0
 events:    0
 ```
 
+## Connect your assistant
+
+The record is worth keeping only if it is written as the work happens. Connect the [MCP server](/rigger/reference/mcp/), and an assistant reads the packet and records what it decides through tools, instead of leaving it in a transcript:
+
+```console
+$ claude mcp add rigger -- rigger mcp
+Added stdio MCP server rigger to local config
+```
+
 ## Next steps
 
 - Read the [model](/rigger/concepts/model/): projects, versions, tasks, sessions and events.
