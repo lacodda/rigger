@@ -8,8 +8,9 @@
 //! owner already uses, `claude` by default, and passes the packet through
 //! its argument. `RIGGER_ASSISTANT` names another one.
 
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -36,16 +37,49 @@ pub fn assistant() -> (String, Vec<String>) {
 pub fn run(dir: &Path, packet: &str) -> Result<i32> {
     let (program, args) = assistant();
     let program = resolve(&program);
-    let mut command = launcher(&program);
-    command.args(&args).arg(packet).current_dir(dir);
-    let status = command.status().with_context(|| {
+    let context = || {
         format!(
             "cannot run `{}` in {}; set {ASSISTANT_ENV} to the command you use",
             program.to_string_lossy(),
             dir.display()
         )
-    })?;
+    };
+
+    // A multi-line argument cannot reach a batch file at all: Rust refuses
+    // one outright (CVE-2024-24576), and through `cmd /c` the newline ends
+    // the command line, so the assistant is handed the first line and
+    // nothing else. The packet is many lines by nature, so a batch assistant
+    // - which is what every npm install is on Windows - receives it on stdin
+    // instead. Recorded in the owner's notes since kilna hit the same wall.
+    if takes_message_on_stdin(&program) {
+        let mut child = launcher(&program)
+            .args(&args)
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .spawn()
+            .with_context(context)?;
+        child
+            .stdin
+            .take()
+            .context("the assistant did not accept input")?
+            .write_all(packet.as_bytes())
+            .context("cannot hand the packet to the assistant")?;
+        return Ok(child.wait()?.code().unwrap_or(1));
+    }
+
+    let status = launcher(&program).args(&args).arg(packet).current_dir(dir).status().with_context(context)?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// Whether the packet must travel on stdin rather than as an argument.
+#[cfg(windows)]
+fn takes_message_on_stdin(program: &std::ffi::OsStr) -> bool {
+    is_batch(program)
+}
+
+#[cfg(not(windows))]
+fn takes_message_on_stdin(_program: &std::ffi::OsStr) -> bool {
+    false
 }
 
 /// The command that will actually be spawned.
@@ -59,10 +93,7 @@ pub fn run(dir: &Path, packet: &str) -> Result<i32> {
 /// after the resolution fix above, by running it.
 #[cfg(windows)]
 fn launcher(program: &std::ffi::OsStr) -> Command {
-    let is_batch = Path::new(program)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
-    if !is_batch {
+    if !is_batch(program) {
         return Command::new(program);
     }
     let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
@@ -74,6 +105,13 @@ fn launcher(program: &std::ffi::OsStr) -> Command {
 #[cfg(not(windows))]
 fn launcher(program: &std::ffi::OsStr) -> Command {
     Command::new(program)
+}
+
+#[cfg(windows)]
+fn is_batch(program: &std::ffi::OsStr) -> bool {
+    Path::new(program)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
 }
 
 /// The name to actually launch.

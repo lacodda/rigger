@@ -70,6 +70,13 @@ Ship the importer next.
 
 That packet costs 96 tokens here and holds a 3000-token budget on a project with years of history - against tens of thousands for reading the notes it came from, which past a certain size no longer fit at all.
 
+One command hands it to your assistant and starts the session in the project:
+
+```console
+$ rigger open sample
+Starting claude in C:\dev\sample with the packet for sample
+```
+
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
 
 ## What it will do
@@ -84,7 +91,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.3.0 gives the assistant its door: the database, projects, `import`, `backup`, `context` and `note`. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.4.0 opens the session itself: the database, projects, `import`, `backup`, `context`, `note` and `open`. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

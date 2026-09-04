@@ -453,6 +453,82 @@ fn open_runs_the_assistant_in_the_project_with_the_packet() {
     );
 }
 
+/// Every Windows install of an npm CLI is a `.cmd` shim, and the process API
+/// refuses to hand one an argument. `open` runs it the way a shell does, or
+/// it cannot start the assistant the owner actually has.
+#[cfg(windows)]
+#[test]
+fn open_can_launch_a_batch_file_assistant() {
+    let data = tempfile::tempdir().unwrap();
+    imported_project(data.path());
+    let log = data.path().join("batch.log");
+    let script = data.path().join("assistant.cmd");
+    // The packet arrives on stdin, not as an argument: a batch file cannot
+    // receive a multi-line argument at all. `findstr` copies stdin through.
+    std::fs::write(
+        &script,
+        format!(
+            "@echo off\r\necho cwd=%CD%>\"{}\"\r\nfindstr /n \"^\">>\"{}\"\r\n",
+            log.display(),
+            log.display()
+        ),
+    )
+    .unwrap();
+
+    let mut cmd = rigger(data.path());
+    cmd.env(open_env(), script.display().to_string());
+    cmd.args(["open", "proj"]).assert().success();
+
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        recorded.contains("This is where the project stands"),
+        "a .cmd assistant did not receive the packet: {recorded}"
+    );
+}
+
+/// The packet is many lines and quotes plans that contain `<`, `>`, `&` and
+/// `|`. As an argument to a batch file it cannot survive: Rust refuses a
+/// multi-line one outright, and through `cmd /c` the newline ends the command
+/// line and the metacharacters redirect it. On stdin it arrives whole.
+#[cfg(windows)]
+#[test]
+fn a_batch_assistant_receives_every_line_of_the_packet() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+    rigger(data.path())
+        .args(["note", "proj", "Runs `open <project>` & pipes a|b, then ^ escapes.", "--kind", "finding"])
+        .assert()
+        .success();
+
+    let log = data.path().join("meta.log");
+    let script = data.path().join("assistant.cmd");
+    // `findstr /n` numbers the lines, which keeps the blank ones a plain
+    // copy would drop - and makes it visible that the whole packet arrived,
+    // not just its first paragraph.
+    std::fs::write(&script, format!("@echo off\r\nfindstr /n \"^\">\"{}\"\r\n", log.display())).unwrap();
+
+    let mut cmd = rigger(data.path());
+    cmd.env(open_env(), script.display().to_string());
+    cmd.args(["open", "proj"]).assert().success();
+
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        recorded.contains("`open <project>` & pipes a|b, then ^ escapes."),
+        "the packet did not arrive whole: {recorded}"
+    );
+    // The last section proves the whole packet came through, not its head.
+    assert!(recorded.contains("## Current stage"), "the packet was cut short: {recorded}");
+    // Nothing was redirected into a stray file named after the next word.
+    let strays: Vec<_> = std::fs::read_dir(data.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("project") || n.contains("pipes"))
+        .collect();
+    assert!(strays.is_empty(), "cmd redirected into {strays:?}");
+}
+
 #[test]
 fn open_passes_on_the_assistants_exit_status() {
     let data = tempfile::tempdir().unwrap();
