@@ -88,7 +88,7 @@ The record is worth keeping only if it is written as the work happens. Connect t
 
 ```console
 $ claude mcp add rigger -- rigger mcp
-Added stdio MCP server rigger to local config
+Added stdio MCP server rigger with command: rigger mcp to local config
 ```
 
 ## Next steps

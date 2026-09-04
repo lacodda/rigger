@@ -15,7 +15,7 @@ This command is not meant to be typed. A client starts it, talks JSON-RPC to it,
 
 ```console
 $ claude mcp add rigger -- rigger mcp
-Added stdio MCP server rigger to local config
+Added stdio MCP server rigger with command: rigger mcp to local config
 ```
 
 The server needs the database, so run [`rigger init`](/rigger/reference/init/) first; without one it exits saying so rather than serving an empty record.

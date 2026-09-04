@@ -81,7 +81,7 @@ Connect the MCP server instead, and the assistant reads the same packet and writ
 
 ```console
 $ claude mcp add rigger -- rigger mcp
-Added stdio MCP server rigger to local config
+Added stdio MCP server rigger with command: rigger mcp to local config
 ```
 
 A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
