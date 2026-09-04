@@ -2,10 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-09-04
+
+### Features
+- Serve the record to an assistant over MCP
 ## [0.4.2] - 2026-09-04
 
 ### Bug Fixes
 - Name the newest release by its number, not by its row
+
+### Documentation
+- Changelog for v0.4.2
 ## [0.4.1] - 2026-09-04
 
 ### Bug Fixes
