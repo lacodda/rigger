@@ -161,6 +161,7 @@ pub fn read(dir: &Path) -> Result<Hub> {
         hub.closed_stages = parse_stages(text);
         hub.prose.extend(parse_prose(text, "Изменения.md"));
     })?;
+    warn_about_repeats(&mut hub);
     read_file(dir, "Решения.md", &mut hub, |text, hub| {
         hub.decisions = parse_decisions(text);
     })?;
@@ -183,6 +184,34 @@ fn read_file(dir: &Path, name: &str, hub: &mut Hub, parse: impl FnOnce(&str, &mu
             Ok(())
         }
         Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
+}
+
+/// Warns when one version is written up twice in the same file.
+///
+/// The record holds one row per version, so an export can only write it
+/// back once, and the second write-up is lost. That is a hub to mend, not
+/// a shape to reproduce - one changelog of this line has two different
+/// entries under the same number, and the export could only ever drop one
+/// of them. Saying so is the honest answer; inventing a second row for a
+/// number that is one release is not.
+fn warn_about_repeats(hub: &mut Hub) {
+    for (file, stages) in [("План.md", &hub.open_stages), ("Изменения.md", &hub.closed_stages)] {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut said: Vec<&str> = Vec::new();
+        for stage in stages {
+            let version = stage.version.as_str();
+            if seen.contains(&version) && !said.contains(&version) {
+                said.push(version);
+            }
+            seen.push(version);
+        }
+        let said: Vec<String> = said.into_iter().map(str::to_string).collect();
+        for version in said {
+            hub.warnings.push(format!(
+                "{file} writes up {version} more than once; the record keeps one entry per version, so an export writes one"
+            ));
+        }
     }
 }
 
@@ -795,6 +824,43 @@ mod tests {
         // The rule belongs to the prose it was written under, not to the
         // stage that follows it.
         assert!(stage("\n")[0].notes.ends_with("---"), "{:?}", stage("\n")[0].notes);
+    }
+
+    /// A version written up twice in one file is said out loud. The record
+    /// holds one row per version, so an export can only write one of the
+    /// two entries back, and silently dropping the other would look like a
+    /// defect of the export rather than a hub to mend.
+    #[test]
+    fn a_version_written_up_twice_is_warned_about() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("План.md"), "# План\n").unwrap();
+        std::fs::write(
+            dir.path().join("Изменения.md"),
+            "# Изменения\n\n## v0.1.0 · First — выпущен 2026-08-14\n\nОдин рассказ.\n\n## v0.1.0 · First — выпущен 2026-08-14\n\nДругой рассказ.\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Дневник.md"), "# Дневник\n").unwrap();
+        let hub = read(dir.path()).unwrap();
+        assert!(
+            hub.warnings.iter().any(|w| w.contains("v0.1.0") && w.contains("more than once")),
+            "{:?}",
+            hub.warnings
+        );
+    }
+
+    /// And a hub that writes each version once is not nagged.
+    #[test]
+    fn versions_written_once_raise_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("План.md"), "# План\n").unwrap();
+        std::fs::write(
+            dir.path().join("Изменения.md"),
+            "# Изменения\n\n## v0.2.0 · Second — выпущен 2026-08-15\n\nПро второй.\n\n## v0.1.0 · First — выпущен 2026-08-14\n\nПро первый.\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Дневник.md"), "# Дневник\n").unwrap();
+        let hub = read(dir.path()).unwrap();
+        assert!(!hub.warnings.iter().any(|w| w.contains("more than once")), "{:?}", hub.warnings);
     }
 
     #[test]
