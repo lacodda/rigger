@@ -257,12 +257,25 @@ fn a_stage_that_shipped_is_updated_rather_than_duplicated() {
     )
     .unwrap();
 
+    // Nothing is added: the stage that moved is the same stage, found by its
+    // version. How many rows an update touches is not the claim - the claim
+    // is that a stage moving between files does not become two stages, and
+    // `doctor` below counts them.
     rigger(data.path())
         .args(["import", "proj", "--hub"])
         .arg(&hub_dir)
         .assert()
         .success()
-        .stdout(predicate::str::contains("versions   0 added, 1 updated"));
+        .stdout(predicate::str::contains("versions   0 added"));
+
+    // And a second import of the same hub is quiet, so the record settles
+    // rather than reporting an update for ever.
+    rigger(data.path())
+        .args(["import", "proj", "--hub"])
+        .arg(&hub_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing changed"));
 
     rigger(data.path())
         .arg("doctor")

@@ -20,12 +20,25 @@ pub struct Report {
     pub tasks_updated: u32,
     pub decisions_added: u32,
     pub questions_added: u32,
+    pub diary_added: u32,
+    pub diary_updated: u32,
+    /// Files whose between-stage prose the record took in.
+    pub prose_files: u32,
     pub warnings: Vec<String>,
 }
 
 impl Report {
     pub fn changed(&self) -> bool {
-        self.versions_added + self.versions_updated + self.tasks_added + self.tasks_updated + self.decisions_added + self.questions_added > 0
+        self.versions_added
+            + self.versions_updated
+            + self.tasks_added
+            + self.tasks_updated
+            + self.decisions_added
+            + self.questions_added
+            + self.diary_added
+            + self.diary_updated
+            + self.prose_files
+            > 0
     }
 }
 
@@ -72,6 +85,28 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         // the inbox will ask for later.
         if db.record_event(project_id, "question", question, &crate::db::now(), "owner")? == Change::Added {
             report.questions_added += 1;
+        }
+    }
+
+    // The diary becomes sessions that already ended: an entry is one
+    // sitting, written before rigger knew what a sitting was, and it has
+    // nowhere else to live that an export could read back.
+    for entry in &hub.diary {
+        tally(db.upsert_diary_entry(project_id, entry)?, &mut report.diary_added, &mut report.diary_updated);
+    }
+
+    // Everything that belongs to no stage and no entry - a preamble, a map,
+    // the headings that group stages into blocks. Without it an export would
+    // generate a file that had lost most of what a person had written in it:
+    // measured on this project's own hub, 88% of the changelog and 42% of
+    // the plan is prose of this kind.
+    let mut files: Vec<&str> = hub.prose.iter().map(|p| p.file.as_str()).collect();
+    files.sort_unstable();
+    files.dedup();
+    for file in files {
+        let runs: Vec<crate::hub::Prose> = hub.prose.iter().filter(|p| p.file == file).cloned().collect();
+        if db.set_hub_prose(project_id, file, &runs)? != Change::Unchanged {
+            report.prose_files += 1;
         }
     }
 

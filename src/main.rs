@@ -7,6 +7,7 @@ mod calendar;
 mod commit;
 mod context;
 mod db;
+mod export;
 mod hub;
 mod import;
 mod mcp;
@@ -212,6 +213,23 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Write a hub back out of the record
+    Export {
+        /// Project name
+        project: String,
+        /// Directory of the hub to write
+        #[arg(long)]
+        hub: PathBuf,
+        /// Say what would change without writing anything
+        #[arg(long)]
+        check: bool,
+        /// Take over files written by hand, so the record owns them from now on
+        #[arg(long)]
+        adopt: bool,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
     /// Answer a question or sort a wish, so it leaves the packet
@@ -234,6 +252,9 @@ enum Command {
     Backup,
     /// Show the database path, schema version and record counts
     Doctor {
+        /// Also check the hubs the record generates against what is on disk
+        #[arg(long)]
+        hubs: bool,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -445,11 +466,18 @@ fn run(cli: Cli) -> Result<()> {
                 json,
             } => session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), remind, json),
         },
+        Command::Export {
+            project,
+            hub,
+            check,
+            adopt,
+            json,
+        } => export_hub(&project, &hub, check, adopt, json),
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
         Command::Backup => backup(),
-        Command::Doctor { json } => doctor(json),
+        Command::Doctor { hubs, json } => doctor(hubs, json),
     }
 }
 
@@ -2056,7 +2084,129 @@ fn first_line(text: &str) -> &str {
     text.lines().find(|l| !l.trim().is_empty()).unwrap_or(text).trim()
 }
 
-fn doctor(json: bool) -> Result<()> {
+/// Writes a hub back out of the record.
+///
+/// The point at which the hub stops being where work is written down and
+/// becomes a view of what was written down somewhere else. Only the three
+/// files the record can rebuild are touched: Vision, the decision log's
+/// prose and the research notes are argument rather than record, and the
+/// record has no way to hold an argument that would survive being rebuilt.
+fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    if !hub_dir.is_dir() {
+        bail!("{} is not a directory", hub_dir.display());
+    }
+
+    let mut files = Vec::new();
+    for name in export::GENERATED {
+        files.push((name, generate(&db, &project, name)?));
+    }
+
+    let mut written = Vec::new();
+    for (name, text) in &files {
+        let path = hub_dir.join(name);
+        let before = std::fs::read_to_string(&path).unwrap_or_default();
+        // Written in the ending the file already used. Every hub of this
+        // line is CRLF, and a generated file in LF would differ from its
+        // source on every line - which is not a diff anybody reads.
+        let text = &export::with_line_ending(text, export::line_ending(&before));
+        let unchanged = before == *text;
+
+        // A file a person has been writing in is not overwritten without
+        // being asked. The mark is what says the record owns it, and it is
+        // put there by an export - so the first one has to be deliberate.
+        // A file a person has been writing in is not overwritten without
+        // being asked. The mark is what says the record owns it, and only
+        // an explicit `--adopt` puts the mark there the first time.
+        if !unchanged && !before.is_empty() && !export::is_generated(&before) && !adopt && !check {
+            bail!(
+                "{} was written by hand and the record does not own it yet.
+Check what would change with `--check`, then hand it over with `--adopt`.",
+                path.display()
+            );
+        }
+        if !check && !unchanged {
+            std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+        }
+        written.push(export::Written {
+            file: name.to_string(),
+            bytes: text.len(),
+            unchanged,
+        });
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "project": project.name, "files": written }))?
+        );
+        return Ok(());
+    }
+
+    let changed = written.iter().filter(|w| !w.unchanged).count();
+    for file in &written {
+        let state = match (file.unchanged, check) {
+            (true, _) => "unchanged",
+            (false, true) => "would change",
+            (false, false) => "written",
+        };
+        println!("  {:<14} {state:<12} {} bytes", file.file, file.bytes);
+    }
+    match (changed, check) {
+        (0, _) => println!("\n{} is already what the record says.", hub_dir.display()),
+        (n, true) => println!("\n{} of {} files differ from the record.", n, written.len()),
+        (n, false) => println!("\n{} wrote {} of {} files.", project.name, n, written.len()),
+    }
+    Ok(())
+}
+
+/// One generated file of a hub, from the record.
+///
+/// The single place a hub file is produced, so that `export` and
+/// `doctor --hubs` cannot disagree about what the record says a file should
+/// contain - a check that generated the file a second way would eventually
+/// pass while the export wrote something else.
+fn generate(db: &Db, project: &db::Project, name: &str) -> Result<String> {
+    let prose = db.hub_prose(project.id, name)?;
+    Ok(match name {
+        n if n == export::GENERATED[0] => {
+            let questions: Vec<String> = db.open_events(project.id, "question")?.into_iter().map(|(_, text)| text).collect();
+            export::plan(&prose, &db.stages(project.id, false)?, &questions)
+        }
+        n if n == export::GENERATED[1] => export::changes(&prose, &db.stages(project.id, true)?),
+        _ => export::diary(&prose, &db.diary_entries(project.id)?),
+    })
+}
+
+/// Where a generated hub file no longer matches the record.
+///
+/// A file the record owns is a view of the record; edited by hand it stops
+/// being one, and the next export would overwrite the edit without saying
+/// so. This is what tells the owner before that happens.
+fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
+    let mut out = Vec::new();
+    for project in db.projects()? {
+        let dir = std::path::Path::new(&project.path);
+        let hub = dir.join("hub");
+        let dir = if hub.is_dir() { hub } else { dir.to_path_buf() };
+        for name in export::GENERATED {
+            let path = dir.join(name);
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            if !export::is_generated(&text) {
+                continue;
+            }
+            let want = generate(db, &project, name)?;
+            let want = export::with_line_ending(&want, export::line_ending(&text));
+            if want != text {
+                out.push((project.name.clone(), name.to_string(), "edited since it was generated"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn doctor(hubs: bool, json: bool) -> Result<()> {
     let path = paths::db_path()?;
     if !path.exists() {
         if json {
@@ -2099,6 +2249,16 @@ fn doctor(json: bool) -> Result<()> {
                 "initialised": true,
                 "schema_version": schema,
                 "counts": counts,
+                "hubs": if hubs {
+                    serde_json::to_value(
+                        hub_drift(&db)?
+                            .iter()
+                            .map(|(project, file, why)| serde_json::json!({ "project": project, "file": file, "why": why }))
+                            .collect::<Vec<_>>(),
+                    )?
+                } else {
+                    serde_json::Value::Null
+                },
                 "closed_without_a_tag": mismatches
                     .iter()
                     .map(|(project, version)| serde_json::json!({ "project": project, "version": version }))
@@ -2135,6 +2295,23 @@ closed in the plan, no tag in git ({}):",
             println!("  {project:<12} {version}");
         }
         println!("  a tag would settle it; rigger does not change what you wrote");
+    }
+
+    // A generated file edited by hand has stopped being a view of the
+    // record, and the next export would overwrite the edit without saying
+    // so. Off by default because it reads every hub from disk.
+    if hubs {
+        let drift = hub_drift(&db)?;
+        println!();
+        if drift.is_empty() {
+            println!("hubs: every generated file matches the record");
+        } else {
+            println!("edited since they were generated ({}):", drift.len());
+            for (project, file, why) in &drift {
+                println!("  {project:<12} {file:<14} {why}");
+            }
+            println!("  `rigger import` takes the edit into the record; `rigger export` discards it");
+        }
     }
     Ok(())
 }

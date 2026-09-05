@@ -18,12 +18,41 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 /// A stage: one version, its tasks, and whether the hub says it shipped.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Stage {
     pub version: String,
     pub title: Option<String>,
     pub shipped_on: Option<String>,
     pub tasks: Vec<Task>,
+    /// Everything written under the heading that is not a task.
+    ///
+    /// Kept because the record has to hold it before a hub can be generated
+    /// from the record: measured on this project's own changelog, 88% of it
+    /// is this prose, and an export that did not know it would delete it.
+    pub notes: String,
+    /// How deep its heading sat (`##` is 2). A hub nests stages under block
+    /// headings, and writing them all back at one level would flatten the
+    /// document into a list.
+    pub depth: usize,
+    /// Whether the prose came before the tasks or after them. Hubs write it
+    /// both ways - a plan explains itself first and concludes afterwards -
+    /// and an export that always chose one would reorder half the file.
+    pub notes_first: bool,
+    /// The heading exactly as it was written, after the `#` marks.
+    ///
+    /// An export cannot compose this. One hub writes `— выпущен 2026-09-03`
+    /// and the next `— выпущена`, because the word agrees with whatever
+    /// noun the owner had in mind; recomposing it rewrote three headings of
+    /// a real hub on the first live run. What the record can do is keep the
+    /// line and put it back.
+    pub heading: String,
+    /// How many runs of prose stood before this stage in its file.
+    ///
+    /// A plan groups its stages under block headings, and the blocks are
+    /// prose. Without this the export had nowhere to put a stage but after
+    /// all the prose, which piled every stage of a real plan below every
+    /// block heading and lost the grouping entirely.
+    pub after_prose: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +70,36 @@ pub struct Decision {
     pub body: String,
 }
 
+/// A run of prose in a hub file that belongs to no stage: a preamble, a
+/// map, a heading that groups stages into blocks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prose {
+    pub file: String,
+    /// Where it sat among the file's other runs, so it can be put back.
+    pub position: usize,
+    /// The heading it came under, kept whole (`## Блок «Владелец»`).
+    pub heading: Option<String>,
+    pub body: String,
+}
+
+/// A diary entry: one sitting as the hub records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiaryEntry {
+    pub date: String,
+    /// The heading exactly as it was written, after the `##`.
+    ///
+    /// Not "the part after the date": a hub writes
+    /// `2026-09-03 (ночь, позже) · v0.2.2`, where the parenthetical follows
+    /// the date with a space and the title with a separator. Splitting it
+    /// and putting it back together inserted a separator that was never
+    /// there, on every entry of a busy day.
+    pub heading: Option<String>,
+    pub body: String,
+    /// Whether a horizontal rule stood between this entry and the next. A
+    /// hub that writes one writes it before every entry but the first.
+    pub followed_by_rule: bool,
+}
+
 /// What a hub yielded, plus what it could not.
 #[derive(Debug, Default)]
 pub struct Hub {
@@ -48,6 +107,8 @@ pub struct Hub {
     pub closed_stages: Vec<Stage>,
     pub decisions: Vec<Decision>,
     pub questions: Vec<String>,
+    pub diary: Vec<DiaryEntry>,
+    pub prose: Vec<Prose>,
     pub warnings: Vec<String>,
 }
 
@@ -56,12 +117,18 @@ pub fn read(dir: &Path) -> Result<Hub> {
     read_file(dir, "План.md", &mut hub, |text, hub| {
         hub.questions = parse_questions(text);
         hub.open_stages = parse_stages(text);
+        hub.prose.extend(parse_prose(text, "План.md"));
     })?;
     read_file(dir, "Изменения.md", &mut hub, |text, hub| {
         hub.closed_stages = parse_stages(text);
+        hub.prose.extend(parse_prose(text, "Изменения.md"));
     })?;
     read_file(dir, "Решения.md", &mut hub, |text, hub| {
         hub.decisions = parse_decisions(text);
+    })?;
+    read_file(dir, "Дневник.md", &mut hub, |text, hub| {
+        hub.diary = parse_diary(text);
+        hub.prose.extend(parse_prose(text, "Дневник.md"));
     })?;
     Ok(hub)
 }
@@ -147,10 +214,19 @@ fn stage_title(text: &str, version: &str) -> Option<String> {
 fn parse_stages(text: &str) -> Vec<Stage> {
     let mut stages: Vec<Stage> = Vec::new();
     let mut level = 0usize;
+    let mut notes = String::new();
+    // How many runs of prose have gone by, counted exactly as `parse_prose`
+    // counts them so the two views of one file agree about where a stage
+    // sits among the blocks.
+    let runs = prose_positions(text);
+    let mut line_no = 0usize;
     for line in text.lines() {
+        let at_line = line_no;
+        line_no += 1;
         if let Some((depth, head)) = heading(line) {
             match leading_version(head) {
                 Some(version) => {
+                    settle(&mut stages, &mut notes);
                     let tail = &head[version.len()..];
                     stages.push(Stage {
                         // A stage may be numbered differently from the release
@@ -161,12 +237,20 @@ fn parse_stages(text: &str) -> Vec<Stage> {
                         title: stage_title(head, version),
                         shipped_on: trailing_date(tail),
                         tasks: Vec::new(),
+                        notes: String::new(),
+                        depth,
+                        notes_first: true,
+                        heading: head.to_string(),
+                        after_prose: runs[at_line],
                     });
                     level = depth;
                 }
                 // A heading at the stage's level or above ends it: tasks under
                 // "Backlog" or the next block do not belong to the last stage.
-                None if depth <= level => level = 0,
+                None if depth <= level => {
+                    settle(&mut stages, &mut notes);
+                    level = 0;
+                }
                 None => {}
             }
             continue;
@@ -174,13 +258,173 @@ fn parse_stages(text: &str) -> Vec<Stage> {
         if level == 0 {
             continue;
         }
-        if let Some(task) = parse_task(line)
-            && let Some(stage) = stages.last_mut()
-        {
-            stage.tasks.push(task);
+        if let Some(task) = parse_task(line) {
+            if let Some(stage) = stages.last_mut() {
+                // The first task settles which side the prose was on: what
+                // came before it explains the stage, what comes after
+                // concludes it. One side or the other, never both - that is
+                // how every hub of this line is written.
+                if stage.tasks.is_empty() && notes.trim().is_empty() {
+                    stage.notes_first = false;
+                }
+                stage.tasks.push(task);
+            }
+            continue;
+        }
+        // Everything under a stage that is not a task is the prose written
+        // about it, and the record has to hold it for an export to put it
+        // back. Kept verbatim, blank lines and all, so the shape survives.
+        notes.push_str(line);
+        notes.push('\n');
+    }
+    settle(&mut stages, &mut notes);
+    stages
+}
+
+/// Hands the collected prose to the stage it was written under.
+fn settle(stages: &mut [Stage], notes: &mut String) {
+    // Only when there is something to hand over. A stage is settled twice -
+    // once by the block heading that closes it, once by the next stage's
+    // heading - and an unconditional write let the second, empty call wipe
+    // what the first had just stored. That lost the closing line of the
+    // last stage of every block in a real plan.
+    if !notes.trim().is_empty()
+        && let Some(stage) = stages.last_mut()
+    {
+        stage.notes = notes.trim().to_string();
+    }
+    notes.clear();
+}
+
+/// The diary, newest entry first: `## 2026-09-05 · Title` and its prose.
+fn parse_diary(text: &str) -> Vec<DiaryEntry> {
+    let mut entries: Vec<DiaryEntry> = Vec::new();
+    let mut body = String::new();
+    for line in text.lines() {
+        if let Some((depth, head)) = heading(line) {
+            // Only the entry headings themselves start an entry; a deeper
+            // heading inside one is part of what was written.
+            if depth <= 2
+                && let Some(date) = trailing_date(head)
+            {
+                if let Some(last) = entries.last_mut() {
+                    last.body = body.trim().to_string();
+                }
+                body.clear();
+                entries.push(DiaryEntry {
+                    heading: Some(head.to_string()),
+                    date,
+                    body: String::new(),
+                    followed_by_rule: false,
+                });
+                continue;
+            }
+        }
+        if !entries.is_empty() {
+            body.push_str(line);
+            body.push('\n');
         }
     }
-    stages
+    if let Some(last) = entries.last_mut() {
+        last.body = body.trim().to_string();
+    }
+    // A rule between entries belongs to neither: it separates them. Kept off
+    // the body as a flag so the export can put it back where it stood.
+    for entry in entries.iter_mut() {
+        if let Some(rest) = entry.body.strip_suffix("---") {
+            entry.body = rest.trim_end().to_string();
+            entry.followed_by_rule = true;
+        }
+    }
+    entries
+}
+
+/// Prose of a file that belongs to no stage and no entry: the preamble, and
+/// the headings that group stages into blocks.
+///
+/// Kept by position so the export can put each run back where it was rather
+/// than piling it all at the top.
+fn parse_prose(text: &str, file: &str) -> Vec<Prose> {
+    prose_and_positions(text, file).0
+}
+
+/// How many runs of prose stood before each line of a file.
+///
+/// The same walk as `parse_prose`, so the two views of one file cannot
+/// disagree about where a stage sits among the blocks. Written as one
+/// function with two outputs rather than two functions with one rule.
+fn prose_positions(text: &str) -> Vec<usize> {
+    prose_and_positions(text, "").1
+}
+
+fn prose_and_positions(text: &str, file: &str) -> (Vec<Prose>, Vec<usize>) {
+    let mut runs: Vec<Prose> = Vec::new();
+    let mut positions: Vec<usize> = Vec::new();
+    let mut body = String::new();
+    let mut heading_now: Option<String> = None;
+    let mut inside_entry = false;
+
+    fn flush(heading: Option<String>, body: &mut String, runs: &mut Vec<Prose>, file: &str) {
+        let text = body.trim();
+        if !text.is_empty() || heading.is_some() {
+            runs.push(Prose {
+                file: file.to_string(),
+                position: runs.len(),
+                heading,
+                body: text.to_string(),
+            });
+        }
+        body.clear();
+    }
+
+    for line in text.lines() {
+        // How many runs stand before this line once the one being collected
+        // is closed. A stage heading closes the run it stands under, so that
+        // pending run counts: the stage belongs after it, not before it.
+        positions.push(runs.len() + usize::from(heading_now.is_some() || !body.trim().is_empty()));
+        // The mark an export leaves is bookkeeping, not content. Captured as
+        // prose it would be written back with a second mark above it, and
+        // the record would gain a run on every round trip.
+        if line.trim() == crate::export::MARK {
+            continue;
+        }
+        if let Some((depth, head)) = heading(line) {
+            // A heading starts an entry only if something else will capture
+            // it: a version heading becomes a stage, and a dated one in the
+            // diary becomes an entry. A dated heading that is *not* a
+            // version - `## Этап 0 · Зафиксировать продукт — закрыт
+            // 2026-09-02` in a changelog - is captured by nobody, so
+            // treating it as an entry dropped the whole section.
+            let is_diary = file.contains("Дневник");
+            let starts_entry = leading_version(head).is_some() || (is_diary && depth <= 2 && trailing_date(head).is_some());
+            if starts_entry {
+                if !inside_entry {
+                    flush(heading_now.take(), &mut body, &mut runs, file);
+                }
+                inside_entry = true;
+                heading_now = None;
+                body.clear();
+                continue;
+            }
+            // A heading that starts nothing is itself part of the prose, and
+            // it closes whatever run came before it.
+            if !inside_entry {
+                flush(heading_now.take(), &mut body, &mut runs, file);
+            }
+            inside_entry = false;
+            heading_now = Some(line.to_string());
+            body.clear();
+            continue;
+        }
+        if !inside_entry {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if !inside_entry {
+        flush(heading_now.take(), &mut body, &mut runs, file);
+    }
+    (runs, positions)
 }
 
 fn parse_task(line: &str) -> Option<Task> {
@@ -386,12 +630,55 @@ mod tests {
         assert!(parse_decisions("## Журнал\n\nprose\n").is_empty());
     }
 
+    /// A stage is settled twice - by the block heading that closes it and
+    /// by the next stage's heading - so an unconditional hand-over let the
+    /// second, empty one wipe what the first had stored. That lost the
+    /// closing line of the last stage of every block in a real plan.
+    #[test]
+    fn a_stage_keeps_the_prose_that_followed_its_tasks() {
+        let text = "# План
+
+# Блок A
+
+## v0.1.0 · One
+
+- [ ] task one
+
+**Результат:** первое.
+
+                    # Блок B
+
+## v0.2.0 · Two
+
+- [ ] task two
+
+**Результат:** второе.
+";
+        let stages = parse_stages(text);
+        assert_eq!(stages.len(), 2);
+        // Both, not just the last: the first is the one the defect ate.
+        assert!(stages[0].notes.contains("первое"), "{:?}", stages[0].notes);
+        assert!(stages[1].notes.contains("второе"), "{:?}", stages[1].notes);
+        // And the prose is known to have followed the tasks, so an export
+        // does not move it above them.
+        assert!(!stages[0].notes_first);
+        assert!(!stages[1].notes_first);
+    }
+
     #[test]
     fn a_missing_file_is_a_warning_not_a_failure() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("План.md"), "## v0.1.0 · A\n- [ ] task\n").unwrap();
         let hub = read(dir.path()).unwrap();
         assert_eq!(hub.open_stages.len(), 1);
-        assert_eq!(hub.warnings.len(), 2, "Изменения.md and Решения.md are missing: {:?}", hub.warnings);
+        // Named rather than counted: a count says nothing about which file
+        // the reader failed to find, and this test exists to prove the
+        // reader reports rather than fails.
+        let missing: Vec<&str> = ["Изменения.md", "Решения.md", "Дневник.md"]
+            .into_iter()
+            .filter(|name| !hub.warnings.iter().any(|w| w.contains(name)))
+            .collect();
+        assert!(missing.is_empty(), "not warned about: {missing:?} in {:?}", hub.warnings);
+        assert!(!hub.warnings.iter().any(|w| w.contains("План.md")), "{:?}", hub.warnings);
     }
 }

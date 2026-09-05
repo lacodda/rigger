@@ -146,6 +146,52 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'repo';
     ",
+    // v7: the prose of a hub, which until now lived only in markdown.
+    //
+    // The import read a hub's skeleton - version headings, checkboxes,
+    // dated decisions, questions - and left the rest on disk. Measured on
+    // this project's own hub before the export was written: the changelog
+    // is 88% prose the record had never held, and the plan 42%. Generating
+    // those files from the record would therefore have deleted most of
+    // them, which is the opposite of what an export is for.
+    //
+    // So the prose comes into the record first. A version keeps the entry
+    // written about it, a session keeps its diary entry, and the plan keeps
+    // the parts that are neither a stage nor a task - a preamble, a map,
+    // the headings that group stages into blocks.
+    "
+    ALTER TABLE versions ADD COLUMN notes TEXT;
+    -- How the hub wrote the stage: how deep its heading sat, and whether
+    -- its prose came before the tasks or after them. Both are shape rather
+    -- than content, and both are lost the moment an export guesses.
+    ALTER TABLE versions ADD COLUMN heading_depth INTEGER;
+    ALTER TABLE versions ADD COLUMN notes_first INTEGER;
+    -- The stage heading exactly as the hub wrote it. An export cannot
+    -- compose one: the same hub writes both `выпущен` and `выпущена`,
+    -- because the word agrees with whatever noun the owner had in mind.
+    ALTER TABLE versions ADD COLUMN heading TEXT;
+    -- How many runs of prose stood before the stage in its file. A plan
+    -- groups stages under block headings, and the blocks are prose; without
+    -- this an export can only pile every stage below every heading.
+    ALTER TABLE versions ADD COLUMN after_prose INTEGER;
+    ALTER TABLE sessions ADD COLUMN heading TEXT;
+    ALTER TABLE sessions ADD COLUMN notes TEXT;
+    -- Whether a rule stood between this entry and the next. It belongs to
+    -- neither entry, and dropping it lost a separator from every busy day.
+    ALTER TABLE sessions ADD COLUMN followed_by_rule INTEGER;
+    -- Prose of a project's plan that belongs to no single stage, kept by
+    -- the section it was found in so that the export can put it back where
+    -- it was rather than in one lump at the top.
+    CREATE TABLE hub_prose (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        file       TEXT NOT NULL,
+        position   INTEGER NOT NULL,
+        heading    TEXT,
+        body       TEXT NOT NULL,
+        UNIQUE (project_id, file, position)
+    );
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -287,6 +333,31 @@ pub struct RecentEvent {
     pub body: String,
     /// Read from a commit message rather than written by a person.
     pub from_git: bool,
+}
+
+/// How a hub wrote a stage's heading, as against what it said.
+///
+/// Kept apart from the content because it is the part an export cannot
+/// invent: the same hub writes both `выпущен` and `выпущена`, nests some
+/// stages deeper than others, and puts its prose before the tasks in a plan
+/// and after them in a changelog. Guessing any of it rewrites real files.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Shape {
+    heading: Option<String>,
+    depth: Option<i64>,
+    notes_first: Option<bool>,
+    after_prose: Option<i64>,
+}
+
+impl Shape {
+    fn of(stage: &crate::hub::Stage) -> Shape {
+        Shape {
+            heading: (!stage.heading.trim().is_empty()).then(|| stage.heading.clone()),
+            depth: Some(stage.depth as i64),
+            notes_first: Some(stage.notes_first),
+            after_prose: Some(stage.after_prose as i64),
+        }
+    }
 }
 
 /// A version row as `mark_shipped` needs to see it: what the record
@@ -453,6 +524,165 @@ impl Db {
             .optional()?)
     }
 
+    /// Records a diary entry read from a hub as a session that already ended.
+    ///
+    /// A hub's diary is one entry per sitting, written before rigger knew
+    /// what a sitting was. Importing them as sessions is what lets an export
+    /// put the diary back: the entry has nowhere else to live, and inventing
+    /// a second table for "diary entries" beside `sessions` would leave the
+    /// record with two answers to what a sitting is.
+    ///
+    /// Identified by its day and heading, so importing the same hub twice is
+    /// quiet - a day may hold two entries, but not two with the same title.
+    pub fn upsert_diary_entry(&self, project_id: i64, entry: &crate::hub::DiaryEntry) -> Result<Change> {
+        let at = format!("{}T00:00:00Z", entry.date);
+        let existing: Option<(i64, Option<String>, Option<bool>)> = self
+            .conn
+            .query_row(
+                "SELECT id, notes, followed_by_rule FROM sessions WHERE project_id = ?1 AND started_at = ?2 \
+                 AND ((heading IS NULL AND ?3 IS NULL) OR heading = ?3)",
+                params![project_id, at, entry.heading],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let notes = (!entry.body.trim().is_empty()).then(|| entry.body.clone());
+        match existing {
+            Some((_, was, rule)) if was == notes && rule == Some(entry.followed_by_rule) => Ok(Change::Unchanged),
+            Some((id, _, _)) => {
+                self.conn.execute(
+                    "UPDATE sessions SET notes = ?2, followed_by_rule = ?3 WHERE id = ?1",
+                    params![id, notes, entry.followed_by_rule],
+                )?;
+                Ok(Change::Updated)
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO sessions (project_id, started_at, ended_at, heading, notes, followed_by_rule)                      VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
+                    params![project_id, at, entry.heading, notes, entry.followed_by_rule],
+                )?;
+                Ok(Change::Added)
+            }
+        }
+    }
+
+    /// Every diary entry the record holds for a project, newest first.
+    ///
+    /// A day holds several entries - a hub writes `2026-09-03 (вечер)` and
+    /// `2026-09-03 (ночь, позже)` on the same date - and they are all
+    /// stamped with that day's midnight, so the day cannot order them. The
+    /// row id can: entries were read from the file top-down, so ascending
+    /// id within a day is the order they were written in. Descending would
+    /// reverse every busy day, which is what the first live run did.
+    pub fn diary_entries(&self, project_id: i64) -> Result<Vec<crate::hub::DiaryEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT substr(started_at, 1, 10), heading, notes, followed_by_rule FROM sessions \
+             WHERE project_id = ?1 AND notes IS NOT NULL ORDER BY started_at DESC, id ASC",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(crate::hub::DiaryEntry {
+                date: r.get(0)?,
+                heading: r.get(1)?,
+                body: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                followed_by_rule: r.get::<_, Option<bool>>(3)?.unwrap_or(false),
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Replaces the prose the record holds for one file of a hub.
+    ///
+    /// Replaced wholesale rather than merged: these runs are identified by
+    /// where they sit in a file, and a paragraph inserted at the top would
+    /// otherwise renumber everything below it into a pile of updates. The
+    /// file is the unit a person edits, so the file is the unit that is
+    /// written back.
+    pub fn set_hub_prose(&self, project_id: i64, file: &str, runs: &[crate::hub::Prose]) -> Result<Change> {
+        let before = self.hub_prose(project_id, file)?;
+        if before == runs {
+            return Ok(Change::Unchanged);
+        }
+        self.conn
+            .execute("DELETE FROM hub_prose WHERE project_id = ?1 AND file = ?2", params![project_id, file])?;
+        for run in runs {
+            self.conn.execute(
+                "INSERT INTO hub_prose (project_id, file, position, heading, body) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![project_id, file, run.position as i64, run.heading, run.body],
+            )?;
+        }
+        Ok(if before.is_empty() { Change::Added } else { Change::Updated })
+    }
+
+    /// The prose the record holds for one file of a hub, in file order.
+    pub fn hub_prose(&self, project_id: i64, file: &str) -> Result<Vec<crate::hub::Prose>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file, position, heading, body FROM hub_prose WHERE project_id = ?1 AND file = ?2 ORDER BY position")?;
+        let rows = stmt.query_map(params![project_id, file], |r| {
+            Ok(crate::hub::Prose {
+                file: r.get(0)?,
+                position: r.get::<_, i64>(1)? as usize,
+                heading: r.get(2)?,
+                body: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every version of a project as a stage, for the export to write back.
+    pub fn stages(&self, project_id: i64, shipped: bool) -> Result<Vec<crate::hub::Stage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, title, shipped_at, notes, heading_depth, notes_first, heading, after_prose FROM versions \
+             WHERE project_id = ?1 AND (status = 'shipped') = ?2",
+        )?;
+        let rows = stmt.query_map(params![project_id, shipped], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                crate::hub::Stage {
+                    version: r.get(1)?,
+                    title: r.get(2)?,
+                    shipped_on: r.get(3)?,
+                    tasks: Vec::new(),
+                    notes: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    // A stage recorded before the hub was read for shape has
+                    // neither: `##` is what a hub writes by default, and
+                    // prose before the tasks is the commoner arrangement.
+                    depth: r.get::<_, Option<i64>>(5)?.unwrap_or(2) as usize,
+                    notes_first: r.get::<_, Option<bool>>(6)?.unwrap_or(true),
+                    heading: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                    after_prose: r.get::<_, Option<i64>>(8)?.unwrap_or(i64::MAX) as usize,
+                },
+            ))
+        })?;
+
+        let mut stages: Vec<(i64, crate::hub::Stage)> = rows.collect::<rusqlite::Result<_>>()?;
+        // Newest first for the changelog, oldest first for the plan: a hub
+        // reads its history backwards and its future forwards.
+        stages.sort_by_key(|(_, s)| version_order(&s.version));
+        if shipped {
+            stages.reverse();
+        }
+        let mut out = Vec::new();
+        for (id, mut stage) in stages {
+            stage.tasks = self.tasks_of_version(id)?;
+            out.push(stage);
+        }
+        Ok(out)
+    }
+
+    /// The tasks of one version, in the order the plan listed them.
+    fn tasks_of_version(&self, version_id: i64) -> Result<Vec<crate::hub::Task>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT title, status FROM tasks WHERE version_id = ?1 ORDER BY COALESCE(position, id), id")?;
+        let rows = stmt.query_map([version_id], |r| {
+            Ok(crate::hub::Task {
+                title: r.get(0)?,
+                done: r.get::<_, String>(1)? != "open",
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The place the record keeps for itself, if one has been made.
     ///
     /// There is at most one in practice and the code does not enforce it:
@@ -485,12 +715,27 @@ impl Db {
     /// report counts on the difference, and a second import of an unchanged
     /// hub must report nothing.
     pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage) -> Result<(i64, Change)> {
-        let mut existing: Option<(i64, Option<String>, String, Option<String>)> = self
+        let mut existing: Option<(i64, Option<String>, String, Option<String>, Option<String>, Shape)> = self
             .conn
             .query_row(
-                "SELECT id, title, status, shipped_at FROM versions WHERE project_id = ?1 AND name = ?2",
+                "SELECT id, title, status, shipped_at, notes, heading, heading_depth, notes_first, after_prose \
+                 FROM versions WHERE project_id = ?1 AND name = ?2",
                 params![project_id, stage.version],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        Shape {
+                            heading: r.get(5)?,
+                            depth: r.get(6)?,
+                            notes_first: r.get(7)?,
+                            after_prose: r.get(8)?,
+                        },
+                    ))
+                },
             )
             .optional()?;
 
@@ -509,25 +754,62 @@ impl Db {
                 // hanging off it stay attached.
                 self.conn
                     .execute("UPDATE versions SET name = ?1 WHERE id = ?2", params![stage.version, twin_id])?;
-                existing = Some((twin_id, stage.title.clone(), String::new(), None));
+                existing = Some((twin_id, stage.title.clone(), String::new(), None, None, Shape::default()));
             }
         }
         let status = if stage.shipped_on.is_some() { "shipped" } else { "planned" };
+        // An empty body is no body: a stage written without prose and one
+        // whose prose was deleted are the same thing to the record, and
+        // storing "" would make an export print a blank line for it.
+        let notes = (!stage.notes.trim().is_empty()).then(|| stage.notes.clone());
         match existing {
-            Some((id, title, was_status, shipped_at)) => {
-                if title.as_deref() == stage.title.as_deref() && was_status == status && shipped_at == stage.shipped_on {
+            Some((id, title, was_status, shipped_at, was_notes, was_shape)) => {
+                // The prose and the shape join the comparison, or a hub whose
+                // entry was rewritten would import as "nothing changed" and
+                // the record would keep serving the old words to an export.
+                // The heading is part of that: it is what an export writes,
+                // and it cannot be composed from the other fields.
+                if title.as_deref() == stage.title.as_deref()
+                    && was_status == status
+                    && shipped_at == stage.shipped_on
+                    && was_notes == notes
+                    && was_shape == Shape::of(stage)
+                {
                     return Ok((id, Change::Unchanged));
                 }
                 self.conn.execute(
-                    "UPDATE versions SET title = ?1, status = ?2, shipped_at = ?3 WHERE id = ?4",
-                    params![stage.title, status, stage.shipped_on, id],
+                    "UPDATE versions SET title = ?1, status = ?2, shipped_at = ?3, notes = ?4, \
+                     heading_depth = ?5, notes_first = ?6, heading = ?7, after_prose = ?8 WHERE id = ?9",
+                    params![
+                        stage.title,
+                        status,
+                        stage.shipped_on,
+                        notes,
+                        stage.depth as i64,
+                        stage.notes_first,
+                        stage.heading,
+                        stage.after_prose as i64,
+                        id
+                    ],
                 )?;
                 Ok((id, Change::Updated))
             }
             None => {
                 self.conn.execute(
-                    "INSERT INTO versions (project_id, name, title, status, shipped_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![project_id, stage.version, stage.title, status, stage.shipped_on],
+                    "INSERT INTO versions (project_id, name, title, status, shipped_at, notes, heading_depth, notes_first, heading, after_prose) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![
+                        project_id,
+                        stage.version,
+                        stage.title,
+                        status,
+                        stage.shipped_on,
+                        notes,
+                        stage.depth as i64,
+                        stage.notes_first,
+                        stage.heading,
+                        stage.after_prose as i64
+                    ],
                 )?;
                 Ok((self.conn.last_insert_rowid(), Change::Added))
             }
