@@ -45,11 +45,13 @@ pub struct Written {
     pub unchanged: bool,
 }
 
-/// What a hub writes under a heading whose list is empty.
+/// What a hub writes under a heading whose list is empty, when the hub
+/// itself said nothing.
 ///
-/// The parser drops it on the way in - it is not a question - so the export
-/// puts it back. Without it a hub with nothing waiting lost the line on
-/// every run, and the file churned between two shapes.
+/// The parser drops such a line on the way in - it is not a question - so
+/// the export puts it back. Without it a hub with nothing waiting lost the
+/// line on every run, and the file churned between two shapes. A hub that
+/// wrote its own wording keeps it: turnout says `_Пусто._`.
 pub const EMPTY_QUEUE: &str = "- (пусто)";
 
 /// The marker that says a file is generated.
@@ -214,6 +216,27 @@ fn list_style(body: &str) -> ListStyle<'_> {
     style
 }
 
+/// The line a hub writes in place of a queue that is empty.
+///
+/// `parse_questions` drops it - it is not a question - but the prose
+/// captured beside the list still carries it, so an export can put back
+/// the words the hub chose rather than one phrase for everybody. A hub
+/// that wrote nothing there gets the placeholder every other hub uses.
+fn empty_marker(body: &str) -> String {
+    body.lines()
+        .find(|l| item_marker(l).is_some())
+        .map(|l| l.trim().to_string())
+        .unwrap_or_else(|| match body.trim().is_empty() {
+            // Nothing at all under the heading: the hub has not said how it
+            // writes an empty queue, so it gets the common placeholder.
+            true => EMPTY_QUEUE.to_string(),
+            // Prose, and no list: turnout writes `_Пусто._` this way, and
+            // `after` already holds it - adding a placeholder would print
+            // the same fact twice.
+            false => String::new(),
+        })
+}
+
 /// The prose that stood before the list and the prose that stood after it.
 ///
 /// A hub may introduce its queue and may close it: austeris ends the
@@ -241,17 +264,20 @@ fn write_questions(out: &mut String, run: &Prose, questions: &[String]) {
     let body = run.body.trim();
     let style = list_style(body);
     let (before, after) = split_around_list(body);
+    let placeholder = empty_marker(body);
 
     if !before.is_empty() {
         out.push_str(&before);
         out.push_str("\n\n");
     }
-    // An empty queue is written as the placeholder the hubs use, not as a
-    // blank space under a heading. The parser drops it on the way in - it
-    // is not a question - so the export has to put it back, or a hub with
-    // nothing waiting would lose the line on every run.
-    if questions.is_empty() {
-        out.push_str(EMPTY_QUEUE);
+    // An empty queue is written as the placeholder, not as a blank space
+    // under a heading: `parse_questions` drops such a line - it is not a
+    // question - so the export has to put it back, or a hub with nothing
+    // waiting would lose it on every run. Which line to put back comes
+    // from the body, which still carries it: hubs write `- (пусто)`, and
+    // turnout writes `_Пусто._` as prose, where it needs no help.
+    if questions.is_empty() && !placeholder.is_empty() {
+        out.push_str(&placeholder);
         out.push_str("\n\n");
     }
     let last = questions.len().saturating_sub(1);
@@ -294,12 +320,12 @@ fn write_stage(out: &mut String, stage: &Stage) {
     };
     let _ = writeln!(out, "{hashes} {heading}\n");
 
-    // Prose before or after the tasks, as the hub had it: a plan explains a
-    // stage first and concludes it afterwards, and always choosing one side
-    // would reorder half the file. One side or the other, never both - that
-    // is how every hub of this line is written.
+    // Prose before the tasks and prose after them, each on its own side.
+    // A plan explains a stage first and concludes it afterwards, and most
+    // stages of this line do both: writing them all on one side moved the
+    // closing line of 123 stages above their own lists.
     let notes = stage.notes.trim();
-    if stage.notes_first && !notes.is_empty() {
+    if !notes.is_empty() {
         out.push_str(notes);
         out.push_str("\n\n");
     }
@@ -310,8 +336,9 @@ fn write_stage(out: &mut String, stage: &Stage) {
     if !stage.tasks.is_empty() {
         out.push('\n');
     }
-    if !stage.notes_first && !notes.is_empty() {
-        out.push_str(notes);
+    let after = stage.notes_after.trim();
+    if !after.is_empty() {
+        out.push_str(after);
         out.push_str("\n\n");
     }
 }
@@ -362,7 +389,7 @@ mod tests {
             shipped_on: shipped.map(str::to_string),
             notes: notes.to_string(),
             depth: 2,
-            notes_first: true,
+            notes_after: String::new(),
             heading: String::new(),
             after_prose: usize::MAX,
             tasks: tasks
@@ -486,6 +513,22 @@ mod tests {
         let at_question = text.find("Вопрос?").unwrap();
         let at_rule = text.find("---").unwrap();
         assert!(at_intro < at_question && at_question < at_rule, "{text}");
+    }
+
+    /// A stage explained before its list and concluded after it keeps both
+    /// halves on their own side. 123 stages of this line are written that
+    /// way, and one field with a flag for its side wrote the closing line
+    /// of every one of them above its own list.
+    #[test]
+    fn a_stage_keeps_prose_on_both_sides_of_its_list() {
+        let mut s = stage("v0.1.0", None, None, "Что делаем.", &[("Первая", false), ("Вторая", false)]);
+        s.notes_after = "**Результат:** сделано.".to_string();
+        let text = plan(&[], &[s], &[]);
+        let at_intro = text.find("Что делаем.").unwrap();
+        let at_task = text.find("Первая").unwrap();
+        let at_result = text.find("**Результат:**").unwrap();
+        assert!(at_intro < at_task, "the opening prose stands above the list\n{text}");
+        assert!(at_task < at_result, "the closing prose stands below the list\n{text}");
     }
 
     #[test]

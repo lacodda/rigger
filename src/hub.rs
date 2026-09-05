@@ -34,10 +34,14 @@ pub struct Stage {
     /// headings, and writing them all back at one level would flatten the
     /// document into a list.
     pub depth: usize,
-    /// Whether the prose came before the tasks or after them. Hubs write it
-    /// both ways - a plan explains itself first and concludes afterwards -
-    /// and an export that always chose one would reorder half the file.
-    pub notes_first: bool,
+    /// The prose written after the tasks, when there was any.
+    ///
+    /// A stage is explained before its list and concluded after it, and
+    /// 123 of the stages in this line's hubs do both - more than do only
+    /// the first. One field and a flag for which side it fell on could
+    /// hold either half but not both, so the closing line of every such
+    /// stage was moved above its own list on the way back out.
+    pub notes_after: String,
     /// The heading exactly as it was written, after the `#` marks.
     ///
     /// An export cannot compose this. One hub writes `— выпущен 2026-09-03`
@@ -236,7 +240,7 @@ fn parse_stages(text: &str) -> Vec<Stage> {
                         tasks: Vec::new(),
                         notes: String::new(),
                         depth,
-                        notes_first: true,
+                        notes_after: String::new(),
                         heading: head.to_string(),
                         after_prose: runs[at_line],
                     });
@@ -257,12 +261,13 @@ fn parse_stages(text: &str) -> Vec<Stage> {
         }
         if let Some(task) = parse_task(line) {
             if let Some(stage) = stages.last_mut() {
-                // The first task settles which side the prose was on: what
-                // came before it explains the stage, what comes after
-                // concludes it. One side or the other, never both - that is
-                // how every hub of this line is written.
-                if stage.tasks.is_empty() && notes.trim().is_empty() {
-                    stage.notes_first = false;
+                // The first task closes the opening prose. Whatever was
+                // collected up to here explains the stage; whatever comes
+                // after its list concludes it, and both halves are kept,
+                // because most stages of this line have both.
+                if stage.tasks.is_empty() && !notes.trim().is_empty() {
+                    stage.notes = notes.trim().to_string();
+                    notes.clear();
                 }
                 stage.tasks.push(task);
             }
@@ -279,6 +284,10 @@ fn parse_stages(text: &str) -> Vec<Stage> {
 }
 
 /// Hands the collected prose to the stage it was written under.
+///
+/// Which half it becomes follows from the list: a stage that has already
+/// taken its opening prose, or that has tasks, is being handed its closing
+/// prose; one that has neither is being handed its opening.
 fn settle(stages: &mut [Stage], notes: &mut String) {
     // Only when there is something to hand over. A stage is settled twice -
     // once by the block heading that closes it, once by the next stage's
@@ -288,7 +297,11 @@ fn settle(stages: &mut [Stage], notes: &mut String) {
     if !notes.trim().is_empty()
         && let Some(stage) = stages.last_mut()
     {
-        stage.notes = notes.trim().to_string();
+        let settled = notes.trim().to_string();
+        match stage.tasks.is_empty() && stage.notes.is_empty() {
+            true => stage.notes = settled,
+            false => stage.notes_after = settled,
+        }
     }
     notes.clear();
 }
@@ -454,12 +467,18 @@ fn parse_questions(text: &str) -> Vec<String> {
             continue;
         }
         let trimmed = line.trim();
-        let item = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")).or_else(|| {
-            trimmed
-                .split_once(". ")
-                .filter(|(n, _)| n.bytes().all(|b| b.is_ascii_digit()))
-                .map(|(_, rest)| rest)
-        });
+        // The checkbox forms first: `- [ ] ` is a bullet with a box, and
+        // stripping only the bullet left the box standing in front of the
+        // question, so an export wrote it twice.
+        let item = ["- [ ] ", "- [x] ", "- [X] ", "- ", "* "]
+            .iter()
+            .find_map(|lead| trimmed.strip_prefix(lead))
+            .or_else(|| {
+                trimmed
+                    .split_once(". ")
+                    .filter(|(n, _)| n.bytes().all(|b| b.is_ascii_digit()))
+                    .map(|(_, rest)| rest)
+            });
         if let Some(item) = item {
             let item = item.trim();
             if !item.is_empty() && item != "(пусто)" {
@@ -654,12 +673,11 @@ mod tests {
         let stages = parse_stages(text);
         assert_eq!(stages.len(), 2);
         // Both, not just the last: the first is the one the defect ate.
-        assert!(stages[0].notes.contains("первое"), "{:?}", stages[0].notes);
-        assert!(stages[1].notes.contains("второе"), "{:?}", stages[1].notes);
-        // And the prose is known to have followed the tasks, so an export
-        // does not move it above them.
-        assert!(!stages[0].notes_first);
-        assert!(!stages[1].notes_first);
+        // It followed the tasks, so it is the closing half - an export
+        // reading the opening half would move it above its own list.
+        assert!(stages[0].notes_after.contains("первое"), "{:?}", stages[0]);
+        assert!(stages[1].notes_after.contains("второе"), "{:?}", stages[1]);
+        assert!(stages[0].notes.is_empty() && stages[1].notes.is_empty(), "nothing opened either stage");
     }
 
     #[test]
