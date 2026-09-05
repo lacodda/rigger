@@ -193,6 +193,41 @@ fn the_same_record_writes_the_same_bytes() {
     assert_eq!(first, second);
 }
 
+/// A hub that does not run by version number keeps its own order. One
+/// changelog of this line writes v0.17.0 above v0.17.1 - the patch was
+/// written up after the release it patched - and sorting by number
+/// transposed the two on every run.
+#[test]
+fn a_changelog_keeps_the_order_its_hub_had() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let root = data.path().join("beta");
+    let hub = root.join("hub");
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(hub.join("План.md"), "# План\n").unwrap();
+    std::fs::write(
+        hub.join("Изменения.md"),
+        "# Изменения\n\n## v0.2.0 · Second — выпущена 2026-09-02\n\nПро второй.\n\n## v0.2.1 · Patch — выпущена 2026-09-02\n\nПро патч.\n\n## v0.1.0 · First — выпущена 2026-09-01\n\nПро первый.\n",
+    )
+    .unwrap();
+    std::fs::write(hub.join("Дневник.md"), "# Дневник\n").unwrap();
+    git(&root, &["init", "--quiet", "--initial-branch", "main"]);
+    std::fs::write(root.join("README.md"), "beta").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "chore: start"]);
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    rigger(data.path()).args(["import", "beta", "--hub"]).arg(&hub).assert().success();
+
+    let out = data.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    rigger(data.path()).args(["export", "beta", "--hub"]).arg(&out).assert().success();
+
+    let text = std::fs::read_to_string(out.join("Изменения.md")).unwrap();
+    let at = |v: &str| text.find(v).unwrap_or_else(|| panic!("{v} is missing from\n{text}"));
+    assert!(at("v0.2.0") < at("v0.2.1"), "the patch stays below the release it patched\n{text}");
+    assert!(at("v0.2.1") < at("v0.1.0"), "and both stay above the older one\n{text}");
+}
+
 /// The circle: reading back what was written gives the record it came from.
 /// Every counter zero is the claim - anything that changed would be a fact
 /// the export invented or lost.

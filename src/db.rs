@@ -698,11 +698,24 @@ impl Db {
         })?;
 
         let mut stages: Vec<(i64, crate::hub::Stage)> = rows.collect::<rusqlite::Result<_>>()?;
-        // Newest first for the changelog, oldest first for the plan: a hub
-        // reads its history backwards and its future forwards.
-        stages.sort_by_key(|(_, s)| version_order(&s.version));
-        if shipped {
-            stages.reverse();
+        // The order a hub had, when the record knows it. A hub does not
+        // always run by version number: one changelog writes v0.17.0 above
+        // v0.17.1, because the patch was written up after the release it
+        // patched, and sorting by number transposed the two on every run.
+        //
+        // Guessing is for stages the record has never seen in a file -
+        // recorded by a command rather than read from a hub. Newest first
+        // for the changelog, oldest first for the plan: a hub reads its
+        // history backwards and its future forwards.
+        let known = stages.iter().any(|(_, s)| s.rank > 0);
+        match known {
+            true => stages.sort_by_key(|(_, s)| s.rank),
+            false => {
+                stages.sort_by_key(|(_, s)| version_order(&s.version));
+                if shipped {
+                    stages.reverse();
+                }
+            }
         }
         let mut out = Vec::new();
         for (id, mut stage) in stages {
