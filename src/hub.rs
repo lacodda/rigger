@@ -317,6 +317,16 @@ fn parse_stages(text: &str) -> Vec<Stage> {
                     settle(&mut stages, &mut notes);
                     level = 0;
                 }
+                // A deeper heading inside a stage is part of what was
+                // written about it. One changelog of this line closes a
+                // stage with `### Патч v0.24.1 — в тот же день` and the
+                // account of that patch beneath it; skipping the line kept
+                // the account and lost the heading over it, which read as
+                // the patch having been written into the release.
+                None if level > 0 => {
+                    notes.push_str(line);
+                    notes.push('\n');
+                }
                 None => {}
             }
             continue;
@@ -459,6 +469,9 @@ fn prose_and_positions(text: &str, file: &str) -> (Vec<Prose>, Vec<usize>) {
     let mut body = String::new();
     let mut heading_now: Option<String> = None;
     let mut inside_entry = false;
+    // How deep the heading that opened the stage sat, so a deeper one can
+    // be told from the one that ends it.
+    let mut entry_depth = 0usize;
 
     fn flush(heading: Option<String>, body: &mut String, runs: &mut Vec<Prose>, file: &str) {
         let text = body.trim();
@@ -503,8 +516,17 @@ fn prose_and_positions(text: &str, file: &str) -> (Vec<Prose>, Vec<usize>) {
                     flush(heading_now.take(), &mut body, &mut runs, file);
                 }
                 inside_entry = true;
+                entry_depth = depth;
                 heading_now = None;
                 body.clear();
+                continue;
+            }
+            // A heading deeper than the one that opened the stage is part
+            // of what was written about it, not a run of its own: one
+            // changelog closes a stage with `### Патч v0.24.1 — в тот же
+            // день` and the account beneath it. `parse_stages` keeps such
+            // a heading, so a run kept here too would print it twice.
+            if inside_entry && depth > entry_depth {
                 continue;
             }
             // A heading that starts nothing is itself part of the prose, and
@@ -861,6 +883,29 @@ mod tests {
         std::fs::write(dir.path().join("Дневник.md"), "# Дневник\n").unwrap();
         let hub = read(dir.path()).unwrap();
         assert!(!hub.warnings.iter().any(|w| w.contains("more than once")), "{:?}", hub.warnings);
+    }
+
+    /// A heading deeper than the stage's own belongs to the stage. One
+    /// changelog of this line closes a stage with `### Патч v0.24.1` and
+    /// the account of that patch beneath it: skipping the line lost the
+    /// heading, and keeping it in both the stage and a run of prose made
+    /// the export print the whole account twice.
+    #[test]
+    fn a_heading_inside_a_stage_belongs_to_the_stage() {
+        let text = "# Изменения\n\n## v0.2.0 · Second\n\nПро второй.\n\n### Патч v0.2.1\n\nПро патч.\n\n## v0.1.0 · First\n\nПро первый.\n";
+        let stages = parse_stages(text);
+        assert_eq!(stages.len(), 2, "the deeper heading is not a stage of its own");
+        assert!(stages[0].notes.contains("### Патч v0.2.1"), "the heading is kept: {:?}", stages[0].notes);
+        assert!(stages[0].notes.contains("Про патч."), "and so is what it introduced");
+        // And no run of prose holds it as well, or the export writes it
+        // once for the stage and once for the run.
+        let runs = parse_prose(text, "Изменения.md");
+        assert!(
+            !runs
+                .iter()
+                .any(|r| r.heading.as_deref().is_some_and(|h| h.contains("Патч")) || r.body.contains("Про патч.")),
+            "{runs:?}"
+        );
     }
 
     #[test]
