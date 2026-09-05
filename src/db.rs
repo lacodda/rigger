@@ -349,6 +349,11 @@ struct Shape {
     after_prose: Option<i64>,
 }
 
+/// A stage as the record already holds it: its id, title, status, the
+/// date it shipped, the prose written about it, and the shape its
+/// heading had. Named because an upsert compares all of it at once.
+type Recorded = (i64, Option<String>, String, Option<String>, Option<String>, Shape);
+
 impl Shape {
     fn of(stage: &crate::hub::Stage) -> Shape {
         Shape {
@@ -715,7 +720,7 @@ impl Db {
     /// report counts on the difference, and a second import of an unchanged
     /// hub must report nothing.
     pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage) -> Result<(i64, Change)> {
-        let mut existing: Option<(i64, Option<String>, String, Option<String>, Option<String>, Shape)> = self
+        let mut existing: Option<Recorded> = self
             .conn
             .query_row(
                 "SELECT id, title, status, shipped_at, notes, heading, heading_depth, notes_first, after_prose \

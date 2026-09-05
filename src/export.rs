@@ -150,23 +150,7 @@ fn write_run(out: &mut String, run: &Prose, questions: &[String]) {
     // otherwise answering one in the record would leave it standing in the
     // file, and the captured copy would print it a second time.
     if run.heading.as_deref().is_some_and(|h| h.contains("Ждёт решения владельца")) {
-        // An empty queue is written as the placeholder the hubs use, not as
-        // a blank space under a heading. The parser drops it on the way in
-        // - it is not a question - so the export has to put it back, or a
-        // hub with nothing waiting would lose the line every time.
-        if questions.is_empty() {
-            out.push_str(EMPTY_QUEUE);
-            out.push_str("\n\n");
-        }
-        for (n, question) in questions.iter().enumerate() {
-            let _ = writeln!(out, "{}. {}\n", n + 1, question.trim());
-        }
-        // Whatever else was written under that heading, minus the list.
-        let rest = strip_list(run.body.trim());
-        if !rest.is_empty() {
-            out.push_str(&rest);
-            out.push_str("\n\n");
-        }
+        write_questions(out, run, questions);
         return;
     }
     if !run.body.trim().is_empty() {
@@ -175,20 +159,120 @@ fn write_run(out: &mut String, run: &Prose, questions: &[String]) {
     }
 }
 
-/// A body with its numbered and bulleted items removed.
+/// Whether a line opens a list item, and the marker it used.
 ///
-/// Under the questions heading a hub writes the questions themselves plus,
-/// sometimes, a sentence about them. The list comes from the record; the
-/// sentence is prose and has to survive.
-fn strip_list(body: &str) -> String {
-    let kept: Vec<&str> = body
-        .lines()
-        .filter(|line| {
-            let t = line.trim_start();
-            !(t.starts_with("- ") || t.starts_with("* ") || t.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
-        })
-        .collect();
-    kept.join("\n").trim().to_string()
+/// `1. `, `- `, `* ` and the checkbox forms all open one; the marker comes
+/// back whole so an export can write the same one. A numbered item yields
+/// an empty marker, because its number is its own.
+fn item_marker(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    for lead in ["- [ ] ", "- [x] ", "- [X] ", "- ", "* "] {
+        if t.starts_with(lead) {
+            return Some(lead);
+        }
+    }
+    let (n, _) = t.split_once(". ")?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some("")
+}
+
+/// How a hub writes its queue of questions: the marker its items use, and
+/// whether a blank line stands between them.
+///
+/// The record holds the questions, not their shape, and writing one shape
+/// for everybody rewrote every hub that had chosen another - furca and
+/// scheda pack their numbered items, this project's own hub spaces them,
+/// austeris and nooma use bullets. What a person chose stays chosen.
+struct ListStyle<'a> {
+    marker: &'a str,
+    spaced: bool,
+}
+
+fn list_style(body: &str) -> ListStyle<'_> {
+    let mut style = ListStyle { marker: "", spaced: false };
+    let mut seen = false;
+    let mut blank_since_item = false;
+    for line in body.lines() {
+        match item_marker(line) {
+            Some(marker) => {
+                match seen {
+                    false => {
+                        style.marker = marker;
+                        seen = true;
+                    }
+                    // Only a blank line standing between two items spaces
+                    // the list; one before the prose that follows it does
+                    // not, and counting it would space every hub.
+                    true if blank_since_item => style.spaced = true,
+                    true => {}
+                }
+                blank_since_item = false;
+            }
+            None if line.trim().is_empty() => blank_since_item = true,
+            None => blank_since_item = false,
+        }
+    }
+    style
+}
+
+/// The prose that stood before the list and the prose that stood after it.
+///
+/// A hub may introduce its queue and may close it: austeris ends the
+/// section with a rule, nooma follows the list with a paragraph, and
+/// putting either on the wrong side of the list reorders the section.
+fn split_around_list(body: &str) -> (String, String) {
+    let lines: Vec<&str> = body.lines().collect();
+    let first = lines.iter().position(|l| item_marker(l).is_some());
+    let last = lines.iter().rposition(|l| item_marker(l).is_some());
+    match (first, last) {
+        (Some(first), Some(last)) => (lines[..first].join("\n").trim().to_string(), lines[last + 1..].join("\n").trim().to_string()),
+        // No list at all: the placeholder is dropped on the way in, so
+        // whatever stands here is prose that follows the queue.
+        _ => (String::new(), body.trim().to_string()),
+    }
+}
+
+/// The questions under their heading, and whatever else was written there.
+///
+/// The list comes from the record - answering a question there has to
+/// remove it from the file - but everything about how it is written comes
+/// from the body the hub had: the marker, the spacing between items, and
+/// which side of the list the surrounding sentences sat on.
+fn write_questions(out: &mut String, run: &Prose, questions: &[String]) {
+    let body = run.body.trim();
+    let style = list_style(body);
+    let (before, after) = split_around_list(body);
+
+    if !before.is_empty() {
+        out.push_str(&before);
+        out.push_str("\n\n");
+    }
+    // An empty queue is written as the placeholder the hubs use, not as a
+    // blank space under a heading. The parser drops it on the way in - it
+    // is not a question - so the export has to put it back, or a hub with
+    // nothing waiting would lose the line on every run.
+    if questions.is_empty() {
+        out.push_str(EMPTY_QUEUE);
+        out.push_str("\n\n");
+    }
+    let last = questions.len().saturating_sub(1);
+    for (n, question) in questions.iter().enumerate() {
+        match style.marker {
+            "" => {
+                let _ = write!(out, "{}. {}", n + 1, question.trim());
+            }
+            lead => {
+                let _ = write!(out, "{lead}{}", question.trim());
+            }
+        }
+        out.push('\n');
+        if style.spaced || n == last {
+            out.push('\n');
+        }
+    }
+    if !after.is_empty() {
+        out.push_str(&after);
+        out.push_str("\n\n");
+    }
 }
 
 fn write_stage(out: &mut String, stage: &Stage) {
@@ -367,6 +451,41 @@ mod tests {
         assert!(at_heading < at_first, "{text}");
         assert!(text.contains("1. Первый вопрос?"), "{text}");
         assert!(text.contains("2. Второй."), "{text}");
+    }
+
+    /// The queue is written in the shape the hub had. Three hubs of this
+    /// line write three shapes - packed numbers, spaced numbers, bullets -
+    /// and one shape for everybody rewrote two of them on every run.
+    #[test]
+    fn the_queue_keeps_the_shape_the_hub_wrote_it_in() {
+        let questions = ["Первый?".to_string(), "Второй?".to_string()];
+        let shape = |body: &str| {
+            let prose = [run(0, Some("## Ждёт решения владельца"), body)];
+            plan(&prose, &[], &questions)
+        };
+        assert!(
+            shape("1. Старый первый.\n2. Старый второй.").contains("1. Первый?\n2. Второй?"),
+            "packed numbers"
+        );
+        assert!(
+            shape("1. Старый первый.\n\n2. Старый второй.").contains("1. Первый?\n\n2. Второй?"),
+            "spaced numbers"
+        );
+        assert!(shape("- Старый первый.\n- Старый второй.").contains("- Первый?\n- Второй?"), "bullets");
+        assert!(shape("- [ ] Старый первый.").contains("- [ ] Первый?"), "checkboxes");
+    }
+
+    /// Prose on either side of the queue stays on its side. austeris closes
+    /// the section with a rule and nooma follows the list with a paragraph;
+    /// writing both after the list reordered whichever came first.
+    #[test]
+    fn prose_around_the_queue_keeps_its_side() {
+        let prose = [run(0, Some("## Ждёт решения владельца"), "Введение.\n\n- Старый.\n\n---")];
+        let text = plan(&prose, &[], &["Вопрос?".to_string()]);
+        let at_intro = text.find("Введение.").unwrap();
+        let at_question = text.find("Вопрос?").unwrap();
+        let at_rule = text.find("---").unwrap();
+        assert!(at_intro < at_question && at_question < at_rule, "{text}");
     }
 
     #[test]

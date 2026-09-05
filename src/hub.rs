@@ -219,10 +219,7 @@ fn parse_stages(text: &str) -> Vec<Stage> {
     // counts them so the two views of one file agree about where a stage
     // sits among the blocks.
     let runs = prose_positions(text);
-    let mut line_no = 0usize;
-    for line in text.lines() {
-        let at_line = line_no;
-        line_no += 1;
+    for (at_line, line) in text.lines().enumerate() {
         if let Some((depth, head)) = heading(line) {
             match leading_version(head) {
                 Some(version) => {
