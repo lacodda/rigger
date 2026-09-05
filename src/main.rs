@@ -14,6 +14,7 @@ mod open;
 mod owner;
 mod paths;
 mod repo;
+mod retro;
 mod search;
 mod sync;
 mod week;
@@ -187,6 +188,24 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Look back: what the plan said, what the tags say, where they parted
+    Retro {
+        /// Look back over a whole cycle of the calendar instead of the default weeks
+        #[arg(long)]
+        cycle: bool,
+        /// How many weeks to look back over, ending with this week
+        #[arg(long, value_name = "N", conflicts_with = "cycle")]
+        weeks: Option<u32>,
+        /// End the window at this week instead of the current one
+        #[arg(long, value_name = "WEEK")]
+        to: Option<String>,
+        /// Write the summary into the record as an event
+        #[arg(long)]
+        record: bool,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
     /// Answer a question or sort a wish, so it leaves the packet
@@ -254,6 +273,11 @@ enum ProjectCommand {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Record a place the record keeps for itself, with no repository
+    Service {
+        /// Project name
+        name: String,
+    },
     /// List recorded projects
     List {
         /// Print as JSON
@@ -312,6 +336,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Init => init(),
         Command::Project { command } => match command {
             ProjectCommand::Add { path, name } => project_add(path, name),
+            ProjectCommand::Service { name } => project_service(&name),
             ProjectCommand::List { json } => project_list(json),
             ProjectCommand::Show { name, json } => project_show(&name, json),
             ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
@@ -343,6 +368,13 @@ fn run(cli: Cli) -> Result<()> {
         Command::Next { week, json } => show_next(week.as_deref(), json),
         Command::Week { week, json } => show_week(week.as_deref(), json),
         Command::ReleaseDay { week, json } => show_release_day(week.as_deref(), json),
+        Command::Retro {
+            cycle,
+            weeks,
+            to,
+            record,
+            json,
+        } => show_retro(cycle, weeks, to.as_deref(), record, json),
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -445,6 +477,16 @@ fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
     };
     let mut reports = Vec::new();
     for project in &projects {
+        // A place the record keeps for itself has no repository, and asking
+        // git about it would warn on every run about a project working
+        // exactly as intended. Named on its own it says so once, rather
+        // than failing at something it was never meant to do.
+        if !project.kind.reads_git() {
+            if projects.len() == 1 {
+                println!("{} is a place the record keeps for itself; there is no repository to read", project.name);
+            }
+            continue;
+        }
         reports.push(sync::sync(&db, project)?);
     }
 
@@ -817,12 +859,30 @@ fn project_add(path: PathBuf, name: Option<String>) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let name = name.unwrap_or_else(|| repo::detect_name(&root));
     let remote = repo::detect_remote(&root);
-    let project = db.add_project(&name, &root.to_string_lossy(), remote.as_deref())?;
+    let project = db.add_project(&name, &root.to_string_lossy(), remote.as_deref(), db::Kind::Repo)?;
     println!("Recorded '{}' at {}", project.name, project.path);
     match &project.remote {
         Some(url) => println!("  remote: {url}"),
         None => println!("  remote: none (no origin in .git/config)"),
     }
+    Ok(())
+}
+
+/// Records a place the record keeps for itself.
+///
+/// A retro looks across every project and has to leave its summary
+/// somewhere that is not one of them. That place has no repository and
+/// never will, so it is recorded as what it is: `sync` does not ask git
+/// about it and `doctor` does not list it as waiting to be synced.
+fn project_service(name: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    // The path is a name, not a location: the column is unique and every
+    // other project fills it with a directory, so a marker keeps the two
+    // apart without pretending there is a directory to look in.
+    let path = format!("service:{name}");
+    let project = db.add_project(name, &path, None, db::Kind::Service)?;
+    println!("Recorded '{}' as a place the record keeps for itself", project.name);
+    println!("  no repository: sync will not ask git about it");
     Ok(())
 }
 
@@ -839,9 +899,20 @@ fn project_list(json: bool) -> Result<()> {
     }
     let width = projects.iter().map(|p| p.name.len()).max().unwrap_or(0);
     for p in &projects {
-        println!("{:width$}  {}", p.name, p.path);
+        println!("{:width$}  {}", p.name, where_it_lives(p));
     }
     Ok(())
+}
+
+/// What to show where a project's location goes.
+///
+/// A place the record keeps for itself has no location, and the marker its
+/// path column holds is bookkeeping - showing it reads as a broken path.
+fn where_it_lives(project: &db::Project) -> String {
+    match project.kind {
+        db::Kind::Repo => project.path.clone(),
+        db::Kind::Service => "(no repository - a place the record keeps for itself)".to_string(),
+    }
 }
 
 fn project_show(name: &str, json: bool) -> Result<()> {
@@ -854,8 +925,13 @@ fn project_show(name: &str, json: bool) -> Result<()> {
         return Ok(());
     }
     println!("{}", project.name);
-    println!("  path:    {}", project.path);
-    println!("  remote:  {}", project.remote.as_deref().unwrap_or("none"));
+    match project.kind {
+        db::Kind::Repo => {
+            println!("  path:    {}", project.path);
+            println!("  remote:  {}", project.remote.as_deref().unwrap_or("none"));
+        }
+        db::Kind::Service => println!("  kind:    a place the record keeps for itself; no repository"),
+    }
     println!("  since:   {}", project.created_at);
     Ok(())
 }
@@ -1471,6 +1547,216 @@ fn show_release_day(week_arg: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// The look back: what the plan said, what the tags say, and where the two
+/// parted company.
+///
+/// The written calendar asked for this every seven weeks and had no way to
+/// do it, because nothing there ever read a tag - so the check was a thing
+/// to remember, and a thing to remember is a thing that stops happening.
+fn show_retro(cycle: bool, weeks: Option<u32>, to: Option<&str>, record: bool, json: bool) -> Result<()> {
+    let span = match (cycle, weeks) {
+        (true, _) => retro::CYCLE_WEEKS,
+        (_, Some(0)) => bail!("a retro of 0 weeks looks back at nothing; ask for at least one"),
+        (_, Some(n)) => n,
+        // Four weeks by default: long enough to hold more than one release
+        // of a tier A product, short enough that a Monday can read it.
+        (false, None) => 4,
+    };
+    let db = Db::open(&paths::db_path()?)?;
+    let to = week_or_now(to)?;
+    let from = to.plus(-i64::from(span - 1));
+
+    let mut versions = Vec::new();
+    let mut projects = Vec::new();
+    for project in db.projects()? {
+        versions.extend(db.calendar_versions(project.id, &project.name)?);
+        let tier = project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok());
+        projects.push((project.name.clone(), tier, project.rhythm_weeks));
+    }
+    let looked = retro::look_back(from, to, &versions, &projects);
+    let summary = retro::summary(&looked);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "from": looked.from,
+                "to": looked.to,
+                "weeks": looked.weeks(),
+                "shipped": looked.shipped,
+                "missed": looked.missed,
+                "standings": looked.standings,
+                "on_time": looked.on_time(),
+                "slipped": looked.slipped(),
+                "unplanned": looked.unplanned(),
+                "planned_share": looked.planned_share(),
+                "summary": summary,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("{} to {} — {}", looked.from, looked.to, plural(looked.weeks().max(0) as usize, "week", "weeks"));
+    println!();
+
+    if looked.shipped.is_empty() && looked.missed.is_empty() {
+        println!("Nothing shipped and nothing was aimed at these weeks.");
+        // A window where nothing happened is a real answer, but it is not
+        // one worth filing: a retro is kept so a later one can find what
+        // was concluded, and "nothing" concludes nothing.
+        if record {
+            println!();
+            println!("Nothing to keep.");
+        }
+        return Ok(());
+    }
+
+    // The three numbers the check is read for, and the share underneath
+    // them: how much of what shipped was ever planned. A line where nothing
+    // was planned has a calendar in name only, and that is worth saying.
+    println!(
+        "{} shipped — {} on time, {} slipped, {} unplanned",
+        looked.shipped.len(),
+        looked.on_time(),
+        looked.slipped(),
+        looked.unplanned()
+    );
+    if let Some(share) = looked.planned_share() {
+        println!("{share}% of what shipped had been planned");
+    }
+
+    if !looked.missed.is_empty() {
+        println!();
+        println!("Planned and not shipped:");
+        for item in &looked.missed {
+            println!(
+                "  {}  {} — was due {} ({} by the end of the window)",
+                item.project,
+                item.version,
+                item.planned,
+                weeks_late(item.weeks)
+            );
+        }
+    }
+
+    // Slippage spelt out, worst first: the grid shows that a release moved,
+    // only a number says how far, and "what turned out dearer" was one of
+    // the three questions the written calendar asked.
+    let mut slipped: Vec<&retro::Shipped> = looked.shipped.iter().filter(|s| s.slip.is_some_and(|n| n != 0)).collect();
+    slipped.sort_by_key(|s| std::cmp::Reverse(s.slip));
+    if !slipped.is_empty() {
+        println!();
+        println!("Shipped, but not when it was aimed:");
+        for item in slipped.iter().take(10) {
+            let aimed = item.planned.map(|w| w.to_string()).unwrap_or_default();
+            println!(
+                "  {}  {} — aimed at {aimed}, out in {} ({})",
+                item.project,
+                item.version,
+                item.week,
+                weeks_late(item.slip.unwrap_or(0))
+            );
+        }
+        if slipped.len() > 10 {
+            println!("  ... and {} more", slipped.len() - 10);
+        }
+    }
+
+    if !looked.standings.is_empty() {
+        println!();
+        println!("Per project:");
+        let width = looked.standings.iter().map(|s| s.project.chars().count()).max().unwrap_or(0);
+        for item in &looked.standings {
+            let tier = item.tier.map(|t| format!("[{t}]")).unwrap_or_else(|| "   ".to_string());
+            let asked = match item.expected {
+                Some(n) => format!("{n} asked"),
+                None => "none asked".to_string(),
+            };
+            let missed = if item.missed > 0 {
+                format!(", {} missed", item.missed)
+            } else {
+                String::new()
+            };
+            println!(
+                "  {:width$} {tier}  {} shipped ({} planned), {asked}{missed}",
+                item.project, item.shipped, item.planned_and_shipped
+            );
+        }
+    }
+
+    // "Do the tiers need moving" was the third question the calendar asked.
+    // The two directions are shown apart because they are different
+    // problems: a product shipping twenty times its tier has outgrown it,
+    // one shipping nothing is stalled, and a single list of "misfits" loses
+    // exactly the distinction worth acting on.
+    let stalled = looked.misfits(retro::Misfit::Stalled);
+    let outgrown = looked.misfits(retro::Misfit::Outgrown);
+    if !stalled.is_empty() {
+        println!();
+        println!("Nothing shipped, and their tier asked for something:");
+        for item in &stalled {
+            let tier = item.tier.map(|t| t.to_string()).unwrap_or_default();
+            println!("  {} [{tier}]  0 against {} asked for", item.project, item.expected.unwrap_or(0));
+        }
+    }
+    if !outgrown.is_empty() {
+        println!();
+        println!("Shipping past their tier — it may be describing the wrong thing now:");
+        for item in outgrown.iter().take(5) {
+            let tier = item.tier.map(|t| t.to_string()).unwrap_or_default();
+            let over = item.times_over().unwrap_or(0);
+            println!(
+                "  {} [{tier}]  {} shipped against {} asked for ({over}x)",
+                item.project,
+                item.shipped,
+                item.expected.unwrap_or(0)
+            );
+        }
+        if outgrown.len() > 5 {
+            println!("  ... and {} more", outgrown.len() - 5);
+        }
+    }
+    if !stalled.is_empty() || !outgrown.is_empty() {
+        println!("  move one with: rigger project tier <project> <A|B|C|out>");
+    }
+
+    println!();
+    if record {
+        record_retro(&db, &looked, &summary)?;
+    } else {
+        println!("Keep this in the record with: rigger retro --record");
+    }
+    Ok(())
+}
+
+/// Writes the retro's summary into the record.
+///
+/// It goes to the project the record keeps for itself rather than to any of
+/// the projects looked at: the summary is about all of them, and filing it
+/// under one would make it findable from the wrong place and invisible from
+/// the rest. A retro that is only ever printed leaves the same hole the
+/// written calendar had, where the check happened and nothing afterwards
+/// could tell that it did.
+fn record_retro(db: &Db, looked: &retro::Retro, summary: &str) -> Result<()> {
+    let Some(project) = db.service_project()? else {
+        bail!(
+            "no place to keep it: a retro is about every project, so its summary belongs to none of them.
+Make one with: rigger project service line"
+        );
+    };
+    // Dated by the window it looked at, not by the moment it was run. The
+    // same retro of the same weeks is the same fact however often it is
+    // asked for, and stamping it with "now" filed a fresh copy every time -
+    // which is how a record fills with restatements of one conclusion.
+    let at = format!("{}T00:00:00Z", looked.to.friday());
+    let change = db.record_event(project.id, "change", summary, &at, "assistant")?;
+    match change {
+        db::Change::Unchanged => println!("That retro is already in the record, under '{}'.", project.name),
+        _ => println!("Kept in the record under '{}'.", project.name),
+    }
+    Ok(())
+}
+
 fn doctor(json: bool) -> Result<()> {
     let path = paths::db_path()?;
     if !path.exists() {
@@ -1491,6 +1777,12 @@ fn doctor(json: bool) -> Result<()> {
     let mut mismatches = Vec::new();
     let mut unsynced = Vec::new();
     for project in db.projects()? {
+        // Never synced is a thing to fix only for a project git can answer
+        // for; a service project would sit in that list for ever, being
+        // advised a command that cannot help it.
+        if !project.kind.reads_git() {
+            continue;
+        }
         if db.activity(project.id)?.is_none() {
             unsynced.push(project.name.clone());
             continue;

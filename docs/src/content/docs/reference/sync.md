@@ -113,6 +113,10 @@ On Linux or macOS, the same as a crontab line:
 
 Running it when nothing has changed costs a walk of recent history and prints nothing, so a daily schedule is not something you have to think about again.
 
+## Projects with no repository
+
+A [service project](/rigger/reference/project/) - a place the record keeps for itself - has no git to read, and `sync` does not ask. Syncing everything passes over it in silence; naming it says so once rather than reporting a missing repository as a problem.
+
 ## Related
 
 - [`doctor`](/rigger/reference/doctor/) - the mismatches across every project.

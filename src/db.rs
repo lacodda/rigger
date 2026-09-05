@@ -130,6 +130,22 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE projects ADD COLUMN rhythm_weeks INTEGER;
     ",
+    // v6: what kind of thing a project is. Everything recorded so far has
+    // been a repository, and every part of rigger assumed so - `sync` asks
+    // git about it, `doctor` lists it as never synced until git answers.
+    //
+    // A retro needs somewhere to leave its summary that is not one of the
+    // projects it looked at, and that place has no repository and never
+    // will. Recording it as a repo-less repository made `sync` warn about
+    // it on every run and `doctor` advise a command that could not help:
+    // the record would have been nagging about a project working exactly
+    // as intended. So the kind is written down instead of assumed.
+    //
+    // `NOT NULL DEFAULT` rather than nullable: every existing row is a
+    // repository, and there is no third state where the kind is unknown.
+    "
+    ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'repo';
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -150,6 +166,50 @@ pub struct Project {
     pub tier: Option<String>,
     /// Weeks it is meant to go between releases.
     pub rhythm_weeks: Option<u32>,
+    /// What kind of thing this is: a repository, or a place the record
+    /// keeps for itself.
+    pub kind: Kind,
+}
+
+/// What a project is, as far as the parts of rigger that read git care.
+///
+/// Almost everything recorded is a repository. The exception is the line
+/// itself - somewhere for a retro to leave its summary that is not one of
+/// the projects it looked at. Such a place has no repository and never
+/// will, and saying so is cheaper than every reader guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// A checkout on disk, which `sync` reads.
+    Repo,
+    /// A place the record keeps for itself; git is never asked about it.
+    Service,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Repo => "repo",
+            Kind::Service => "service",
+        }
+    }
+
+    /// Whether `sync` and `doctor` should expect git to answer for it.
+    pub fn reads_git(self) -> bool {
+        self == Kind::Repo
+    }
+}
+
+impl From<String> for Kind {
+    /// An unknown kind reads as a repository: that is what every row was
+    /// before the column existed, and a newer rigger writing a kind this
+    /// one does not know should not make the project vanish from a list.
+    fn from(text: String) -> Kind {
+        match text.as_str() {
+            "service" => Kind::Service,
+            _ => Kind::Repo,
+        }
+    }
 }
 
 /// What writing a record did. An import reports the three apart, so that
@@ -340,7 +400,7 @@ impl Db {
         Ok(self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
     }
 
-    pub fn add_project(&self, name: &str, path: &str, remote: Option<&str>) -> Result<Project> {
+    pub fn add_project(&self, name: &str, path: &str, remote: Option<&str>, kind: Kind) -> Result<Project> {
         if let Some(existing) = self.project_by_path(path)? {
             bail!("{} is already recorded as project '{}'", path, existing.name);
         }
@@ -349,8 +409,8 @@ impl Db {
         }
         let created_at = now();
         self.conn.execute(
-            "INSERT INTO projects (name, path, remote, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![name, path, remote, created_at],
+            "INSERT INTO projects (name, path, remote, created_at, kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![name, path, remote, created_at, kind.as_str()],
         )?;
         Ok(Project {
             id: self.conn.last_insert_rowid(),
@@ -360,13 +420,14 @@ impl Db {
             created_at,
             tier: None,
             rhythm_weeks: None,
+            kind,
         })
     }
 
     pub fn projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, path, remote, created_at, tier, rhythm_weeks FROM projects ORDER BY name")?;
+            .prepare("SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects ORDER BY name")?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -375,8 +436,24 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks FROM projects WHERE name = ?1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects WHERE name = ?1",
                 [name],
+                row_to_project,
+            )
+            .optional()?)
+    }
+
+    /// The place the record keeps for itself, if one has been made.
+    ///
+    /// There is at most one in practice and the code does not enforce it:
+    /// a second would be a decision the owner made, and refusing it here
+    /// would be the record arguing with them about their own filing.
+    pub fn service_project(&self) -> Result<Option<Project>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects                  WHERE kind = 'service' ORDER BY id LIMIT 1",
+                [],
                 row_to_project,
             )
             .optional()?)
@@ -386,7 +463,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks FROM projects WHERE path = ?1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
@@ -1249,6 +1326,7 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         created_at: row.get(4)?,
         tier: row.get(5)?,
         rhythm_weeks: row.get(6)?,
+        kind: row.get::<_, String>(7)?.into(),
     })
 }
 

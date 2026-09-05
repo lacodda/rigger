@@ -549,7 +549,7 @@ mod tests {
     fn an_empty_record_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::create(&dir.path().join("rigger.db")).unwrap();
-        db.add_project("sample", "/tmp/sample", None).unwrap();
+        db.add_project("sample", "/tmp/sample", None, crate::db::Kind::Repo).unwrap();
         let mut args = Map::new();
         args.insert("project".into(), json!("sample"));
         args.insert("text".into(), json!("   "));

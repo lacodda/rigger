@@ -27,7 +27,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger next`](/rigger/reference/next/) | v0.10.0 | This week's focus, and what is behind |
 | [`rigger week`](/rigger/reference/week/) | v0.11.0 | The Monday brief: focus, Friday, what waits |
 | [`rigger release-day`](/rigger/reference/release-day/) | v0.11.0 | The shopfront queue: what is out, what waits for Friday |
-| `rigger retro` | planned v0.12.0 | Planned against shipped, per cycle |
+| [`rigger retro`](/rigger/reference/retro/) | v0.12.0 | Planned against shipped, per cycle |
 | `rigger session` | planned v0.13.0 | Start and end a session; the end writes the journal |
 | `rigger export` | planned v0.14.0 | Generate the hub markdown from the database |
 | `rigger skill`, `rigger adopt` | planned v0.15.0 | Generate a thin project skill; record a whole directory of repositories |

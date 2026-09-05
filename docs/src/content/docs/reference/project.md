@@ -81,8 +81,25 @@ Each tier carries a rhythm of its own - two weeks for A, four for B, six for C -
 
 A project with no tier at all is out by omission, and is equally left alone: rigger does not invent a schedule that nobody asked for.
 
+## `rigger project service <name>`
+
+Records a place the record keeps for itself: a project with no repository, and none coming.
+
+```console
+$ rigger project service line
+Recorded 'line' as a place the record keeps for itself
+  no repository: sync will not ask git about it
+```
+
+There is one thing this exists for. A [`retro`](/rigger/reference/retro/) is about every project at once, so its summary belongs to none of them - filing it under one would make it findable from the wrong place and invisible from the rest.
+
+Such a place is not a repository that happens to be missing, and saying so matters: recorded as an ordinary project it made [`sync`](/rigger/reference/sync/) warn on every run that there was no git to read, and [`doctor`](/rigger/reference/doctor/) list it for ever among the projects waiting to be synced - the record nagging about a project working exactly as intended. Now `sync` does not ask git about it, and `doctor` does not count it as unsynced.
+
+Everything else works on it as usual: events, questions, wishes, [`digest`](/rigger/reference/digest/), [`find`](/rigger/reference/find/) and the [context packet](/rigger/reference/context/).
+
 ## Related
 
 - [`init`](/rigger/reference/init/) - the database `project` writes to.
 - [`doctor`](/rigger/reference/doctor/) - how many projects are recorded.
 - [`calendar`](/rigger/reference/calendar/) - where a tier and its rhythm are read.
+- [`retro`](/rigger/reference/retro/) - what a service project is made for.

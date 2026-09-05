@@ -88,7 +88,14 @@ pub struct Cost {
 pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     let activity = db.activity(project.id)?;
     let state = State {
-        path: project.path.clone(),
+        // A place the record keeps for itself has no location, and its path
+        // column holds a marker rather than a directory. The packet opens
+        // with this line, so a marker there would be the first thing an
+        // assistant read and the first thing it got wrong.
+        path: match project.kind {
+            crate::db::Kind::Repo => project.path.clone(),
+            crate::db::Kind::Service => "(no repository - a place the record keeps for itself)".to_string(),
+        },
         remote: project.remote.clone(),
         last_shipped: db.last_shipped_version(project.id)?.map(|(name, _)| name),
         last_shipped_on: db.last_shipped_version(project.id)?.map(|(_, on)| on),

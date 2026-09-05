@@ -56,6 +56,10 @@ A project that has never been synced is named rather than judged: without a sync
 
 Later releases add another section here: hubs edited by hand after export.
 
+## What it leaves out
+
+A [service project](/rigger/reference/project/) never appears among the projects waiting to be synced. There is no repository to read, so it would have sat in that list for ever being advised a command that could not help it.
+
 ## Related
 
 - [`init`](/rigger/reference/init/) - create the database `doctor` reports on.
