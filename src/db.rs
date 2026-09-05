@@ -201,6 +201,17 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE versions ADD COLUMN notes_after TEXT;
     ",
+    // Where a stage stood among the stages of its file, so an export can
+    // put the stages of one block back in the order they were written in.
+    // `after_prose` names the block and no more: all seven stages of one
+    // hub's changelog follow the same single run, and without this the
+    // export fell back on the order the rows happened to come out of the
+    // table - which is not an order, and wrote that changelog backwards.
+    // A rank rather than a line number: the export writes its marker above
+    // everything, so line numbers would drift by two on every run.
+    "
+    ALTER TABLE versions ADD COLUMN rank INTEGER;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -355,6 +366,7 @@ struct Shape {
     heading: Option<String>,
     depth: Option<i64>,
     after_prose: Option<i64>,
+    rank: Option<i64>,
 }
 
 /// A stage as the record already holds it: its id, title, status, the
@@ -369,6 +381,7 @@ impl Shape {
             heading: (!stage.heading.trim().is_empty()).then(|| stage.heading.clone()),
             depth: Some(stage.depth as i64),
             after_prose: Some(stage.after_prose as i64),
+            rank: Some(stage.rank as i64),
         }
     }
 }
@@ -644,8 +657,9 @@ impl Db {
     /// Every version of a project as a stage, for the export to write back.
     pub fn stages(&self, project_id: i64, shipped: bool) -> Result<Vec<crate::hub::Stage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, title, shipped_at, notes, heading_depth, notes_after, heading, after_prose FROM versions \
-             WHERE project_id = ?1 AND (status = 'shipped') = ?2",
+            "SELECT id, name, title, shipped_at, notes, heading_depth, notes_after, heading, after_prose, rank FROM versions \
+             WHERE project_id = ?1 AND (status = 'shipped') = ?2 \
+             ORDER BY COALESCE(rank, 0), id",
         )?;
         let rows = stmt.query_map(params![project_id, shipped], |r| {
             Ok((
@@ -663,6 +677,7 @@ impl Db {
                     notes_after: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                     heading: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
                     after_prose: r.get::<_, Option<i64>>(8)?.unwrap_or(i64::MAX) as usize,
+                    rank: r.get::<_, Option<i64>>(9)?.unwrap_or(0) as usize,
                 },
             ))
         })?;
@@ -727,11 +742,17 @@ impl Db {
     /// version. Returns its id and whether anything changed - the import
     /// report counts on the difference, and a second import of an unchanged
     /// hub must report nothing.
-    pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage) -> Result<(i64, Change)> {
+    ///
+    /// `owns_shape` says whether this reading of the stage may say how it
+    /// is written. A version appears in both files of a hub - the plan
+    /// keeps its shipped stages in the major map, the changelog holds the
+    /// entry about each - and only one of them can decide the heading, the
+    /// depth and the place. The changelog does, for a stage that shipped.
+    pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage, owns_shape: bool) -> Result<(i64, Change)> {
         let mut existing: Option<Recorded> = self
             .conn
             .query_row(
-                "SELECT id, title, status, shipped_at, notes, notes_after, heading, heading_depth, after_prose \
+                "SELECT id, title, status, shipped_at, notes, notes_after, heading, heading_depth, after_prose, rank \
                  FROM versions WHERE project_id = ?1 AND name = ?2",
                 params![project_id, stage.version],
                 |r| {
@@ -746,6 +767,7 @@ impl Db {
                             heading: r.get(6)?,
                             depth: r.get(7)?,
                             after_prose: r.get(8)?,
+                            rank: r.get(9)?,
                         },
                     ))
                 },
@@ -771,6 +793,13 @@ impl Db {
             }
         }
         let status = if stage.shipped_on.is_some() { "shipped" } else { "planned" };
+        // A reading that does not own the shape keeps the one already
+        // recorded, so the plan's copy of a shipped stage cannot move it
+        // out of the changelog it was written in.
+        let shape = match owns_shape {
+            true => Shape::of(stage),
+            false => existing.as_ref().map(|(.., recorded)| recorded.clone()).unwrap_or_else(|| Shape::of(stage)),
+        };
         // An empty body is no body: a stage written without prose and one
         // whose prose was deleted are the same thing to the record, and
         // storing "" would make an export print a blank line for it.
@@ -788,22 +817,24 @@ impl Db {
                     && shipped_at == stage.shipped_on
                     && was_notes == notes
                     && was_after == notes_after
-                    && was_shape == Shape::of(stage)
+                    && was_shape == shape
                 {
                     return Ok((id, Change::Unchanged));
                 }
                 self.conn.execute(
                     "UPDATE versions SET title = ?1, status = ?2, shipped_at = ?3, notes = ?4, \
-                     notes_after = ?5, heading_depth = ?6, heading = ?7, after_prose = ?8 WHERE id = ?9",
+                     notes_after = ?5, heading_depth = ?6, heading = ?7, after_prose = ?8, rank = ?9 \
+                     WHERE id = ?10",
                     params![
                         stage.title,
                         status,
                         stage.shipped_on,
                         notes,
                         notes_after,
-                        stage.depth as i64,
-                        stage.heading,
-                        stage.after_prose as i64,
+                        shape.depth,
+                        shape.heading,
+                        shape.after_prose,
+                        shape.rank,
                         id
                     ],
                 )?;
@@ -811,8 +842,8 @@ impl Db {
             }
             None => {
                 self.conn.execute(
-                    "INSERT INTO versions (project_id, name, title, status, shipped_at, notes, notes_after, heading_depth, heading, after_prose) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    "INSERT INTO versions (project_id, name, title, status, shipped_at, notes, notes_after, heading_depth, heading, after_prose, rank) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![
                         project_id,
                         stage.version,
@@ -821,9 +852,10 @@ impl Db {
                         stage.shipped_on,
                         notes,
                         notes_after,
-                        stage.depth as i64,
-                        stage.heading,
-                        stage.after_prose as i64
+                        shape.depth,
+                        shape.heading,
+                        shape.after_prose,
+                        shape.rank
                     ],
                 )?;
                 Ok((self.conn.last_insert_rowid(), Change::Added))

@@ -392,6 +392,7 @@ mod tests {
             notes_after: String::new(),
             heading: String::new(),
             after_prose: usize::MAX,
+            rank: 0,
             tasks: tasks
                 .iter()
                 .map(|(t, done)| Task {

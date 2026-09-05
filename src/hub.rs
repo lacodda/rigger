@@ -57,6 +57,19 @@ pub struct Stage {
     /// all the prose, which piled every stage of a real plan below every
     /// block heading and lost the grouping entirely.
     pub after_prose: usize,
+    /// Where the stage stood among the stages of its file: first is 0.
+    ///
+    /// `after_prose` says which block a stage belongs to, and a block holds
+    /// several: every stage of one hub's changelog sits after the same
+    /// single run, so that number alone cannot tell seven of them apart.
+    /// Without a place inside the block the export fell back on the order
+    /// the rows came out of the table, which is not an order at all - it
+    /// wrote that changelog oldest-first.
+    ///
+    /// A rank and not the line it sat on: an export writes the generated
+    /// marker above everything, which moves every line of the file down by
+    /// two, and a record that kept line numbers would drift on every run.
+    pub rank: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -243,6 +256,7 @@ fn parse_stages(text: &str) -> Vec<Stage> {
                         notes_after: String::new(),
                         heading: head.to_string(),
                         after_prose: runs[at_line],
+                        rank: stages.len(),
                     });
                     level = depth;
                 }
@@ -678,6 +692,23 @@ mod tests {
         assert!(stages[0].notes_after.contains("первое"), "{:?}", stages[0]);
         assert!(stages[1].notes_after.contains("второе"), "{:?}", stages[1]);
         assert!(stages[0].notes.is_empty() && stages[1].notes.is_empty(), "nothing opened either stage");
+    }
+
+    /// Stages of one block are told apart by their rank. `after_prose`
+    /// names the block, and a changelog is one block holding all of them,
+    /// so without a rank an export could only fall back on the order the
+    /// rows came out of the table - and wrote one hub's changelog
+    /// oldest-first.
+    #[test]
+    fn stages_of_one_block_keep_the_order_they_were_written_in() {
+        let text = "# Изменения\n\n## v2.2.0 · Third\n\n## v2.1.0 · Second\n\n## v2.0.0 · First\n";
+        let stages = parse_stages(text);
+        let order: Vec<&str> = stages.iter().map(|s| s.version.as_str()).collect();
+        assert_eq!(order, ["v2.2.0", "v2.1.0", "v2.0.0"]);
+        // All three follow the same single run, so the rank is what tells
+        // them apart.
+        assert!(stages.iter().all(|s| s.after_prose == stages[0].after_prose), "one block");
+        assert_eq!(stages.iter().map(|s| s.rank).collect::<Vec<_>>(), [0, 1, 2]);
     }
 
     #[test]

@@ -58,8 +58,18 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
 
     // Closed stages first: when a version appears in both files, the changelog
     // is the one that knows it shipped, and the plan must not undo that.
-    for stage in hub.closed_stages.iter().chain(hub.open_stages.iter()) {
-        let (version_id, change) = db.upsert_version(project_id, stage)?;
+    //
+    // Nor may it undo where the changelog put it. A plan keeps its shipped
+    // stages in the major map - lyrn lists four of them as `###` under a
+    // block heading, and the changelog writes the same four as `##` with
+    // the entry about each - so a second pass that rewrote the shape moved
+    // every one of them out of the changelog and into the plan's order.
+    // The file a stage is being read from decides: a stage in hand from
+    // the changelog owns its shape, one from the plan defers.
+    let closed = hub.closed_stages.iter().map(|stage| (stage, true));
+    let open = hub.open_stages.iter().map(|stage| (stage, false));
+    for (stage, owns_shape) in closed.chain(open) {
+        let (version_id, change) = db.upsert_version(project_id, stage, owns_shape)?;
         tally(change, &mut report.versions_added, &mut report.versions_updated);
         for (position, task) in stage.tasks.iter().enumerate() {
             let change = db.upsert_task(project_id, version_id, position, task)?;
