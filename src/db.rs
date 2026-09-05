@@ -212,6 +212,14 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE versions ADD COLUMN rank INTEGER;
     ",
+    // How many blank lines a diary left after the rule between two entries.
+    // Not a constant and not a habit of a hub: one diary writes one after
+    // most of its rules and two after four of them, and two others write
+    // none, so writing one for everybody moved every line below the first
+    // entry that disagreed.
+    "
+    ALTER TABLE sessions ADD COLUMN gap_after INTEGER;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -374,6 +382,11 @@ struct Shape {
 /// shape its heading had. Named because an upsert compares all of it at
 /// once.
 type Recorded = (i64, Option<String>, String, Option<String>, Option<String>, Option<String>, Shape);
+
+/// A diary entry as the record already holds it: its id, what was written
+/// under it, whether a rule followed it, and how many blank lines came
+/// after that rule. Named because an upsert compares all of it at once.
+type RecordedEntry = (i64, Option<String>, Option<bool>, Option<i64>);
 
 impl Shape {
     fn of(stage: &crate::hub::Stage) -> Shape {
@@ -562,29 +575,30 @@ impl Db {
     /// quiet - a day may hold two entries, but not two with the same title.
     pub fn upsert_diary_entry(&self, project_id: i64, entry: &crate::hub::DiaryEntry) -> Result<Change> {
         let at = format!("{}T00:00:00Z", entry.date);
-        let existing: Option<(i64, Option<String>, Option<bool>)> = self
+        let existing: Option<RecordedEntry> = self
             .conn
             .query_row(
-                "SELECT id, notes, followed_by_rule FROM sessions WHERE project_id = ?1 AND started_at = ?2 \
+                "SELECT id, notes, followed_by_rule, gap_after FROM sessions WHERE project_id = ?1 AND started_at = ?2 \
                  AND ((heading IS NULL AND ?3 IS NULL) OR heading = ?3)",
                 params![project_id, at, entry.heading],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
         let notes = (!entry.body.trim().is_empty()).then(|| entry.body.clone());
         match existing {
-            Some((_, was, rule)) if was == notes && rule == Some(entry.followed_by_rule) => Ok(Change::Unchanged),
-            Some((id, _, _)) => {
+            Some((_, was, rule, gap)) if was == notes && rule == Some(entry.followed_by_rule) && gap == Some(entry.gap_after as i64) => Ok(Change::Unchanged),
+            Some((id, ..)) => {
                 self.conn.execute(
-                    "UPDATE sessions SET notes = ?2, followed_by_rule = ?3 WHERE id = ?1",
-                    params![id, notes, entry.followed_by_rule],
+                    "UPDATE sessions SET notes = ?2, followed_by_rule = ?3, gap_after = ?4 WHERE id = ?1",
+                    params![id, notes, entry.followed_by_rule, entry.gap_after as i64],
                 )?;
                 Ok(Change::Updated)
             }
             None => {
                 self.conn.execute(
-                    "INSERT INTO sessions (project_id, started_at, ended_at, heading, notes, followed_by_rule)                      VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
-                    params![project_id, at, entry.heading, notes, entry.followed_by_rule],
+                    "INSERT INTO sessions (project_id, started_at, ended_at, heading, notes, followed_by_rule, gap_after) \
+                     VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6)",
+                    params![project_id, at, entry.heading, notes, entry.followed_by_rule, entry.gap_after as i64],
                 )?;
                 Ok(Change::Added)
             }
@@ -601,7 +615,7 @@ impl Db {
     /// reverse every busy day, which is what the first live run did.
     pub fn diary_entries(&self, project_id: i64) -> Result<Vec<crate::hub::DiaryEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT substr(started_at, 1, 10), heading, notes, followed_by_rule FROM sessions \
+            "SELECT substr(started_at, 1, 10), heading, notes, followed_by_rule, gap_after FROM sessions \
              WHERE project_id = ?1 AND notes IS NOT NULL ORDER BY started_at DESC, id ASC",
         )?;
         let rows = stmt.query_map([project_id], |r| {
@@ -610,6 +624,7 @@ impl Db {
                 heading: r.get(1)?,
                 body: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 followed_by_rule: r.get::<_, Option<bool>>(3)?.unwrap_or(false),
+                gap_after: r.get::<_, Option<i64>>(4)?.unwrap_or(1) as usize,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

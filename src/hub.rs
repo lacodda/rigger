@@ -115,6 +115,13 @@ pub struct DiaryEntry {
     /// Whether a horizontal rule stood between this entry and the next. A
     /// hub that writes one writes it before every entry but the first.
     pub followed_by_rule: bool,
+    /// How many blank lines stood after that rule, before the next entry.
+    ///
+    /// Not a constant, and not a habit of a hub: one diary writes one blank
+    /// line after most of its rules and two after four of them, and two
+    /// others write none at all. Writing one for everybody moved every line
+    /// below the first entry that disagreed.
+    pub gap_after: usize,
 }
 
 /// What a hub yielded, plus what it could not.
@@ -332,7 +339,7 @@ fn parse_diary(text: &str) -> Vec<DiaryEntry> {
                 && let Some(date) = trailing_date(head)
             {
                 if let Some(last) = entries.last_mut() {
-                    last.body = body.trim().to_string();
+                    settle_entry(last, &body);
                 }
                 body.clear();
                 entries.push(DiaryEntry {
@@ -340,6 +347,7 @@ fn parse_diary(text: &str) -> Vec<DiaryEntry> {
                     date,
                     body: String::new(),
                     followed_by_rule: false,
+                    gap_after: 1,
                 });
                 continue;
             }
@@ -350,17 +358,32 @@ fn parse_diary(text: &str) -> Vec<DiaryEntry> {
         }
     }
     if let Some(last) = entries.last_mut() {
-        last.body = body.trim().to_string();
-    }
-    // A rule between entries belongs to neither: it separates them. Kept off
-    // the body as a flag so the export can put it back where it stood.
-    for entry in entries.iter_mut() {
-        if let Some(rest) = entry.body.strip_suffix("---") {
-            entry.body = rest.trim_end().to_string();
-            entry.followed_by_rule = true;
-        }
+        settle_entry(last, &body);
     }
     entries
+}
+
+/// Hands a diary entry the lines written under it, and the separator that
+/// followed them.
+///
+/// A rule between two entries belongs to neither: it separates them, and it
+/// is kept off the body as a flag so the export can put it back where it
+/// stood. The blank lines after that rule are part of the separator too,
+/// and they have to be counted here, on the body as it was read - both
+/// hand-overs trim it, and trimming is what destroys them.
+fn settle_entry(entry: &mut DiaryEntry, body: &str) {
+    let trimmed = body.trim();
+    match trimmed.strip_suffix("---") {
+        Some(rest) => {
+            entry.body = rest.trim_end().to_string();
+            entry.followed_by_rule = true;
+            // What stood between the rule and whatever came next: the tail
+            // the outer trim would have thrown away.
+            let after = &body[body.rfind("---").map(|at| at + 3).unwrap_or(body.len())..];
+            entry.gap_after = after.matches('\n').count().saturating_sub(1);
+        }
+        None => entry.body = trimmed.to_string(),
+    }
 }
 
 /// Prose of a file that belongs to no stage and no entry: the preamble, and
@@ -709,6 +732,26 @@ mod tests {
         // them apart.
         assert!(stages.iter().all(|s| s.after_prose == stages[0].after_prose), "one block");
         assert_eq!(stages.iter().map(|s| s.rank).collect::<Vec<_>>(), [0, 1, 2]);
+    }
+
+    /// The blank lines after the rule between two entries are part of the
+    /// separator, and a diary chooses how many. One hub writes one after
+    /// most of its rules and two after four of them; another writes none.
+    /// Writing one for everybody moved every line below the first entry
+    /// that disagreed.
+    #[test]
+    fn the_gap_after_a_rule_is_the_one_the_diary_wrote() {
+        let diary = |gap: &str| {
+            let text = format!("# Дневник\n\n## 2026-09-05 · Later\n\nЧто делали.\n\n---\n{gap}## 2026-09-04 · Earlier\n\nРаньше.\n");
+            parse_diary(&text)
+        };
+        let one = diary("\n");
+        assert!(one[0].followed_by_rule, "the rule is the separator, not the body");
+        assert_eq!(one[0].gap_after, 1);
+        assert_eq!(diary("\n\n")[0].gap_after, 2);
+        assert_eq!(diary("")[0].gap_after, 0);
+        // And the rule never lands in what was written.
+        assert!(!one[0].body.contains("---"), "{:?}", one[0].body);
     }
 
     #[test]

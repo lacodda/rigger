@@ -135,7 +135,10 @@ pub fn diary(prose: &[Prose], entries: &[DiaryEntry]) -> String {
         // neither, so it is written back between them rather than kept in
         // either body.
         if entry.followed_by_rule {
-            out.push_str("---\n\n");
+            out.push_str("---\n");
+            for _ in 0..entry.gap_after {
+                out.push('\n');
+            }
         }
     }
     finish(out)
@@ -540,12 +543,14 @@ mod tests {
                 heading: Some("2026-09-05 · v0.13.0 «Сессии»".to_string()),
                 body: "Что делали.".to_string(),
                 followed_by_rule: false,
+                gap_after: 1,
             },
             DiaryEntry {
                 date: "2026-09-01".to_string(),
                 heading: None,
                 body: "Раньше.".to_string(),
                 followed_by_rule: false,
+                gap_after: 1,
             },
         ];
         let text = diary(&[], &entries);
