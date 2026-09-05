@@ -2,7 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.12.0] - 2026-09-05
+
+### Features
+- Look back at a cycle and see what the plan was worth
 ## [0.11.0] - 2026-09-05
+
+### Documentation
+- Changelog for v0.11.0
 
 ### Features
 - Give the owner a week to read
