@@ -66,6 +66,16 @@ Token counts are estimated from characters, not measured with a tokeniser: the n
 
 The same packet as data, for a tool that renders it or an editor that feeds it to a model. Every field of the text form is there, plus `events_omitted`.
 
+## Since the last sitting
+
+When a [session](/rigger/reference/session/) has ended before, the state opens with a line saying where it stopped and what has happened since:
+
+```
+Last session ended yesterday: 3 events recorded, 7 changes committed
+```
+
+The question a returning assistant has is not "what has been going on" but "what changed while I was away" - and without this line the packet's recent events are undated history that every session re-reads from the top.
+
 ## Related
 
 - [`find`](/rigger/reference/find/) - searching the events this packet samples from.

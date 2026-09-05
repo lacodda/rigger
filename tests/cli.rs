@@ -684,6 +684,30 @@ fn backup_copies_the_database_beside_itself() {
     );
 }
 
+/// rigger never exits 2, whatever it is asked.
+///
+/// 2 is clap's own code for a usage error, and it is also the code an
+/// assistant's Stop hook uses to refuse the stop and hold the turn open. A
+/// hook is written once into a settings file and never looked at again, so
+/// a typo in it - or an older rigger on the PATH without the subcommand -
+/// would wedge every session it fired in. Found by installing the hook for
+/// real: the rigger on PATH was one release behind, and the command exited
+/// 2 rather than being ignored.
+#[test]
+fn a_usage_error_never_exits_with_the_code_that_blocks_a_hook() {
+    let data = tempfile::tempdir().unwrap();
+    for args in [vec!["no-such-command"], vec!["session", "end", "--no-such-flag"], vec!["project"]] {
+        let out = rigger(data.path()).args(&args).assert().failure();
+        let code = out.get_output().status.code();
+        assert_eq!(code, Some(1), "{args:?} exited {code:?}, and 2 blocks a Stop hook");
+    }
+
+    // Help and version are answers, not failures.
+    for args in [vec!["--help"], vec!["--version"]] {
+        rigger(data.path()).args(&args).assert().success();
+    }
+}
+
 #[test]
 fn doctor_reports_the_database_before_and_after_init() {
     let data = tempfile::tempdir().unwrap();

@@ -56,6 +56,27 @@ pub struct State {
     /// project actually been still? Quiet in the record and quiet in git are
     /// different things, and only the second one means nobody has worked.
     pub days_since_commit: Option<i64>,
+    /// What has happened since the last session ended, if there was one.
+    pub since_last_session: Option<SinceLastSession>,
+}
+
+/// The difference between now and where the last sitting stopped.
+///
+/// A packet opens with a fixed number of recent events, which answers "what
+/// has been going on" and not "what changed while I was away" - and the
+/// second is the question an assistant returning to a project actually has.
+/// Without it every session re-reads the same history and cannot tell which
+/// part of it is new.
+#[derive(Debug, Serialize)]
+pub struct SinceLastSession {
+    /// When the previous session ended.
+    pub ended_at: String,
+    pub days_ago: Option<i64>,
+    /// Events recorded since, not counting the chronicle read from commits.
+    pub events: usize,
+    /// Changes read out of commit messages since - work done outside a
+    /// session, which is most of it.
+    pub commits: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +125,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         days_quiet: db.last_event_at(project.id)?.as_deref().and_then(days_since),
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
         days_since_commit: activity.as_ref().and_then(|a| a.last_commit_at.as_deref()).and_then(days_since_day),
+        since_last_session: since_last_session(db, project)?,
     };
 
     let current = db.current_stage(project.id)?.map(|s| Stage {
@@ -295,6 +317,50 @@ pub fn costs(packet: &Packet) -> Vec<Cost> {
     costs
 }
 
+/// What has changed since the previous sitting ended.
+fn since_last_session(db: &Db, project: &Project) -> Result<Option<SinceLastSession>> {
+    let Some(last) = db.last_ended_session(project.id)? else {
+        return Ok(None);
+    };
+    let Some(ended_at) = last.ended_at else {
+        return Ok(None);
+    };
+    let events = db.events_since(project.id, &ended_at)?;
+    let commits = events.iter().filter(|e| e.from_git).count();
+    Ok(Some(SinceLastSession {
+        days_ago: days_since(&ended_at),
+        ended_at,
+        events: events.len() - commits,
+        commits,
+    }))
+}
+
+fn render_since(since: &SinceLastSession) -> String {
+    let when = match since.days_ago {
+        Some(0) => "earlier today".to_string(),
+        Some(1) => "yesterday".to_string(),
+        Some(n) => format!("{n} days ago"),
+        None => since.ended_at.clone(),
+    };
+    let mut parts = Vec::new();
+    if since.events > 0 {
+        parts.push(format!("{} recorded", plural(since.events, "event", "events")));
+    }
+    if since.commits > 0 {
+        parts.push(format!("{} committed", plural(since.commits, "change", "changes")));
+    }
+    match parts.is_empty() {
+        // Nothing since is a fact worth one line: it says the events below
+        // are all from before, and that nobody has touched this meanwhile.
+        true => format!("Last session ended {when}; nothing since\n"),
+        false => format!("Last session ended {when}: {}\n", parts.join(", ")),
+    }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 fn render_state(p: &Packet) -> String {
     let mut out = format!("# {}\n\n{}\n", p.project, p.state.path);
     if let Some(remote) = &p.state.remote {
@@ -323,6 +389,11 @@ fn render_state(p: &Packet) -> String {
         && days >= 7
     {
         out.push_str(&format!("Quiet for {days} days\n"));
+    }
+    // Where the last sitting stopped, so that the events below can be read
+    // as "since then" rather than as undated history.
+    if let Some(since) = &p.state.since_last_session {
+        out.push_str(&render_since(since));
     }
     out
 }

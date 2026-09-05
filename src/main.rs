@@ -16,6 +16,7 @@ mod paths;
 mod repo;
 mod retro;
 mod search;
+mod session;
 mod sync;
 mod week;
 
@@ -206,6 +207,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Open and close a sitting, so its events belong together
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
     /// Answer a question or sort a wish, so it leaves the packet
@@ -305,6 +311,35 @@ enum ProjectCommand {
 }
 
 #[derive(Subcommand)]
+enum SessionCommand {
+    /// Open a sitting; everything recorded until `end` belongs to it
+    Start {
+        /// Project name; the project of the working directory when omitted
+        project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close the sitting and say what it held
+    End {
+        /// Project name; the project of the working directory when omitted
+        project: Option<String>,
+        /// A title for the diary entry, if one is being written
+        #[arg(long, value_name = "TEXT")]
+        heading: Option<String>,
+        /// Append the entry to this diary file
+        #[arg(long, value_name = "FILE")]
+        diary: Option<PathBuf>,
+        /// Say nothing unless something is worth saying, for a hook
+        #[arg(long)]
+        remind: bool,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum VersionCommand {
     /// Aim a version at a week of the calendar
     Plan {
@@ -322,12 +357,37 @@ enum VersionCommand {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => return usage_error(err),
+    };
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Prints what clap wants to say, and chooses the exit code.
+///
+/// `--help` and `--version` are successes; a usage error is a failure. What
+/// matters is *which* failure: clap's own code is 2, and 2 is the code an
+/// assistant's Stop hook uses to refuse the stop and hold the turn open. A
+/// hook is a command line written once in a settings file and never seen
+/// again - a typo in it, or an older rigger on the PATH without the
+/// subcommand, would wedge every session it fired in. Found by installing
+/// the hook and running it: the rigger on PATH was a release behind, and
+/// `rigger session end --remind` exited 2.
+///
+/// So rigger never exits 2. A usage error is exit 1 like every other
+/// failure, and a hook that cannot be understood is simply ignored.
+fn usage_error(err: clap::Error) -> ExitCode {
+    let _ = err.print();
+    match err.use_stderr() {
+        true => ExitCode::FAILURE,
+        false => ExitCode::SUCCESS,
     }
 }
 
@@ -375,6 +435,16 @@ fn run(cli: Cli) -> Result<()> {
             record,
             json,
         } => show_retro(cycle, weeks, to.as_deref(), record, json),
+        Command::Session { command } => match command {
+            SessionCommand::Start { project, json } => session_start(project.as_deref(), json),
+            SessionCommand::End {
+                project,
+                heading,
+                diary,
+                remind,
+                json,
+            } => session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), remind, json),
+        },
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -424,6 +494,32 @@ fn open_project(db: &Db, name: &str) -> Result<db::Project> {
         Some(project) => Ok(project),
         None => bail!("no project named '{name}'; see `rigger project list`"),
     }
+}
+
+/// A project named outright, or the one the working directory sits in.
+///
+/// A hook has no project name to pass: the Stop hook of an assistant is
+/// handed a working directory and nothing else. But it runs *in* the
+/// project, and the record already knows every project by its path - so the
+/// directory is the name, and the hook needs to be told nothing.
+///
+/// Walks upwards, because a session ends wherever the last command left the
+/// shell, which may be a subdirectory of the checkout.
+fn project_here(db: &Db, name: Option<&str>) -> Result<db::Project> {
+    if let Some(name) = name {
+        return open_project(db, name);
+    }
+    let here = std::env::current_dir().context("cannot read the working directory")?;
+    let here = dunce::canonicalize(&here).unwrap_or(here);
+    for dir in here.ancestors() {
+        if let Some(project) = db.project_by_path(&dir.to_string_lossy())? {
+            return Ok(project);
+        }
+    }
+    bail!(
+        "no project recorded at {} or above it; name one, or add this directory with `rigger project add`",
+        here.display()
+    )
 }
 
 fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Result<()> {
@@ -1755,6 +1851,209 @@ Make one with: rigger project service line"
         _ => println!("Kept in the record under '{}'.", project.name),
     }
     Ok(())
+}
+
+/// Opens a sitting. Everything recorded until `end` belongs to it.
+fn session_start(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = project_here(&db, project)?;
+    let (session, change) = db.start_session(project.id, &db::now())?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "session": session, "already_open": change == db::Change::Unchanged }))?
+        );
+        return Ok(());
+    }
+    match change {
+        // Joining rather than splitting: an assistant that lost its place,
+        // or a hook that fired twice, should not orphan half a sitting.
+        db::Change::Unchanged => println!("A session on {} is already open, since {}.", project.name, session.started_at),
+        _ => println!("Session open on {}. Everything recorded now belongs to it.", project.name),
+    }
+    Ok(())
+}
+
+/// Closes the sitting and says what it held.
+///
+/// This is the end-of-session ritual, which has always been a list in a
+/// skill file that the assistant had to remember at exactly the moment it
+/// was running out of context. A ritual that depends on remembering is a
+/// ritual that stops happening.
+fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path>, remind: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    // A hook has no name to pass, so a failure to find one is not a failure
+    // worth reporting: it fires in every directory, most of which are not
+    // projects. Ending silently is the only behaviour that does not turn
+    // every unrelated session into an error message.
+    let project = match (project_here(&db, project), remind) {
+        (Ok(project), _) => project,
+        (Err(_), true) => return Ok(()),
+        (Err(e), false) => return Err(e),
+    };
+
+    let Some(open) = db.open_session(project.id)? else {
+        // A hook fires whether or not a session was opened, so having none
+        // is ordinary and not a failure.
+        if remind {
+            return Ok(());
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "session": serde_json::Value::Null }))?);
+            return Ok(());
+        }
+        println!("No session is open on {}.", project.name);
+        println!("Open one with: rigger session start {}", project.name);
+        return Ok(());
+    };
+
+    let at = db::now();
+    let events = db.session_events(open.id)?;
+    let shipped = db.shipped_between(project.id, &open.started_at, &at)?;
+    let closed = db.tasks_closed_between(project.id, &open.started_at, &at)?;
+    let next_step = db.latest_event_body(project.id, "next")?;
+    let ended = db::Session {
+        ended_at: Some(at.clone()),
+        ..open.clone()
+    };
+    let summary = session::summarise(&project.name, &ended, &events, shipped, closed, next_step);
+
+    db.end_session(open.id, &at)?;
+
+    let written = match diary {
+        Some(path) => Some(write_diary(path, &summary, heading)?),
+        None => None,
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session": summary,
+                "missing": summary.missing(),
+                "diary": written,
+            }))?
+        );
+        return Ok(());
+    }
+
+    // A hook speaks only when there is something to say. A reminder that
+    // fires on every stop is a reminder nobody reads.
+    if remind {
+        let missing = summary.missing();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        println!("Session on {} closed - {}:", project.name, plural(summary.recorded(), "event", "events"));
+        for item in &missing {
+            println!("  {item}");
+        }
+        return Ok(());
+    }
+
+    println!("Session on {} closed, open since {}.", project.name, open.started_at);
+    println!();
+    if summary.empty() {
+        println!("Nothing was recorded in it.");
+    } else {
+        if !summary.shipped.is_empty() {
+            println!("shipped {}", summary.shipped.join(", "));
+        }
+        let counted = [
+            ("decision", "decisions", summary.decisions.len()),
+            ("finding", "findings", summary.findings.len()),
+            ("pitfall", "pitfalls", summary.pitfalls.len()),
+            ("change", "changes", summary.changes.len()),
+            ("question", "questions", summary.questions.len()),
+        ];
+        let recorded: Vec<String> = counted.iter().filter(|(_, _, n)| *n > 0).map(|(one, many, n)| plural(*n, one, many)).collect();
+        if !recorded.is_empty() {
+            println!("recorded {}", recorded.join(", "));
+        }
+        if !summary.tasks_closed.is_empty() {
+            println!("closed {}", plural(summary.tasks_closed.len(), "task", "tasks"));
+        }
+    }
+    if let Some(next) = &summary.next_step {
+        println!("next: {}", first_line(next));
+    }
+
+    let missing = summary.missing();
+    if !missing.is_empty() {
+        println!();
+        println!("The ritual asks for:");
+        for item in &missing {
+            println!("  {item}");
+        }
+    }
+
+    match written {
+        Some(path) => println!(
+            "
+Diary entry appended to {path}"
+        ),
+        None => println!(
+            "
+Write it into a diary with: rigger session end {} --diary <file>",
+            project.name
+        ),
+    }
+    Ok(())
+}
+
+/// Appends the entry to a diary file, newest first.
+///
+/// Newest-first is how the hub's diary is written, so a new entry goes
+/// under the heading and above what came before rather than at the end.
+fn write_diary(path: &Path, summary: &session::Summary, heading: Option<&str>) -> Result<String> {
+    let day = summary.ended_at.split('T').next().unwrap_or_default().to_string();
+    let entry = session::diary_entry(summary, &day, heading);
+
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    };
+
+    // The preamble is whatever the file says before its first entry: a
+    // title, a note about the format, a rule. A new entry goes after it and
+    // above the entries, because that is where the newest one belongs.
+    let (preamble, entries) = match existing.find(
+        "
+## ",
+    ) {
+        Some(at) => existing.split_at(at + 1),
+        None => (existing.as_str(), ""),
+    };
+    let mut out = String::new();
+    if !preamble.trim().is_empty() {
+        out.push_str(preamble.trim_end());
+        out.push_str(
+            "
+
+",
+        );
+    }
+    out.push_str(entry.trim_end());
+    out.push_str(
+        "
+
+",
+    );
+    if !entries.trim().is_empty() {
+        out.push_str(entries.trim_start());
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    std::fs::write(path, out).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+/// The first line of a body, for a screen with room for one.
+fn first_line(text: &str) -> &str {
+    text.lines().find(|l| !l.trim().is_empty()).unwrap_or(text).trim()
 }
 
 fn doctor(json: bool) -> Result<()> {

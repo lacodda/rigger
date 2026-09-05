@@ -28,7 +28,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger week`](/rigger/reference/week/) | v0.11.0 | The Monday brief: focus, Friday, what waits |
 | [`rigger release-day`](/rigger/reference/release-day/) | v0.11.0 | The shopfront queue: what is out, what waits for Friday |
 | [`rigger retro`](/rigger/reference/retro/) | v0.12.0 | Planned against shipped, per cycle |
-| `rigger session` | planned v0.13.0 | Start and end a session; the end writes the journal |
+| [`rigger session`](/rigger/reference/session/) | v0.13.0 | Start and end a sitting; the end writes the journal |
 | `rigger export` | planned v0.14.0 | Generate the hub markdown from the database |
 | `rigger skill`, `rigger adopt` | planned v0.15.0 | Generate a thin project skill; record a whole directory of repositories |
 | `rigger profile`, `rigger task` | planned v0.17.0+ | Switch profiles; find, open and close tasks |
@@ -38,4 +38,4 @@ The command surface arrives one release at a time. Each release adds its command
 - `--version` and `--help` on the bare binary; `--help` on every command.
 - `RIGGER_DATA_DIR` overrides the data directory for every command.
 - `--json` prints the same facts as data, on the commands that show facts.
-- Exit status is `0` on success and `1` on any failure, with the reason on stderr prefixed `error:`.
+- Exit status is `0` on success and `1` on any failure, with the reason on stderr prefixed `error:`. Never `2`, including for a usage error: an assistant's `Stop` hook reads 2 as a refusal to stop, and a mistyped hook must be ignored rather than hold a session open.

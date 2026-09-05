@@ -299,6 +299,16 @@ struct VersionRow {
     source: Option<String>,
 }
 
+/// One sitting, and the events written while it was open.
+#[derive(Debug, Clone, Serialize)]
+pub struct Session {
+    pub id: i64,
+    pub project_id: i64,
+    pub started_at: String,
+    /// `None` while it is still open.
+    pub ended_at: Option<String>,
+}
+
 /// What git said about a project when it was last read.
 #[derive(Debug, Clone, Serialize)]
 pub struct Activity {
@@ -624,9 +634,14 @@ impl Db {
         if seen.is_some() {
             return Ok(Change::Unchanged);
         }
+        // Written under whatever session is open, which is what makes a
+        // session a container rather than a pair of timestamps. Nothing has
+        // to be told to do this: the assistant records as it always has, and
+        // the boundary is applied by the record.
+        let session = self.open_session(project_id)?.map(|s| s.id);
         self.conn.execute(
-            "INSERT INTO events (project_id, kind, body, author, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![project_id, kind, body, author, created_at],
+            "INSERT INTO events (project_id, session_id, kind, body, author, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![project_id, session, kind, body, author, created_at],
         )?;
         Ok(Change::Added)
     }
@@ -1281,6 +1296,121 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The session currently open on a project, if there is one.
+    pub fn open_session(&self, project_id: i64) -> Result<Option<Session>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, project_id, started_at, ended_at FROM sessions                  WHERE project_id = ?1 AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+                [project_id],
+                row_to_session,
+            )
+            .optional()?)
+    }
+
+    /// The most recently ended session, which is what "since last time"
+    /// means to the packet.
+    pub fn last_ended_session(&self, project_id: i64) -> Result<Option<Session>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, project_id, started_at, ended_at FROM sessions                  WHERE project_id = ?1 AND ended_at IS NOT NULL ORDER BY ended_at DESC, id DESC LIMIT 1",
+                [project_id],
+                row_to_session,
+            )
+            .optional()?)
+    }
+
+    /// Opens a session, or returns the one already open.
+    ///
+    /// Starting twice is not an error: an assistant that lost its place, or
+    /// a hook that fired again, should join the sitting rather than split
+    /// it in two and orphan half its events.
+    pub fn start_session(&self, project_id: i64, at: &str) -> Result<(Session, Change)> {
+        if let Some(open) = self.open_session(project_id)? {
+            return Ok((open, Change::Unchanged));
+        }
+        self.conn
+            .execute("INSERT INTO sessions (project_id, started_at) VALUES (?1, ?2)", params![project_id, at])?;
+        let id = self.conn.last_insert_rowid();
+        Ok((
+            Session {
+                id,
+                project_id,
+                started_at: at.to_string(),
+                ended_at: None,
+            },
+            Change::Added,
+        ))
+    }
+
+    /// Closes the open session.
+    pub fn end_session(&self, session_id: i64, at: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE sessions SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL", params![session_id, at])?;
+        Ok(())
+    }
+
+    /// The events written while one session was open, oldest first.
+    pub fn session_events(&self, session_id: i64) -> Result<Vec<RecentEvent>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL              FROM events WHERE session_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([session_id], |r| {
+            Ok(RecentEvent {
+                kind: r.get(0)?,
+                date: r.get(1)?,
+                body: r.get(2)?,
+                from_git: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Versions whose tag landed between two moments.
+    pub fn shipped_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM versions              WHERE project_id = ?1 AND shipped_ts IS NOT NULL AND shipped_ts > ?2 AND shipped_ts <= ?3")?;
+        let rows = stmt.query_map(params![project_id, after, until], |r| r.get::<_, String>(0))?;
+        let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+        names.sort_by_key(|n| version_order(n));
+        Ok(names)
+    }
+
+    /// Tasks closed between two moments.
+    pub fn tasks_closed_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT title FROM tasks              WHERE project_id = ?1 AND closed_at IS NOT NULL AND closed_at > ?2 AND closed_at <= ?3 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![project_id, after, until], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Events recorded after a moment, for the packet's "since last time".
+    ///
+    /// The boundary includes its own second. Timestamps are kept to the
+    /// second, so an event written in the same second as the session closed
+    /// is not strictly after it - and with a strict `>` the first thing
+    /// recorded after a sitting could vanish from "since last time", which
+    /// is precisely the thing the line exists to report. A session's own
+    /// events are excluded by their `session_id`, not by the clock, so
+    /// including the boundary cannot pull them back in.
+    pub fn events_since(&self, project_id: i64, after: &str) -> Result<Vec<RecentEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL              FROM events WHERE project_id = ?1 AND created_at >= ?2 AND session_id IS NULL              AND kind NOT IN ('wish', 'next') ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id, after], |r| {
+            Ok(RecentEvent {
+                kind: r.get(0)?,
+                date: r.get(1)?,
+                body: r.get(2)?,
+                from_git: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// When anything was last recorded about a project, of any kind.
     pub fn last_event_at(&self, project_id: i64) -> Result<Option<String>> {
         Ok(self
@@ -1315,6 +1445,15 @@ impl Db {
             events: count("events")?,
         })
     }
+}
+
+fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        started_at: row.get(2)?,
+        ended_at: row.get(3)?,
+    })
 }
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
