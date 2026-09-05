@@ -29,7 +29,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger release-day`](/rigger/reference/release-day/) | v0.11.0 | The shopfront queue: what is out, what waits for Friday |
 | [`rigger retro`](/rigger/reference/retro/) | v0.12.0 | Planned against shipped, per cycle |
 | [`rigger session`](/rigger/reference/session/) | v0.13.0 | Start and end a sitting; the end writes the journal |
-| `rigger export` | planned v0.14.0 | Generate the hub markdown from the database |
+| [`rigger export`](/rigger/reference/export/) | v0.14.0 | Write a hub back out of the record |
 | `rigger skill`, `rigger adopt` | planned v0.15.0 | Generate a thin project skill; record a whole directory of repositories |
 | `rigger profile`, `rigger task` | planned v0.17.0+ | Switch profiles; find, open and close tasks |
 

@@ -54,7 +54,27 @@ Reported, never corrected. A missing tag is not proof a release did not happen -
 
 A project that has never been synced is named rather than judged: without a sync there is no way to tell a claim from a fact, and `doctor` says which projects it cannot speak for.
 
-Later releases add another section here: hubs edited by hand after export.
+## Hubs (`--hubs`)
+
+A generated file that somebody has edited has stopped being a view of the record, and the next [`export`](/rigger/reference/export/) would overwrite the edit without saying so. `--hubs` names those files. It is off by default because it reads every hub from disk.
+
+```console
+$ rigger doctor --hubs
+
+hubs the record cannot vouch for (1):
+  sample       План.md        edited since it was generated
+  edited: `rigger import` takes the edit into the record; `rigger export` discards it
+```
+
+Both ways out are named, because either can be the right one: the edit was worth making, or it was not.
+
+A project whose hub the record has never seen is named too, rather than passed over:
+
+```console
+  gamma        -              no hub recorded; import or export one
+```
+
+That is not pedantry. A check that skips what it cannot find prints the same clean line as a check that looked and found nothing wrong - and the record learns where a hub is only when one is imported or exported, so before that it genuinely cannot speak for it.
 
 ## What it leaves out
 
