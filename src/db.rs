@@ -238,6 +238,15 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE sessions ADD COLUMN rank INTEGER;
     ",
+    // Where a project's hub is. `doctor --hubs` used to guess it beside the
+    // repository, and the hubs of this line live in a notes vault instead -
+    // so the check found no files to compare and reported that every
+    // generated file matched the record, on a hub it had never read.
+    // Recorded when a hub is imported or exported, because that is when the
+    // directory is actually in hand.
+    "
+    ALTER TABLE projects ADD COLUMN hub_path TEXT;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -261,6 +270,10 @@ pub struct Project {
     /// What kind of thing this is: a repository, or a place the record
     /// keeps for itself.
     pub kind: Kind,
+    /// Where its hub is, once a hub has been imported or exported. Not
+    /// guessed: the hubs of this line live in a notes vault, nowhere near
+    /// the repositories they describe.
+    pub hub_path: Option<String>,
 }
 
 /// What a project is, as far as the parts of rigger that read git care.
@@ -560,6 +573,7 @@ impl Db {
             created_at,
             tier: None,
             rhythm_weeks: None,
+            hub_path: None,
             kind,
         })
     }
@@ -567,7 +581,7 @@ impl Db {
     pub fn projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects ORDER BY name")?;
+            .prepare("SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects ORDER BY name")?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -576,7 +590,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects WHERE name = ?1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects WHERE name = ?1",
                 [name],
                 row_to_project,
             )
@@ -784,7 +798,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects                  WHERE kind = 'service' ORDER BY id LIMIT 1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects                  WHERE kind = 'service' ORDER BY id LIMIT 1",
                 [],
                 row_to_project,
             )
@@ -795,11 +809,22 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind FROM projects WHERE path = ?1",
+                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects WHERE path = ?1",
                 [path],
                 row_to_project,
             )
             .optional()?)
+    }
+
+    /// Remembers where a project's hub is, so a later check can find it.
+    ///
+    /// The hub of a project need not sit beside its repository - every hub
+    /// of this line lives in a notes vault - and a check that guesses looks
+    /// at nothing and says everything matches.
+    pub fn set_hub_path(&self, project_id: i64, dir: &std::path::Path) -> Result<()> {
+        self.conn
+            .execute("UPDATE projects SET hub_path = ?2 WHERE id = ?1", params![project_id, dir.to_string_lossy()])?;
+        Ok(())
     }
 
     /// Records a stage, or updates the one already recorded under that
@@ -1862,6 +1887,7 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         tier: row.get(5)?,
         rhythm_weeks: row.get(6)?,
         kind: row.get::<_, String>(7)?.into(),
+        hub_path: row.get(8)?,
     })
 }
 

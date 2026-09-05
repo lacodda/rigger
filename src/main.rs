@@ -487,6 +487,9 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
         bail!("no project named '{project}'; see `rigger project list`");
     };
     let hub = hub::read(hub_dir)?;
+    // Where the hub is, so a later check can find it. Not guessed from the
+    // repository path: the hubs of this line live in a notes vault.
+    db.set_hub_path(project.id, hub_dir)?;
     let report = import::import(&db, project.id, &hub)?;
 
     if json {
@@ -2102,6 +2105,9 @@ fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, json: boo
     for name in export::GENERATED {
         files.push((name, generate(&db, &project, name)?));
     }
+    if !check {
+        db.set_hub_path(project.id, hub_dir)?;
+    }
 
     let mut written = Vec::new();
     for (name, text) in &files {
@@ -2187,9 +2193,18 @@ fn generate(db: &Db, project: &db::Project, name: &str) -> Result<String> {
 fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
     let mut out = Vec::new();
     for project in db.projects()? {
-        let dir = std::path::Path::new(&project.path);
-        let hub = dir.join("hub");
-        let dir = if hub.is_dir() { hub } else { dir.to_path_buf() };
+        // Where the record says the hub is. It used to be guessed beside
+        // the repository, and every hub of this line lives in a notes vault
+        // instead - so the check read no files at all and reported that
+        // every generated file matched, on hubs it had never opened.
+        let Some(dir) = project.hub_path.as_deref().map(std::path::PathBuf::from) else {
+            out.push((project.name.clone(), String::from("-"), "no hub recorded; import or export one"));
+            continue;
+        };
+        if !dir.is_dir() {
+            out.push((project.name.clone(), String::from("-"), "the hub is not where the record says"));
+            continue;
+        }
         for name in export::GENERATED {
             let path = dir.join(name);
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -2306,11 +2321,15 @@ closed in the plan, no tag in git ({}):",
         if drift.is_empty() {
             println!("hubs: every generated file matches the record");
         } else {
-            println!("edited since they were generated ({}):", drift.len());
+            println!("hubs the record cannot vouch for ({}):", drift.len());
             for (project, file, why) in &drift {
                 println!("  {project:<12} {file:<14} {why}");
             }
-            println!("  `rigger import` takes the edit into the record; `rigger export` discards it");
+            // The advice only fits an edit; a hub the record has never
+            // seen needs the other sentence.
+            if drift.iter().any(|(_, file, _)| file != "-") {
+                println!("  edited: `rigger import` takes the edit into the record; `rigger export` discards it");
+            }
         }
     }
     Ok(())

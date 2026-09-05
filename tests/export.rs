@@ -228,6 +228,32 @@ fn a_changelog_keeps_the_order_its_hub_had() {
     assert!(at("v0.2.1") < at("v0.1.0"), "and both stay above the older one\n{text}");
 }
 
+/// A check with nothing to check says so. `doctor --hubs` used to look for
+/// a hub beside the repository, and every hub of this line lives in a notes
+/// vault instead - so it read no files at all and reported that every
+/// generated file matched the record, which is the answer it gives when
+/// everything is well.
+#[test]
+fn doctor_says_when_it_does_not_know_where_a_hub_is() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let root = data.path().join("gamma");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "--quiet", "--initial-branch", "main"]);
+    std::fs::write(root.join("README.md"), "gamma").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "chore: start"]);
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+
+    // A project whose hub has never been imported or exported.
+    let said = output(data.path(), &["doctor", "--hubs"]);
+    assert!(
+        said.contains("no hub recorded"),
+        "a hub it has never seen is not a clean bill of health\n{said}"
+    );
+    assert!(!said.contains("every generated file matches"), "{said}");
+}
+
 /// The circle: reading back what was written gives the record it came from.
 /// Every counter zero is the claim - anything that changed would be a fact
 /// the export invented or lost.
@@ -347,7 +373,8 @@ fn doctor_names_a_generated_file_that_was_edited() {
     std::fs::write(hub.join("План.md"), format!("{text}\n\nдописано руками\n")).unwrap();
 
     let drifted = output(data.path(), &["doctor", "--hubs"]);
-    assert!(drifted.contains("edited since they were generated"), "{drifted}");
+    assert!(drifted.contains("cannot vouch for"), "{drifted}");
+    assert!(drifted.contains("edited since it was generated"), "{drifted}");
     assert!(drifted.contains("План.md"), "{drifted}");
     // Named with what to do about it, in both directions.
     assert!(drifted.contains("rigger import"), "{drifted}");
