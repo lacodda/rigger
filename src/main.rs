@@ -16,6 +16,7 @@ mod paths;
 mod repo;
 mod search;
 mod sync;
+mod week;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -161,6 +162,24 @@ enum Command {
     },
     /// This week's focus: what is aimed at it, and what is already late
     Next {
+        /// Read a week other than the current one
+        #[arg(long, value_name = "WEEK")]
+        week: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The Monday brief: the focus, what ships on Friday, what waits on you
+    Week {
+        /// Read a week other than the current one
+        #[arg(long, value_name = "WEEK")]
+        week: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The shopfront queue: what has gone out this week, and what waits for Friday
+    ReleaseDay {
         /// Read a week other than the current one
         #[arg(long, value_name = "WEEK")]
         week: Option<String>,
@@ -322,6 +341,8 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Calendar { weeks, from, json } => show_calendar(weeks, from.as_deref(), json),
         Command::Next { week, json } => show_next(week.as_deref(), json),
+        Command::Week { week, json } => show_week(week.as_deref(), json),
+        Command::ReleaseDay { week, json } => show_release_day(week.as_deref(), json),
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -672,6 +693,11 @@ fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
         None => db.projects()?,
     };
 
+    // The tier signals are read for the current week, whatever window the
+    // digest itself covers: a promise broken is broken now, and a shorter
+    // `--since` should not hide it.
+    let signals = week_facts(&db, calendar::Week::current())?.signals;
+
     let mut reports = Vec::new();
     for project in &projects {
         let facts = db.digest(project.id, &from)?;
@@ -681,14 +707,15 @@ fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
             None => s.version,
         });
         let quiet = db.last_event_at(project.id)?.as_deref().and_then(days_since_utc);
-        let lines = owner::digest_lines(&facts, next.as_deref(), quiet);
-        reports.push((project.name.clone(), facts, next, lines));
+        let signal = signals.iter().find(|s| s.project == project.name).map(signal_line);
+        let lines = owner::digest_lines(&facts, next.as_deref(), quiet, signal.as_deref());
+        reports.push((project.name.clone(), facts, next, lines, signal));
     }
 
     if json {
         let payload: Vec<_> = reports
             .iter()
-            .map(|(name, facts, next, lines)| serde_json::json!({ "project": name, "facts": facts, "next": next, "lines": lines }))
+            .map(|(name, facts, next, lines, signal)| serde_json::json!({ "project": name, "facts": facts, "next": next, "lines": lines, "signal": signal }))
             .collect();
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "since": from, "projects": payload }))?);
         return Ok(());
@@ -701,16 +728,20 @@ fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
 
     // A project with nothing but its next stage to report has not moved:
     // naming it in one line beats five lines that say nothing happened.
+    //
+    // A project raising a signal is the exception, and the important one: a
+    // carrying product that has stopped releasing is quiet by definition,
+    // and folding it into the quiet line is exactly how it stays unnoticed.
     let (moved, still): (Vec<_>, Vec<_>) = reports
         .iter()
-        .partition(|(_, facts, _, _)| !facts.shipped.is_empty() || facts.decisions + facts.findings + facts.changes > 0);
+        .partition(|(_, facts, _, _, signal)| signal.is_some() || !facts.shipped.is_empty() || facts.decisions + facts.findings + facts.changes > 0);
 
     let listed = if project.is_some() {
         reports.iter().collect::<Vec<_>>()
     } else {
         moved.clone()
     };
-    for (name, _, _, lines) in &listed {
+    for (name, _, _, lines, _) in &listed {
         println!("{name}");
         for line in lines.iter() {
             println!("  {line}");
@@ -720,7 +751,7 @@ fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
         println!("Nothing moved.");
     }
     if project.is_none() && !still.is_empty() {
-        let names: Vec<&str> = still.iter().map(|(name, _, _, _)| name.as_str()).collect();
+        let names: Vec<&str> = still.iter().map(|(name, _, _, _, _)| name.as_str()).collect();
         println!(
             "
 Quiet: {}",
@@ -1045,18 +1076,27 @@ fn weeks_late(weeks: i64) -> String {
     }
 }
 
-/// The focus of a week: what is aimed at it, and what should have shipped
-/// before it.
-fn show_next(week: Option<&str>, json: bool) -> Result<()> {
-    let db = Db::open(&paths::db_path()?)?;
-    let now = match week {
-        Some(text) => calendar::Week::parse(text)?,
-        None => calendar::Week::current(),
-    };
+/// Everything the week screens read, gathered once.
+///
+/// `next`, `week` and `release-day` are three views of one week, and the
+/// awkward part is not any of the three but keeping them agreed: a version
+/// counted as the focus by one and as shipped by another would make the
+/// screens argue with each other in front of the owner.
+struct WeekFacts {
+    focus: Vec<calendar::Focus>,
+    overdue: Vec<calendar::Focus>,
+    lapsed: Vec<calendar::Overdue>,
+    signals: Vec<week::Raised>,
+    release_day: week::ReleaseDay,
+}
 
+fn week_facts(db: &Db, now: calendar::Week) -> Result<WeekFacts> {
     let mut focus = Vec::new();
     let mut overdue = Vec::new();
     let mut rhythms = Vec::new();
+    let mut standings = Vec::new();
+    let mut all_versions = Vec::new();
+
     for project in db.projects()? {
         let versions = db.calendar_versions(project.id, &project.name)?;
         let tier = project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok());
@@ -1083,22 +1123,74 @@ fn show_next(week: Option<&str>, json: bool) -> Result<()> {
             }
         }
 
+        let last_shipped = versions
+            .iter()
+            .filter_map(|v| v.shipped.map(|week| (db::version_order(&v.version), week)))
+            .max()
+            .map(|(_, week)| week);
+
         // The rhythm check needs a tier and a number to check against; a
         // project with neither is out of the rotation by omission.
         if let (Some(tier), Some(rhythm)) = (tier, project.rhythm_weeks)
             && tier != calendar::Tier::Out
         {
-            let last = versions
-                .iter()
-                .filter_map(|v| v.shipped.map(|week| (db::version_order(&v.version), week)))
-                .max()
-                .map(|(_, week)| week);
-            rhythms.push((project.name.clone(), tier, rhythm, last));
+            rhythms.push((project.name.clone(), tier, rhythm, last_shipped));
         }
+
+        if let Some(tier) = tier {
+            // A turn in the focus leaves a mark whether or not it ends in a
+            // tag: the last commit and the last note both count, because a
+            // week spent on a product that shipped nothing was still spent.
+            let touched = [db.last_event_at(project.id)?, db.activity(project.id)?.and_then(|a| a.last_commit_at)]
+                .into_iter()
+                .flatten()
+                .filter_map(|stamp| calendar::Week::of_recorded(&stamp))
+                .max();
+            standings.push(week::Standing {
+                project: project.name.clone(),
+                tier,
+                rhythm_weeks: project.rhythm_weeks,
+                last_shipped,
+                last_touched: touched,
+                has_first_release: last_shipped.is_some(),
+            });
+        }
+
+        all_versions.extend(versions);
     }
+
     focus.sort_by(|a, b| a.tier.cmp(&b.tier).then_with(|| a.project.cmp(&b.project)));
     overdue.sort_by(|a, b| b.overdue_weeks.cmp(&a.overdue_weeks).then_with(|| a.project.cmp(&b.project)));
-    let lapsed = calendar::lapsed(&rhythms, now);
+
+    Ok(WeekFacts {
+        focus,
+        overdue,
+        lapsed: calendar::lapsed(&rhythms, now),
+        signals: week::signals(&standings, now),
+        release_day: week::release_day(now, &all_versions),
+    })
+}
+
+/// Reads a week from the flag, or takes the current one.
+fn week_or_now(week: Option<&str>) -> Result<calendar::Week> {
+    match week {
+        Some(text) => calendar::Week::parse(text),
+        None => Ok(calendar::Week::current()),
+    }
+}
+
+/// The focus of a week: what is aimed at it, and what should have shipped
+/// before it.
+fn show_next(week_arg: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let now = week_or_now(week_arg)?;
+    let WeekFacts {
+        focus,
+        overdue,
+        lapsed,
+        signals,
+        ..
+    } = week_facts(&db, now)?;
 
     if json {
         println!(
@@ -1109,6 +1201,7 @@ fn show_next(week: Option<&str>, json: bool) -> Result<()> {
                 "focus": focus,
                 "overdue": overdue,
                 "lapsed": lapsed,
+                "signals": signals,
             }))?
         );
         return Ok(());
@@ -1159,6 +1252,220 @@ fn show_next(week: Option<&str>, json: bool) -> Result<()> {
                 plural(item.weeks.max(0) as usize, "week", "weeks"),
                 plural(item.rhythm_weeks as usize, "week", "weeks")
             );
+        }
+    }
+
+    print_signals(&signals);
+    Ok(())
+}
+
+/// The minimums each tier promised, and which of them are being broken.
+///
+/// Separate from the rhythm lapse above on purpose: a rhythm is a pace and
+/// this is a floor. A carrying product is allowed to miss one cycle, so the
+/// lapse fires first and the signal only when the allowance is spent.
+/// One signal as a line of prose, for a screen that has room for one.
+fn signal_line(item: &week::Raised) -> String {
+    let weeks = item.weeks.map(|w| plural(w.max(0) as usize, "week", "weeks")).unwrap_or_default();
+    match item.signal {
+        week::Signal::MissedCycle => format!("tier {} asks for more: more than one cycle missed - {weeks} without a release", item.tier),
+        week::Signal::WithoutFocus => format!("tier {} asks for more: no turn in the focus for {weeks}", item.tier),
+        week::Signal::SecondStart => match item.alongside.as_deref() {
+            Some(first) => format!("tier {} asks for more: started before {first} shipped anything", item.tier),
+            None => format!("tier {} asks for more: started out of turn", item.tier),
+        },
+    }
+}
+
+fn print_signals(signals: &[week::Raised]) {
+    if signals.is_empty() {
+        return;
+    }
+    println!();
+    println!("Their tier asks for more:");
+    for item in signals {
+        // Worded once, in `signal_line`, and read here with the heading's
+        // own phrase removed. The calendar legend taught this at v0.10.0:
+        // two places spelling one fact drift, and the test that compared
+        // them is what found it.
+        let said = signal_line(item).replacen(&format!("tier {} asks for more: ", item.tier), "", 1);
+        println!("{} [{}]  {said}", item.project, item.tier);
+    }
+}
+
+/// The Monday brief: one screen the week opens on.
+///
+/// The three things it answers are the three the owner otherwise asks by
+/// hand on a Monday morning, from three different places: what am I meant
+/// to be working on, what goes out on Friday, and what is waiting on me.
+/// None of them is new - the brief is that they arrive together, before the
+/// week is spent rather than after.
+fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let now = week_or_now(week_arg)?;
+    let facts = week_facts(&db, now)?;
+    let waiting = db.open_questions()?;
+    let shared = owner::shared_subjects(&waiting);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "week": now,
+                "monday": now.monday().to_string(),
+                "friday": now.friday().to_string(),
+                "focus": facts.focus,
+                "overdue": facts.overdue,
+                "shipping": facts.release_day.queued,
+                "shipped": facts.release_day.shipped,
+                "waiting": waiting,
+                "shared": shared,
+                "lapsed": facts.lapsed,
+                "signals": facts.signals,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("{now} — {} to {}", now.monday(), now.friday());
+    println!();
+
+    println!("Focus");
+    if facts.focus.is_empty() {
+        println!("  nothing is aimed at this week");
+    } else {
+        for item in &facts.focus {
+            let tier = item.tier.map(|t| format!(" [{t}]")).unwrap_or_default();
+            let title = item.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default();
+            println!("  {}{tier}  {}{title}", item.project, item.version);
+        }
+    }
+
+    println!();
+    println!("Ships on {}", now.friday());
+    if facts.release_day.queued.is_empty() && facts.release_day.shipped.is_empty() {
+        println!("  nothing is queued");
+    } else {
+        for item in &facts.release_day.queued {
+            let title = item.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default();
+            println!("  {}  {}{title}", item.project, item.version);
+        }
+        // What has already gone out is part of the same answer: the week has
+        // one slot on the shopfront, and a week that has spent it has
+        // nothing left to ship however full the queue behind it looks.
+        let out = facts.release_day.shipped.len();
+        if out > 0 {
+            let over = facts.release_day.over_the_slot();
+            let spent = if over > 0 {
+                format!("  {} already out — {} past this week's one slot", plural(out, "release", "releases"), over)
+            } else {
+                format!("  {} already out — this week's slot is spent", plural(out, "release", "releases"))
+            };
+            println!("{spent}");
+            println!("  see the queue with: rigger release-day");
+        }
+    }
+
+    println!();
+    println!("Waiting on you");
+    if waiting.is_empty() {
+        println!("  nothing");
+    } else {
+        let projects: std::collections::BTreeSet<&str> = waiting.iter().map(|q| q.project.as_str()).collect();
+        println!(
+            "  {} in {}",
+            plural(waiting.len(), "question", "questions"),
+            plural(projects.len(), "project", "projects")
+        );
+        // The groups are what makes the queue smaller than it looks, so they
+        // are the part worth naming on a screen that is meant to be short.
+        for group in shared.iter().take(3) {
+            println!("  {} — {}", group.subject, group.projects.join(", "));
+        }
+        println!("  see them with: rigger inbox");
+    }
+
+    if !facts.overdue.is_empty() {
+        println!();
+        println!("Past their week:");
+        for item in &facts.overdue {
+            println!("  {}  {} — was due {}", item.project, item.version, item.planned);
+        }
+    }
+
+    print_signals(&facts.signals);
+    Ok(())
+}
+
+/// The shopfront queue: what a week has already put out, and what is due.
+///
+/// The rule this reads against is the one the written calendar set for the
+/// outside view: one release a week, on a Friday, and a version ready on a
+/// Tuesday waits rather than going out on top of the last one. The reason
+/// is not tidiness - two releases in a day read as one burst to anyone
+/// watching, and two in different weeks read as a rhythm. The trace is what
+/// is meant to be even, not the work.
+fn show_release_day(week_arg: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let now = week_or_now(week_arg)?;
+    let day = week_facts(&db, now)?.release_day;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "week": day.week,
+                "friday": day.friday,
+                "shipped": day.shipped,
+                "queued": day.queued,
+                "early": day.early(),
+                "over_the_slot": day.over_the_slot(),
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("{now} — releases on {}", day.friday);
+    println!();
+
+    if day.queued.is_empty() {
+        println!("Nothing is waiting for Friday.");
+    } else {
+        println!("Waiting for Friday:");
+        for item in &day.queued {
+            let title = item.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default();
+            println!("  {}  {}{title}", item.project, item.version);
+        }
+    }
+
+    // Folded by day, because the day is what the rule is about and because
+    // a real week of this line holds ninety-four releases: a line each puts
+    // the two numbers that answer the question below the fold, where the
+    // calendar grid learnt the same lesson at v0.10.0.
+    let days = day.days();
+    if !days.is_empty() {
+        println!();
+        println!("Already out this week:");
+        for entry in &days {
+            let mark = if entry.on_release_day { "Friday" } else { "early" };
+            let named: Vec<String> = entry.projects.iter().map(|p| format!("{} {}", p.project, p.summary())).collect();
+            println!("  {}  {:<6}  {:>2}  {}", entry.day, mark, entry.releases, named.join(", "));
+        }
+    }
+
+    // The two numbers say which half of the rule is being broken: going out
+    // before Friday, and going out more than once in a week. They are said
+    // as counts rather than as complaints - the record reports, and what to
+    // do about it is the owner's.
+    let early = day.early();
+    let over = day.over_the_slot();
+    if early > 0 || over > 0 {
+        println!();
+        if over > 0 {
+            println!("{} past the one release this week has room for", plural(over, "release", "releases"));
+        }
+        if early > 0 {
+            println!("{} went out before Friday", plural(early, "release", "releases"));
         }
     }
     Ok(())

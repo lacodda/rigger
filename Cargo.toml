@@ -1,6 +1,6 @@
 [package]
 name = "rigger"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.88"
 description = "One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant"

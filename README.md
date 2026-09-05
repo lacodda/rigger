@@ -153,7 +153,7 @@ A project is named after its directory - the name you call it by, not the one it
 
 ## Status
 
-v0.10.0 puts the release calendar in the database. A project gets a tier and a rhythm, a version gets the week it is aimed at, and `calendar` lays the two against the tags: what shipped on time, what slipped and by how far, what is past its week with no tag at all. `next` reads one week in full, and names the projects that have quietly stopped releasing at the pace their tier asks. Before it: the database, `import`, the context packet, the `mcp` server, facts from git, a chronicle that writes itself, search, and the owner's inbox and digest. The road to 1.0 is twenty-two small releases in seven blocks:
+v0.11.0 makes the week a screen. `week` is the Monday brief - the focus, what ships on Friday, and what waits on you, together rather than assembled by hand. `release-day` reads the shopfront rule the line set for itself: one release a week, on a Friday, and a version ready on a Tuesday waits its turn. It says how far past that a week has gone, folding a busy one into a line a day. And each tier's promise now has a check: a carrying product that missed more than one cycle, a growing one without a turn in six weeks, a second declared product started before the first shipped. Before it: the database, `import`, the context packet, the `mcp` server, facts from git, a chronicle that writes itself, search, the owner's inbox and digest, and the release calendar. The road to 1.0 is twenty-two small releases in seven blocks:
 
 | Block | Versions | What it delivers |
 | --- | --- | --- |

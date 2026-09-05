@@ -141,8 +141,15 @@ pub fn stage_name(stage: &str) -> String {
 /// Five is the whole point: the owner reads this across a line of projects,
 /// and a paragraph each would be the hub all over again. What shipped, what
 /// was decided, what was learnt, what waits, what is next.
-pub fn digest_lines(facts: &DigestFacts, next_stage: Option<&str>, quiet_days: Option<i64>) -> Vec<String> {
+pub fn digest_lines(facts: &DigestFacts, next_stage: Option<&str>, quiet_days: Option<i64>, signal: Option<&str>) -> Vec<String> {
     let mut lines = Vec::new();
+
+    // The signal goes first because it is the one line here the owner has to
+    // act on: everything else is a report of what happened, and this is a
+    // promise being broken while nothing happens.
+    if let Some(signal) = signal {
+        lines.push(signal.to_string());
+    }
 
     if !facts.shipped.is_empty() {
         lines.push(match facts.shipped.len() {
@@ -183,6 +190,8 @@ pub fn digest_lines(facts: &DigestFacts, next_stage: Option<&str>, quiet_days: O
     if lines.is_empty()
         && let Some(days) = quiet_days
     {
+        // Reached only when nothing else had anything to say, signal
+        // included - a project raising one is never merely quiet.
         lines.push(match days {
             0 => "nothing recorded, though something happened today".to_string(),
             1 => "nothing this week; last touched yesterday".to_string(),
@@ -284,7 +293,7 @@ mod tests {
         // The threshold is the product: a paragraph each would be the hub
         // all over again, which is what the owner stopped reading.
         let busy = facts(&["v0.6.0", "v0.7.0", "v0.8.0"], 12, 9, 40, 3);
-        let lines = digest_lines(&busy, Some("v0.9.0 · Inbox"), Some(0));
+        let lines = digest_lines(&busy, Some("v0.9.0 · Inbox"), Some(0), None);
         assert!(lines.len() <= 5, "{lines:#?}");
         assert!(lines.iter().any(|l| l.contains("3 releases")), "{lines:#?}");
         assert!(lines.iter().any(|l| l.contains("waiting on you: 3 questions")), "{lines:#?}");
@@ -304,7 +313,7 @@ mod tests {
 
     #[test]
     fn a_single_release_is_named_rather_than_counted() {
-        let lines = digest_lines(&facts(&["v1.0.0"], 0, 0, 0, 0), None, Some(0));
+        let lines = digest_lines(&facts(&["v1.0.0"], 0, 0, 0, 0), None, Some(0), None);
         assert_eq!(lines[0], "shipped v1.0.0");
     }
 
@@ -312,14 +321,42 @@ mod tests {
     fn silence_is_reported_as_a_fact() {
         // A project nobody has touched in a fortnight is not the same as one
         // shipped yesterday, and an empty digest would read the same for both.
-        let lines = digest_lines(&facts(&[], 0, 0, 0, 0), None, Some(14));
+        let lines = digest_lines(&facts(&[], 0, 0, 0, 0), None, Some(14), None);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("14 days ago"), "{lines:?}");
     }
 
+    /// A signal is not another thing that happened - it is a promise being
+    /// broken while nothing happens, so it goes above the report and it
+    /// stops the project reading as merely quiet.
+    #[test]
+    fn a_signal_leads_the_digest_and_displaces_the_silence() {
+        let signal = "tier A asks for more: 7 weeks without a release";
+        let lines = digest_lines(&facts(&[], 0, 0, 0, 0), None, Some(30), Some(signal));
+        assert_eq!(lines[0], signal);
+        // The silence line only speaks when nothing else did, and a signal
+        // is something: "nothing this week" beside a broken promise reads
+        // as though the promise were part of the nothing.
+        assert!(!lines.iter().any(|l| l.contains("nothing this week")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_digest_with_a_signal_is_still_five_lines_at_most() {
+        // Every other line present at once, and a signal on top: the cap is
+        // the product, and a sixth line is the hub creeping back in.
+        let busy = facts(&["v0.6.0", "v0.7.0"], 12, 9, 40, 3);
+        let lines = digest_lines(
+            &busy,
+            Some("v0.9.0 · Inbox"),
+            Some(0),
+            Some("tier B asks for more: no turn in the focus for 7 weeks"),
+        );
+        assert!(lines.len() <= 5, "{} lines: {lines:#?}", lines.len());
+    }
+
     #[test]
     fn counts_agree_with_their_nouns() {
-        let lines = digest_lines(&facts(&[], 1, 0, 1, 1), None, None);
+        let lines = digest_lines(&facts(&[], 1, 0, 1, 1), None, None, None);
         assert!(lines.iter().any(|l| l.contains("1 decision, 1 change")), "{lines:?}");
         assert!(lines.iter().any(|l| l.contains("1 question")), "{lines:?}");
     }

@@ -349,9 +349,14 @@ fn a_project_behind_its_rhythm_is_named() {
 
     let out = output(data.path(), &["next", "--week", "2026-W44"]);
     assert!(out.contains("Behind their rhythm"), "{out}");
+    // Read the one section, not the whole screen: `next` names a project
+    // again further down when its tier's own minimum is broken, and
+    // counting across the output would call that a second lapse.
     let behind: Vec<&str> = out
         .lines()
         .skip_while(|l| !l.contains("Behind their rhythm"))
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
         .filter(|l| l.contains("alpha") || l.contains("beta"))
         .collect();
     assert_eq!(behind.len(), 1, "only alpha is behind: {out}");
