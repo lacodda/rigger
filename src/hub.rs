@@ -449,7 +449,14 @@ fn settle_entry(entry: &mut DiaryEntry, body: &str) {
             let after = &body[body.rfind("---").map(|at| at + 3).unwrap_or(body.len())..];
             entry.gap_after = after.matches('\n').count().saturating_sub(1);
         }
-        None => entry.body = trimmed.to_string(),
+        None => {
+            entry.body = trimmed.to_string();
+            // A diary that separates its entries with blank lines and no
+            // rule chooses how many just as one with a rule does: this
+            // line has a diary that leaves two.
+            let at = body.find(trimmed).unwrap_or(0) + trimmed.len();
+            entry.gap_after = body[at..].matches('\n').count().saturating_sub(1);
+        }
     }
 }
 

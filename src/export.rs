@@ -129,7 +129,13 @@ pub fn diary(prose: &[Prose], entries: &[DiaryEntry]) -> String {
         };
         if !entry.body.trim().is_empty() {
             out.push_str(entry.body.trim());
-            out.push_str("\n\n");
+            // When no rule follows, the blank lines after the entry are
+            // the separator, and a diary chooses how many: this line has
+            // one that leaves two where it writes no rule at all.
+            out.push('\n');
+            for _ in 0..if entry.followed_by_rule { 1 } else { entry.gap_after } {
+                out.push('\n');
+            }
         }
         // The rule that stood between this entry and the next belongs to
         // neither, so it is written back between them rather than kept in
@@ -308,7 +314,12 @@ fn write_questions(out: &mut String, run: &Prose, questions: &[String]) {
     }
     if !after.is_empty() {
         out.push_str(&after);
-        out.push_str("\n\n");
+        // The blank lines this run ended with, like any other run: one
+        // hub closes the queue with a rule and two blank lines under it.
+        out.push('\n');
+        for _ in 0..run.gap_after {
+            out.push('\n');
+        }
     }
 }
 
