@@ -569,6 +569,7 @@ mod tests {
                 body: "Что делали.".to_string(),
                 followed_by_rule: false,
                 gap_after: 1,
+                rank: 0,
             },
             DiaryEntry {
                 date: "2026-09-01".to_string(),
@@ -576,6 +577,7 @@ mod tests {
                 body: "Раньше.".to_string(),
                 followed_by_rule: false,
                 gap_after: 1,
+                rank: 0,
             },
         ];
         let text = diary(&[], &entries);

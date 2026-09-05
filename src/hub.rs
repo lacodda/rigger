@@ -136,6 +136,13 @@ pub struct DiaryEntry {
     /// others write none at all. Writing one for everybody moved every line
     /// below the first entry that disagreed.
     pub gap_after: usize,
+    /// Where the entry stood among the entries of its diary: newest is 0.
+    ///
+    /// A date is not an order. Several sittings share a day - a diary of
+    /// this line writes three on one date - and ordering by date alone left
+    /// them to the order the rows came out of the table, which moved one
+    /// entry of a real diary past its neighbour.
+    pub rank: usize,
 }
 
 /// What a hub yielded, plus what it could not.
@@ -407,6 +414,7 @@ fn parse_diary(text: &str) -> Vec<DiaryEntry> {
                     body: String::new(),
                     followed_by_rule: false,
                     gap_after: 1,
+                    rank: entries.len(),
                 });
                 continue;
             }
@@ -906,6 +914,20 @@ mod tests {
                 .any(|r| r.heading.as_deref().is_some_and(|h| h.contains("Патч")) || r.body.contains("Про патч.")),
             "{runs:?}"
         );
+    }
+
+    /// A date is not an order. Several sittings share a day - one diary of
+    /// this line writes three on one date - so entries carry the place
+    /// they had, and ordering by date alone moved one past its neighbour.
+    #[test]
+    fn diary_entries_keep_the_place_they_had() {
+        let text =
+            "# Дневник\n\n## 2026-08-31 (2) · Later that day\n\nПотом.\n\n## 2026-08-31 · Earlier\n\nСначала.\n\n## 2026-08-30 · The day before\n\nНакануне.\n";
+        let entries = parse_diary(text);
+        assert_eq!(entries.iter().map(|e| e.rank).collect::<Vec<_>>(), [0, 1, 2]);
+        // The two that share a day are told apart by rank alone.
+        assert_eq!(entries[0].date, entries[1].date);
+        assert!(entries[0].heading.as_deref().is_some_and(|h| h.contains("(2)")), "{:?}", entries[0].heading);
     }
 
     #[test]
