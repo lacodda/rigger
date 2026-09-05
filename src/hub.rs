@@ -57,6 +57,13 @@ pub struct Stage {
     /// all the prose, which piled every stage of a real plan below every
     /// block heading and lost the grouping entirely.
     pub after_prose: usize,
+    /// How many blank lines stood between the stage and what followed it.
+    ///
+    /// A hub separates its stages with a rule, and the blank lines after
+    /// that rule are the hub's own: most write one, one writes two, and one
+    /// puts the next heading straight under the rule. Writing one for
+    /// everybody moved every line below the first stage that disagreed.
+    pub gap_after: usize,
     /// Where the stage stood among the stages of its file: first is 0.
     ///
     /// `after_prose` says which block a stage belongs to, and a block holds
@@ -97,6 +104,13 @@ pub struct Prose {
     /// The heading it came under, kept whole (`## Блок «Владелец»`).
     pub heading: Option<String>,
     pub body: String,
+    /// How many blank lines stood between the run and what followed it.
+    ///
+    /// A hub separates its blocks with a rule, and the blank lines around
+    /// that rule are the hub's own: most write one, one writes two, and two
+    /// put the next heading straight under the rule. Writing one for
+    /// everybody moved every line below the first run that disagreed.
+    pub gap_after: usize,
 }
 
 /// A diary entry: one sitting as the hub records it.
@@ -263,6 +277,7 @@ fn parse_stages(text: &str) -> Vec<Stage> {
                         notes_after: String::new(),
                         heading: head.to_string(),
                         after_prose: runs[at_line],
+                        gap_after: 1,
                         rank: stages.len(),
                     });
                     level = depth;
@@ -319,6 +334,11 @@ fn settle(stages: &mut [Stage], notes: &mut String) {
         && let Some(stage) = stages.last_mut()
     {
         let settled = notes.trim().to_string();
+        // The blank lines at the end are the hub's, not padding, and they
+        // have to be counted here on the buffer as it was read - trimming
+        // is what destroys them.
+        let at = notes.find(&settled).unwrap_or(0) + settled.len();
+        stage.gap_after = notes[at..].matches('\n').count().saturating_sub(1);
         match stage.tasks.is_empty() && stage.notes.is_empty() {
             true => stage.notes = settled,
             false => stage.notes_after = settled,
@@ -413,8 +433,13 @@ fn prose_and_positions(text: &str, file: &str) -> (Vec<Prose>, Vec<usize>) {
 
     fn flush(heading: Option<String>, body: &mut String, runs: &mut Vec<Prose>, file: &str) {
         let text = body.trim();
+        // The blank lines at the end are the hub's, not padding: they are
+        // counted before the body is trimmed, because trimming is what
+        // destroys them.
+        let gap_after = body[text.len() + body.find(text).unwrap_or(0)..].matches('\n').count().saturating_sub(1);
         if !text.is_empty() || heading.is_some() {
             runs.push(Prose {
+                gap_after,
                 file: file.to_string(),
                 position: runs.len(),
                 heading,
@@ -752,6 +777,24 @@ mod tests {
         assert_eq!(diary("")[0].gap_after, 0);
         // And the rule never lands in what was written.
         assert!(!one[0].body.contains("---"), "{:?}", one[0].body);
+    }
+
+    /// The blank lines a hub leaves after a stage are the hub's own. One
+    /// changelog of this line puts the next heading straight under the
+    /// rule and another leaves two blank lines; writing one for everybody
+    /// moved every line below the first stage that disagreed.
+    #[test]
+    fn a_stage_keeps_the_gap_its_hub_left_after_it() {
+        let stage = |gap: &str| {
+            let text = format!("# Изменения\n\n## v0.2.0 · Second\n\nПро второй.\n\n---\n{gap}## v0.1.0 · First\n\nПро первый.\n");
+            parse_stages(&text)
+        };
+        assert_eq!(stage("\n")[0].gap_after, 1);
+        assert_eq!(stage("\n\n")[0].gap_after, 2);
+        assert_eq!(stage("")[0].gap_after, 0);
+        // The rule belongs to the prose it was written under, not to the
+        // stage that follows it.
+        assert!(stage("\n")[0].notes.ends_with("---"), "{:?}", stage("\n")[0].notes);
     }
 
     #[test]

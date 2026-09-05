@@ -220,6 +220,18 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE sessions ADD COLUMN gap_after INTEGER;
     ",
+    // The same for a run of prose: a hub separates its blocks with a rule,
+    // and the blank lines around it are the hub's own. Most write one, one
+    // writes two, and two put the next heading straight under the rule.
+    "
+    ALTER TABLE hub_prose ADD COLUMN gap_after INTEGER;
+    ",
+    // And the same for a stage: the rule that separates two of them, and
+    // the blank lines after it, are written by the hub and not by a rule
+    // of the export's own.
+    "
+    ALTER TABLE versions ADD COLUMN gap_after INTEGER;
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -374,6 +386,7 @@ struct Shape {
     heading: Option<String>,
     depth: Option<i64>,
     after_prose: Option<i64>,
+    gap_after: Option<i64>,
     rank: Option<i64>,
 }
 
@@ -394,6 +407,7 @@ impl Shape {
             heading: (!stage.heading.trim().is_empty()).then(|| stage.heading.clone()),
             depth: Some(stage.depth as i64),
             after_prose: Some(stage.after_prose as i64),
+            gap_after: Some(stage.gap_after as i64),
             rank: Some(stage.rank as i64),
         }
     }
@@ -646,8 +660,8 @@ impl Db {
             .execute("DELETE FROM hub_prose WHERE project_id = ?1 AND file = ?2", params![project_id, file])?;
         for run in runs {
             self.conn.execute(
-                "INSERT INTO hub_prose (project_id, file, position, heading, body) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![project_id, file, run.position as i64, run.heading, run.body],
+                "INSERT INTO hub_prose (project_id, file, position, heading, body, gap_after) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![project_id, file, run.position as i64, run.heading, run.body, run.gap_after as i64],
             )?;
         }
         Ok(if before.is_empty() { Change::Added } else { Change::Updated })
@@ -657,13 +671,14 @@ impl Db {
     pub fn hub_prose(&self, project_id: i64, file: &str) -> Result<Vec<crate::hub::Prose>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file, position, heading, body FROM hub_prose WHERE project_id = ?1 AND file = ?2 ORDER BY position")?;
+            .prepare("SELECT file, position, heading, body, gap_after FROM hub_prose WHERE project_id = ?1 AND file = ?2 ORDER BY position")?;
         let rows = stmt.query_map(params![project_id, file], |r| {
             Ok(crate::hub::Prose {
                 file: r.get(0)?,
                 position: r.get::<_, i64>(1)? as usize,
                 heading: r.get(2)?,
                 body: r.get(3)?,
+                gap_after: r.get::<_, Option<i64>>(4)?.unwrap_or(1) as usize,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -672,7 +687,7 @@ impl Db {
     /// Every version of a project as a stage, for the export to write back.
     pub fn stages(&self, project_id: i64, shipped: bool) -> Result<Vec<crate::hub::Stage>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, title, shipped_at, notes, heading_depth, notes_after, heading, after_prose, rank FROM versions \
+            "SELECT id, name, title, shipped_at, notes, heading_depth, notes_after, heading, after_prose, rank, gap_after FROM versions \
              WHERE project_id = ?1 AND (status = 'shipped') = ?2 \
              ORDER BY COALESCE(rank, 0), id",
         )?;
@@ -693,6 +708,7 @@ impl Db {
                     heading: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
                     after_prose: r.get::<_, Option<i64>>(8)?.unwrap_or(i64::MAX) as usize,
                     rank: r.get::<_, Option<i64>>(9)?.unwrap_or(0) as usize,
+                    gap_after: r.get::<_, Option<i64>>(10)?.unwrap_or(1) as usize,
                 },
             ))
         })?;
@@ -780,7 +796,7 @@ impl Db {
         let mut existing: Option<Recorded> = self
             .conn
             .query_row(
-                "SELECT id, title, status, shipped_at, notes, notes_after, heading, heading_depth, after_prose, rank \
+                "SELECT id, title, status, shipped_at, notes, notes_after, heading, heading_depth, after_prose, rank, gap_after \
                  FROM versions WHERE project_id = ?1 AND name = ?2",
                 params![project_id, stage.version],
                 |r| {
@@ -796,6 +812,7 @@ impl Db {
                             depth: r.get(7)?,
                             after_prose: r.get(8)?,
                             rank: r.get(9)?,
+                            gap_after: r.get(10)?,
                         },
                     ))
                 },
@@ -851,8 +868,8 @@ impl Db {
                 }
                 self.conn.execute(
                     "UPDATE versions SET title = ?1, status = ?2, shipped_at = ?3, notes = ?4, \
-                     notes_after = ?5, heading_depth = ?6, heading = ?7, after_prose = ?8, rank = ?9 \
-                     WHERE id = ?10",
+                     notes_after = ?5, heading_depth = ?6, heading = ?7, after_prose = ?8, rank = ?9, gap_after = ?10 \
+                     WHERE id = ?11",
                     params![
                         stage.title,
                         status,
@@ -863,6 +880,7 @@ impl Db {
                         shape.heading,
                         shape.after_prose,
                         shape.rank,
+                        shape.gap_after,
                         id
                     ],
                 )?;
@@ -870,8 +888,8 @@ impl Db {
             }
             None => {
                 self.conn.execute(
-                    "INSERT INTO versions (project_id, name, title, status, shipped_at, notes, notes_after, heading_depth, heading, after_prose, rank) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    "INSERT INTO versions (project_id, name, title, status, shipped_at, notes, notes_after, heading_depth, heading, after_prose, rank, gap_after) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         project_id,
                         stage.version,
@@ -883,7 +901,8 @@ impl Db {
                         shape.depth,
                         shape.heading,
                         shape.after_prose,
-                        shape.rank
+                        shape.rank,
+                        shape.gap_after
                     ],
                 )?;
                 Ok((self.conn.last_insert_rowid(), Change::Added))

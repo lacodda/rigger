@@ -160,7 +160,15 @@ fn write_run(out: &mut String, run: &Prose, questions: &[String]) {
     }
     if !run.body.trim().is_empty() {
         out.push_str(run.body.trim());
-        out.push_str("\n\n");
+        // The blank lines the hub left after this run, not one for
+        // everybody: a rule with the next heading straight under it and
+        // a rule with two blank lines after it are both written in this
+        // line, and one gap for all of them moved every line below the
+        // first run that disagreed.
+        out.push('\n');
+        for _ in 0..run.gap_after {
+            out.push('\n');
+        }
     }
 }
 
@@ -328,9 +336,17 @@ fn write_stage(out: &mut String, stage: &Stage) {
     // stages of this line do both: writing them all on one side moved the
     // closing line of 123 stages above their own lists.
     let notes = stage.notes.trim();
+    let closes_here = stage.tasks.is_empty() && stage.notes_after.trim().is_empty();
     if !notes.is_empty() {
         out.push_str(notes);
-        out.push_str("\n\n");
+        // When nothing follows this prose, it is the end of the stage,
+        // and the blank lines the hub left there are its own: this line
+        // writes a rule with the next heading straight under it as
+        // readily as one with two blank lines after it.
+        out.push('\n');
+        for _ in 0..if closes_here { stage.gap_after } else { 1 } {
+            out.push('\n');
+        }
     }
     for task in &stage.tasks {
         let mark = if task.done { "x" } else { " " };
@@ -342,7 +358,14 @@ fn write_stage(out: &mut String, stage: &Stage) {
     let after = stage.notes_after.trim();
     if !after.is_empty() {
         out.push_str(after);
-        out.push_str("\n\n");
+        // The blank lines the hub left after this stage, not one for
+        // everybody: a rule with the next heading straight under it
+        // and a rule with two blank lines after it are both written in
+        // this line.
+        out.push('\n');
+        for _ in 0..stage.gap_after {
+            out.push('\n');
+        }
     }
 }
 
@@ -395,6 +418,7 @@ mod tests {
             notes_after: String::new(),
             heading: String::new(),
             after_prose: usize::MAX,
+            gap_after: 1,
             rank: 0,
             tasks: tasks
                 .iter()
@@ -412,6 +436,7 @@ mod tests {
             position,
             heading: heading.map(str::to_string),
             body: body.to_string(),
+            gap_after: 1,
         }
     }
 
