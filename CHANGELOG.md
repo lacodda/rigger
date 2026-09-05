@@ -2,7 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.13.0] - 2026-09-05
+
+### Features
+- Make a sitting something the record knows
 ## [0.12.0] - 2026-09-05
+
+### Documentation
+- Changelog for v0.12.0
 
 ### Features
 - Look back at a cycle and see what the plan was worth
