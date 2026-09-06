@@ -254,6 +254,46 @@ fn doctor_says_when_it_does_not_know_where_a_hub_is() {
     assert!(!said.contains("every generated file matches"), "{said}");
 }
 
+/// A column an edited migration left out is put back on open.
+///
+/// An applied migration is frozen: migration 7 was edited while this stage
+/// was being built, and a database that had already passed it never got
+/// `after_prose`. It sat at the same schema version as a healthy one, so
+/// nothing noticed until a live run failed on every query naming that
+/// column.
+#[test]
+fn a_column_an_edited_migration_left_out_is_put_back() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+
+    // A database in exactly that state: the version is current, the column
+    // is not there.
+    let db = data.path().join("rigger.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("ALTER TABLE versions DROP COLUMN after_prose").unwrap();
+    let missing: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('versions')")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(!missing.iter().any(|c| c == "after_prose"), "the column is gone to start with");
+    drop(conn);
+
+    // Opening the record puts it back, and the command that needs it works.
+    rigger(data.path()).arg("doctor").assert().success();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let back: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('versions')")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(back.iter().any(|c| c == "after_prose"), "{back:?}");
+}
+
 /// The circle: reading back what was written gives the record it came from.
 /// Every counter zero is the claim - anything that changed would be a fact
 /// the export invented or lost.

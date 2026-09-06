@@ -266,6 +266,21 @@ const MIGRATIONS: &[&str] = &[
     ",
 ];
 
+/// Columns that migration 7 gained after a database had already recorded it
+/// as applied.
+///
+/// An applied migration is frozen: editing one is invisible to every
+/// database that has passed it, and the record then runs against a schema
+/// it believes it has. This one was edited during the stage that built the
+/// export, and the owner's database came out of it without `after_prose` -
+/// every query naming that column failed on a live run, though a database
+/// created from scratch was fine.
+///
+/// Applied on open rather than as a migration of its own, because the
+/// databases that need it and the ones that do not are both at the same
+/// schema version, and only the table can say which is which.
+const REPAIRS: [(&str, &str, &str); 1] = [("versions", "after_prose", "ALTER TABLE versions ADD COLUMN after_prose INTEGER")];
+
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
 pub struct Db {
@@ -542,6 +557,7 @@ impl Db {
                 .execute_batch(&format!("BEGIN; {sql} PRAGMA user_version = {target}; COMMIT;"))
                 .with_context(|| format!("migration to schema version {target} failed"))?;
         }
+        self.repair()?;
         Ok(())
     }
 
@@ -864,6 +880,29 @@ impl Db {
                 row_to_project,
             )
             .optional()?)
+    }
+
+    /// Puts back a column an edited migration left out.
+    ///
+    /// See `REPAIRS`: a database that passed migration 7 before it was
+    /// edited is at the same schema version as one that passed it after,
+    /// and only the table itself can tell them apart.
+    fn repair(&self) -> Result<()> {
+        for (table, column, sql) in REPAIRS {
+            let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+            let mut has = false;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                if row.get::<_, String>(1)? == column {
+                    has = true;
+                    break;
+                }
+            }
+            if !has {
+                self.conn.execute_batch(sql)?;
+            }
+        }
+        Ok(())
     }
 
     /// Remembers where a project's hub is, so a later check can find it.
