@@ -247,6 +247,23 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE projects ADD COLUMN hub_path TEXT;
     ",
+    // The "Состояние" block a hub keeps in its README: one dated line per
+    // thing worth telling, newest first. Not a field on a version, because
+    // 32 of the 310 lines across this line's hubs name no version at all -
+    // a project founded, a plan reground, a stand brought up. The date
+    // carries the hub's own mark beside it ("2026-09-05 (ночь)"), which is
+    // how a hub tells apart three sittings in one day.
+    "
+    CREATE TABLE state_lines (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        position   INTEGER NOT NULL,
+        stamp      TEXT,
+        body       TEXT NOT NULL,
+        gap_after  INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (project_id, position)
+    );
+    ",
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -699,6 +716,39 @@ impl Db {
             )?;
         }
         Ok(if before.is_empty() { Change::Added } else { Change::Updated })
+    }
+
+    /// The state lines a project's README carries, in the order it had them.
+    pub fn set_state_lines(&self, project_id: i64, lines: &[crate::hub::StateLine]) -> Result<Change> {
+        let before = self.state_lines(project_id)?;
+        if before == lines {
+            return Ok(Change::Unchanged);
+        }
+        self.conn.execute("DELETE FROM state_lines WHERE project_id = ?1", [project_id])?;
+        for (position, line) in lines.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO state_lines (project_id, position, stamp, body, gap_after) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![project_id, position as i64, line.stamp, line.body, line.gap_after as i64],
+            )?;
+        }
+        Ok(match before.is_empty() {
+            true => Change::Added,
+            false => Change::Updated,
+        })
+    }
+
+    pub fn state_lines(&self, project_id: i64) -> Result<Vec<crate::hub::StateLine>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT stamp, body, gap_after FROM state_lines WHERE project_id = ?1 ORDER BY position")?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(crate::hub::StateLine {
+                stamp: r.get(0)?,
+                body: r.get(1)?,
+                gap_after: r.get::<_, i64>(2)? as usize,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The prose the record holds for one file of a hub, in file order.

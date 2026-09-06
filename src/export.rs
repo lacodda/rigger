@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::hub::{DiaryEntry, Prose, Stage};
+use crate::hub::{DiaryEntry, Prose, Stage, StateLine};
 
 /// The files a hub is generated from, in the order an export writes them.
 ///
@@ -34,7 +34,7 @@ use crate::hub::{DiaryEntry, Prose, Stage};
 /// will not be: they are argument rather than record, written by a person,
 /// and the record has no way to hold an argument that would survive being
 /// rebuilt from it.
-pub const GENERATED: [&str; 3] = ["План.md", "Изменения.md", "Дневник.md"];
+pub const GENERATED: [&str; 4] = ["План.md", "Изменения.md", "Дневник.md", "README.md"];
 
 /// A file the export produced.
 #[derive(Debug, Clone, Serialize)]
@@ -146,6 +146,44 @@ pub fn diary(prose: &[Prose], entries: &[DiaryEntry]) -> String {
                 out.push('\n');
             }
         }
+    }
+    finish(out)
+}
+
+/// The README: its prose, with the state block written from the record.
+///
+/// The block is a list the record holds, so it is written from there rather
+/// than from the prose captured alongside it - otherwise a line recorded
+/// today would stand in the file twice. Everything else in the README is a
+/// person's writing and passes through untouched.
+pub fn readme(prose: &[Prose], state: &[StateLine]) -> String {
+    let mut out = String::new();
+    out.push_str(MARK);
+    out.push_str("\n\n");
+    for run in prose {
+        if run
+            .heading
+            .as_deref()
+            .is_some_and(|h| h.trim_start_matches('#').trim().starts_with("Состояние"))
+        {
+            out.push_str(run.heading.as_deref().unwrap().trim_end());
+            out.push_str("\n\n");
+            // Each line keeps the gap it had: a hub need not be consistent,
+            // and one of this line spaces its three newest entries and
+            // packs the fifty-three below them.
+            for line in state {
+                let _ = match &line.stamp {
+                    Some(stamp) => writeln!(out, "- **{}** — {}", stamp.trim(), line.body.trim()),
+                    None => writeln!(out, "- {}", line.body.trim()),
+                };
+                for _ in 0..line.gap_after {
+                    out.push('\n');
+                }
+            }
+            out.push('\n');
+            continue;
+        }
+        write_run(&mut out, run, &[]);
     }
     finish(out)
 }

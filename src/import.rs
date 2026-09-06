@@ -120,5 +120,10 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         }
     }
 
+    // The README's state block: one dated line per thing worth telling.
+    if db.set_state_lines(project_id, &hub.state)? != Change::Unchanged {
+        report.prose_files += 1;
+    }
+
     Ok(report)
 }

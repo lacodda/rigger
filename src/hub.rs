@@ -145,6 +145,24 @@ pub struct DiaryEntry {
     pub rank: usize,
 }
 
+/// One line of a README's "Состояние" block: a date and what happened.
+///
+/// The date is kept whole, mark and all - a hub writes `2026-09-05 (ночь)`
+/// to tell three sittings of one day apart, and splitting it to put it back
+/// together would lose the mark.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateLine {
+    /// The date and its mark, or nothing at all: a hub may close the block
+    /// with a line that carries no date - "founded, sign and repository,
+    /// see the changelog" - and dropping it lost the line every run.
+    pub stamp: Option<String>,
+    pub body: String,
+    /// Blank lines between this line and the next. Its own count, because a
+    /// hub need not be consistent: one of this line spaces its three newest
+    /// entries and packs the fifty-three below them.
+    pub gap_after: usize,
+}
+
 /// What a hub yielded, plus what it could not.
 #[derive(Debug, Default)]
 pub struct Hub {
@@ -154,6 +172,7 @@ pub struct Hub {
     pub questions: Vec<String>,
     pub diary: Vec<DiaryEntry>,
     pub prose: Vec<Prose>,
+    pub state: Vec<StateLine>,
     pub warnings: Vec<String>,
 }
 
@@ -167,6 +186,10 @@ pub fn read(dir: &Path) -> Result<Hub> {
     read_file(dir, "Изменения.md", &mut hub, |text, hub| {
         hub.closed_stages = parse_stages(text);
         hub.prose.extend(parse_prose(text, "Изменения.md"));
+    })?;
+    read_file(dir, "README.md", &mut hub, |text, hub| {
+        hub.state = parse_state(text);
+        hub.prose.extend(parse_prose(text, "README.md"));
     })?;
     warn_about_repeats(&mut hub);
     read_file(dir, "Решения.md", &mut hub, |text, hub| {
@@ -192,6 +215,58 @@ fn read_file(dir: &Path, name: &str, hub: &mut Hub, parse: impl FnOnce(&str, &mu
         }
         Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
     }
+}
+
+/// The "Состояние" block of a README: one dated line per thing worth
+/// telling, newest first.
+///
+/// Nineteen of the twenty hubs of this line write it as `- **date** — what
+/// happened`; the twentieth writes prose under that heading, and prose is
+/// not a line, so it yields none and the file stays handwritten.
+fn parse_state(text: &str) -> Vec<StateLine> {
+    let mut out: Vec<StateLine> = Vec::new();
+    let mut inside = false;
+    let mut blank = 0usize;
+    for line in text.lines() {
+        if let Some((_, head)) = heading(line) {
+            inside = head.starts_with("Состояние");
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        // Blank lines belong to the item above them, and are only counted
+        // once another item follows - the ones before the next heading
+        // separate the block, not its entries.
+        if line.trim().is_empty() {
+            blank += 1;
+            continue;
+        }
+        let Some(rest) = line.trim().strip_prefix("- ") else { continue };
+        // `- **2026-09-05 (ночь)** — что случилось`, or a line with no date
+        // at all, which one hub uses to close the block.
+        let line = match rest.strip_prefix("**").and_then(|r| r.split_once("**")) {
+            Some((stamp, body)) if !stamp.trim().is_empty() => StateLine {
+                stamp: Some(stamp.trim().to_string()),
+                body: body.trim_start().trim_start_matches(['—', '-', '–']).trim().to_string(),
+                gap_after: 0,
+            },
+            _ => StateLine {
+                stamp: None,
+                body: rest.trim().to_string(),
+                gap_after: 0,
+            },
+        };
+        if line.body.is_empty() {
+            continue;
+        }
+        if let Some(previous) = out.last_mut() {
+            previous.gap_after = blank;
+        }
+        blank = 0;
+        out.push(line);
+    }
+    out
 }
 
 /// Warns when one version is written up twice in the same file.

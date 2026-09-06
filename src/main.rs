@@ -2181,6 +2181,7 @@ fn generate(db: &Db, project: &db::Project, name: &str) -> Result<String> {
             export::plan(&prose, &db.stages(project.id, false)?, &questions)
         }
         n if n == export::GENERATED[1] => export::changes(&prose, &db.stages(project.id, true)?),
+        n if n == export::GENERATED[3] => export::readme(&prose, &db.state_lines(project.id)?),
         _ => export::diary(&prose, &db.diary_entries(project.id)?),
     })
 }
