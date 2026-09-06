@@ -46,5 +46,8 @@ commit_parsers = [
   { message = "^build", group = "Build" },
   { message = "^ci", group = "CI" },
   { message = "^chore", skip = true },
+  # A checkpoint inside a stage, committed so a working state could not be
+  # lost again. What it did is described by the fixes that followed it.
+  { message = "^wip", skip = true },
   { message = "^style", skip = true },
 ]

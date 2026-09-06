@@ -2,7 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.14.0] - 2026-09-06
+
+### Bug Fixes
+- Write the owner's queue in the shape the hub wrote it in
+- Keep a stage's opening and closing prose on their own sides
+- Put a block's stages back in the order they were written
+- Keep the gap a diary left after the rule between two entries
+- Let the order a hub had outrank the order a number implies
+- Keep the blank lines a hub leaves around its rules
+- Give a heading inside a stage to the stage it stands in
+- Keep a diary in the order its sittings were written down
+- Keep the blank lines a hub leaves where it writes no rule
+- Let the hub check look where the hub actually is
+- Read a README the way its hub wrote it
+
+### Documentation
+- The export command, and the hub check in doctor
+
+### Features
+- Say when a hub writes one version up twice
+- Generate the README's state block from the record
 ## [0.13.0] - 2026-09-05
+
+### Documentation
+- Changelog for v0.13.0
 
 ### Features
 - Make a sitting something the record knows
