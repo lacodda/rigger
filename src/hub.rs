@@ -217,6 +217,25 @@ fn read_file(dir: &Path, name: &str, hub: &mut Hub, parse: impl FnOnce(&str, &mu
     }
 }
 
+/// Whether a bold opening is the date of a state line, or just bold text.
+///
+/// A hub opens most lines with `**2026-09-05 (ночь)**`, and two of them
+/// open one with a bold sentence instead - `**Кода пока нет намеренно.**`.
+/// Taking that for a stamp put an em dash into the middle of a sentence, so
+/// a stamp has to start with digits and a separator, the way a date does.
+fn looks_like_a_date(text: &str) -> bool {
+    let text = text.trim();
+    let mut digits = text.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 {
+        return false;
+    }
+    // `2026-09-05`, `05.09.2026`, `2026-W36`: digits, a separator, digits.
+    let rest = &text[digits..];
+    let Some(rest) = rest.strip_prefix(['-', '.', '/']) else { return false };
+    digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+    digits > 0
+}
+
 /// The "Состояние" block of a README: one dated line per thing worth
 /// telling, newest first.
 ///
@@ -246,7 +265,7 @@ fn parse_state(text: &str) -> Vec<StateLine> {
         // `- **2026-09-05 (ночь)** — что случилось`, or a line with no date
         // at all, which one hub uses to close the block.
         let line = match rest.strip_prefix("**").and_then(|r| r.split_once("**")) {
-            Some((stamp, body)) if !stamp.trim().is_empty() => StateLine {
+            Some((stamp, body)) if looks_like_a_date(stamp) => StateLine {
                 stamp: Some(stamp.trim().to_string()),
                 body: body.trim_start().trim_start_matches(['—', '-', '–']).trim().to_string(),
                 gap_after: 0,
@@ -298,6 +317,26 @@ fn warn_about_repeats(hub: &mut Hub) {
 }
 
 /// Splits a heading line into its level and text: `## v0.4.0 · Title`.
+/// Tracks whether a walk is inside a fenced code block.
+///
+/// A `#` inside a fence is a shell comment, not a heading, and reading it
+/// as one ends the run of prose it sits in - which lost a line of a real
+/// README and the fence that closed it.
+#[derive(Default)]
+struct Fence(bool);
+
+impl Fence {
+    /// Feeds a line and says whether it is inside a fence, the opening and
+    /// closing fences counting as inside.
+    fn inside(&mut self, line: &str) -> bool {
+        let was = self.0;
+        if line.trim_start().starts_with("```") {
+            self.0 = !self.0;
+        }
+        was || self.0
+    }
+}
+
 fn heading(line: &str) -> Option<(usize, &str)> {
     let hashes = line.len() - line.trim_start_matches('#').len();
     if hashes == 0 || hashes > 6 {
@@ -562,6 +601,7 @@ fn prose_and_positions(text: &str, file: &str) -> (Vec<Prose>, Vec<usize>) {
     // How deep the heading that opened the stage sat, so a deeper one can
     // be told from the one that ends it.
     let mut entry_depth = 0usize;
+    let mut fence = Fence::default();
 
     fn flush(heading: Option<String>, body: &mut String, runs: &mut Vec<Prose>, file: &str) {
         let text = body.trim();
@@ -592,7 +632,9 @@ fn prose_and_positions(text: &str, file: &str) -> (Vec<Prose>, Vec<usize>) {
         if line.trim() == crate::export::MARK {
             continue;
         }
-        if let Some((depth, head)) = heading(line) {
+        // Inside a fence a  is a shell comment, not a heading.
+        let fenced = fence.inside(line);
+        if let Some((depth, head)) = heading(line).filter(|_| !fenced) {
             // A heading starts an entry only if something else will capture
             // it: a version heading becomes a stage, and a dated one in the
             // diary becomes an entry. A dated heading that is *not* a
@@ -1010,6 +1052,47 @@ mod tests {
         // The two that share a day are told apart by rank alone.
         assert_eq!(entries[0].date, entries[1].date);
         assert!(entries[0].heading.as_deref().is_some_and(|h| h.contains("(2)")), "{:?}", entries[0].heading);
+    }
+
+    /// The state block is a list of dated lines, and a bold opening is not
+    /// a date. Two hubs of this line open a line with a bold sentence, and
+    /// reading that as a stamp put an em dash into the middle of it.
+    #[test]
+    fn a_bold_sentence_is_not_the_date_of_a_state_line() {
+        let text = "# Хаб\n\n## Состояние\n\n- **2026-09-05 (ночь)** — что-то случилось\n- **Кода пока нет намеренно.** Хаб заведён авансом.\n- Основание — см. Изменения.\n";
+        let state = parse_state(text);
+        assert_eq!(state.len(), 3);
+        assert_eq!(state[0].stamp.as_deref(), Some("2026-09-05 (ночь)"));
+        assert_eq!(state[0].body, "что-то случилось");
+        // The bold sentence stays part of what was written.
+        assert_eq!(state[1].stamp, None);
+        assert_eq!(state[1].body, "**Кода пока нет намеренно.** Хаб заведён авансом.");
+        // And a line with no date at all survives.
+        assert_eq!(state[2].stamp, None);
+    }
+
+    /// Each state line keeps the blank lines that followed it. One hub of
+    /// this line spaces its newest entries and packs the rest, so a single
+    /// flag for the list cannot hold it.
+    #[test]
+    fn a_state_line_keeps_the_gap_that_followed_it() {
+        let text = "## Состояние\n\n- **2026-09-05** — новее\n\n- **2026-09-04** — старее\n- **2026-09-03** — ещё старее\n";
+        let state = parse_state(text);
+        assert_eq!(state.iter().map(|l| l.gap_after).collect::<Vec<_>>(), [1, 0, 0]);
+    }
+
+    /// A `#` inside a fenced block is a shell comment. One README writes
+    /// one inside a fence, and reading it as a heading ended the run of
+    /// prose there - losing that line and the fence that closed it.
+    #[test]
+    fn a_hash_inside_a_fence_is_not_a_heading() {
+        let text = "# Хаб\n\n## Запуск\n\n```\ncargo build\n# и потом\n```\n\nПосле блока.\n";
+        let runs = parse_prose(text, "README.md");
+        let all: String = runs.iter().map(|r| r.body.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(all.contains("# и потом"), "the comment is kept: {all:?}");
+        assert!(all.contains("cargo build"), "{all:?}");
+        // And the fence did not start a heading of its own.
+        assert!(!runs.iter().any(|r| r.heading.as_deref() == Some("# и потом")), "{runs:?}");
     }
 
     #[test]

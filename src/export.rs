@@ -161,10 +161,15 @@ pub fn readme(prose: &[Prose], state: &[StateLine]) -> String {
     out.push_str(MARK);
     out.push_str("\n\n");
     for run in prose {
-        if run
-            .heading
-            .as_deref()
-            .is_some_and(|h| h.trim_start_matches('#').trim().starts_with("Состояние"))
+        // A hub that writes prose under that heading rather than a list has
+        // no state lines, and its prose is what belongs there: one hub of
+        // this line writes two paragraphs, and printing an empty list in
+        // their place deleted them.
+        if !state.is_empty()
+            && run
+                .heading
+                .as_deref()
+                .is_some_and(|h| h.trim_start_matches('#').trim().starts_with("Состояние"))
         {
             out.push_str(run.heading.as_deref().unwrap().trim_end());
             out.push_str("\n\n");
