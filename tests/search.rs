@@ -298,7 +298,7 @@ fn a_change_recorded_with_only_its_day_is_given_back_its_time() {
     // What an earlier rigger stored: the day, which places every change of
     // a day at midnight - before any tag made that day, and so under the
     // wrong release.
-    let db = data.path().join("rigger.db");
+    let db = data.path().join("profiles").join("line").join("rigger.db");
     let conn = rusqlite::Connection::open(&db).unwrap();
     conn.execute(
         "UPDATE events SET created_at = substr(created_at, 1, 10) || 'T00:00:00Z' WHERE author = 'git'",

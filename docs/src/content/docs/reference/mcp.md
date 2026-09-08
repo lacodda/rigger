@@ -38,6 +38,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `wish` | Something to sort into the plan later |
 | `resolve` | Answers a question or sorts a wish, so it leaves the packet |
 | `close_task` | Marks a task of the current stage done |
+| `set_task_status` | Gives a task a [status](/rigger/reference/task/): new, active, waiting-handoff, frozen or done |
 
 Every tool takes a `project` - the name [`rigger project list`](/rigger/reference/project/) shows. The recording tools take a `text`; an empty one is refused, because a record with nothing in it helps nobody.
 

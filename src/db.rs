@@ -274,7 +274,23 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE sessions ADD COLUMN day TEXT;
     UPDATE sessions SET day = substr(started_at, 1, 10) WHERE notes IS NOT NULL;
     ",
+    // v17: a task's status is a word from a vocabulary rather than one of
+    // two. `open` becomes `new`; `active`, `waiting-handoff` and `frozen`
+    // join `done` and `dropped`. The ticket profile lives on these: a
+    // ticket handed to another team is neither open nor done.
+    "
+    UPDATE tasks SET status = 'new' WHERE status = 'open';
+    ",
 ];
+
+/// The words a task's status can be. Everything before `done` is work
+/// still to do; `dropped` is a line struck from a hub.
+pub const TASK_STATUSES: [&str; 6] = ["new", "active", "waiting-handoff", "frozen", "done", "dropped"];
+
+/// Whether a status counts as work still to do.
+pub fn is_open_status(status: &str) -> bool {
+    !matches!(status, "done" | "dropped")
+}
 
 /// Columns that migration 7 gained after a database had already recorded it
 /// as applied.
@@ -383,6 +399,8 @@ pub struct CurrentStage {
 pub struct Task {
     pub id: i64,
     pub title: String,
+    /// One of `TASK_STATUSES`; `new` is the one a plan's box means.
+    pub status: String,
 }
 
 /// A question waiting for the owner, and where it came from.
@@ -992,7 +1010,7 @@ impl Db {
         let rows = stmt.query_map([version_id], |r| {
             Ok(crate::hub::Task {
                 title: r.get(0)?,
-                done: r.get::<_, String>(1)? != "open",
+                done: r.get::<_, String>(1)? == "done",
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -1258,7 +1276,7 @@ impl Db {
     /// the hub has no ids, and the text of a line is what the owner edits
     /// least once a stage is written.
     pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task, may_reopen: bool) -> Result<(i64, Change)> {
-        let status = if task.done { "done" } else { "open" };
+        let status = if task.done { "done" } else { "new" };
         let position = position as i64;
 
         // The text first: a line that moved within its stage is the same
@@ -1294,6 +1312,11 @@ impl Db {
                 // project's own hub reopened the three tasks of a version
                 // tagged two days before.
                 let status = if !may_reopen && was == "done" { "done" } else { status };
+                // An empty box says "not done", not "new": a task that is
+                // active or frozen in the record keeps that through a
+                // reading of its hub, or every export and import would
+                // reset the desk to the start.
+                let status = if !task.done && is_open_status(&was) { was.as_str() } else { status };
                 if was == status && title == task.title && at == Some(position) {
                     return Ok((id, Change::Unchanged));
                 }
@@ -1327,7 +1350,7 @@ impl Db {
     pub fn drop_tasks_not_in(&self, version_id: i64, keep: &[i64]) -> Result<u32> {
         let ids = keep.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
         let dropped = self.conn.execute(
-            &format!("UPDATE tasks SET status = 'dropped' WHERE version_id = ?1 AND status = 'open' AND id NOT IN ({ids})"),
+            &format!("UPDATE tasks SET status = 'dropped' WHERE version_id = ?1 AND status NOT IN ('done', 'dropped') AND id NOT IN ({ids})"),
             [version_id],
         )?;
         Ok(dropped as u32)
@@ -1348,7 +1371,7 @@ impl Db {
         // Its open tasks go with it: they would otherwise go on being
         // counted as the project's open work under a stage nobody can see.
         self.conn.execute(
-            "UPDATE tasks SET status = 'dropped' WHERE status = 'open' \
+            "UPDATE tasks SET status = 'dropped' WHERE status NOT IN ('done', 'dropped') \
              AND version_id IN (SELECT id FROM versions WHERE project_id = ?1 AND status = 'dropped')",
             [project_id],
         )?;
@@ -1728,16 +1751,43 @@ impl Db {
         };
         let mut stmt = self
             .conn
-            .prepare("SELECT id, title FROM tasks WHERE version_id = ?1 AND status = 'open' ORDER BY id")?;
+            .prepare("SELECT id, title, status FROM tasks WHERE version_id = ?1 AND status NOT IN ('done', 'dropped') ORDER BY id")?;
         let tasks = stmt
             .query_map([id], |r| {
                 Ok(Task {
                     id: r.get(0)?,
                     title: r.get(1)?,
+                    status: r.get(2)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<Task>>>()?;
         Ok(Some(CurrentStage { version: name, title, tasks }))
+    }
+
+    /// Gives a task a status from the vocabulary. The project is part of
+    /// the lookup, as with `close_task`. Returns the title and the status
+    /// it had.
+    pub fn set_task_status(&self, project_id: i64, task_id: i64, status: &str) -> Result<(String, String)> {
+        if !TASK_STATUSES.contains(&status) || status == "dropped" {
+            bail!("'{status}' is not a status a task can be given; one of {}", TASK_STATUSES[..5].join(", "));
+        }
+        let found: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT title, status FROM tasks WHERE id = ?1 AND project_id = ?2",
+                params![task_id, project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((title, was)) = found else {
+            bail!("no task [{task_id}] in this project; `plan` lists the ids");
+        };
+        let closed_at = (status == "done").then(now);
+        self.conn.execute(
+            "UPDATE tasks SET status = ?1, closed_at = ?2 WHERE id = ?3",
+            params![status, closed_at, task_id],
+        )?;
+        Ok((title, was))
     }
 
     /// Marks a task done. The project is part of the lookup so that an id
@@ -2005,11 +2055,11 @@ impl Db {
     }
 
     pub fn count_open_tasks(&self, project_id: i64) -> Result<u64> {
-        let n: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status = 'open'", [project_id], |r| {
-                r.get(0)
-            })?;
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('done', 'dropped')",
+            [project_id],
+            |r| r.get(0),
+        )?;
         Ok(n.unsigned_abs())
     }
 

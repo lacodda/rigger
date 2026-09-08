@@ -102,7 +102,7 @@ fn a_diary_entry_read_without_its_date_is_merged_with_itself() {
     let diary = "# Дневник\n\n## 2026-09-03 (ночь) · v0.2.1: знак\n\n**Сделано.** Знак в шапке.\n";
     std::fs::write(hub.join("Дневник.md"), diary).unwrap();
     // The row the older reader left.
-    let db = rusqlite::Connection::open(data.path().join("rigger.db")).unwrap();
+    let db = rusqlite::Connection::open(data.path().join("profiles").join("line").join("rigger.db")).unwrap();
     db.execute(
         "INSERT INTO sessions (project_id, started_at, ended_at, day, heading, notes, followed_by_rule, gap_after, rank) \
          VALUES (1, '2026-09-03T00:00:00Z', '2026-09-03T00:00:00Z', '2026-09-03', '(ночь) · v0.2.1: знак', '**Сделано.** Знак в шапке.', 0, 1, 0)",
@@ -226,7 +226,7 @@ fn a_question_struck_from_the_hub_is_withdrawn_but_an_assistants_stays() {
     rigger(data.path()).args(["wish", "sample", "Хочется третьего."]).assert().success();
     let asked = "Ассистент спрашивает?";
     // The way `ask_owner` records it: a question by the assistant.
-    let db = rusqlite::Connection::open(data.path().join("rigger.db")).unwrap();
+    let db = rusqlite::Connection::open(data.path().join("profiles").join("line").join("rigger.db")).unwrap();
     db.execute(
         "INSERT INTO events (project_id, kind, body, author, created_at) VALUES (1, 'question', ?1, 'assistant', '2026-09-08T10:00:00Z')",
         [asked],

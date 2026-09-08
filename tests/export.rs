@@ -268,7 +268,7 @@ fn a_column_an_edited_migration_left_out_is_put_back() {
 
     // A database in exactly that state: the version is current, the column
     // is not there.
-    let db = data.path().join("rigger.db");
+    let db = data.path().join("profiles").join("line").join("rigger.db");
     let conn = rusqlite::Connection::open(&db).unwrap();
     conn.execute_batch("ALTER TABLE versions DROP COLUMN after_prose").unwrap();
     let missing: Vec<String> = conn

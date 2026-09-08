@@ -66,7 +66,7 @@ fn a_stage_recorded_without_a_shape_takes_the_plans() {
     std::fs::write(hub.join("План.md"), PLAN).unwrap();
 
     // The rows an older rigger left: a version and nothing about its heading.
-    let db = rusqlite::Connection::open(data.path().join("rigger.db")).unwrap();
+    let db = rusqlite::Connection::open(data.path().join("profiles").join("line").join("rigger.db")).unwrap();
     for name in ["v0.2.0", "v0.3.0"] {
         db.execute("INSERT INTO versions (project_id, name, status) VALUES (1, ?1, 'planned')", [name])
             .unwrap();
@@ -198,7 +198,7 @@ fn a_stale_plan_neither_reopens_a_closed_task_nor_shapes_a_shipped_stage() {
     rigger(data.path()).args(["import", "sample", "--hub"]).arg(&hub).assert().success();
 
     // The record closes one task - the way `close_task` does - and a tag closes the stage.
-    let db = rusqlite::Connection::open(data.path().join("rigger.db")).unwrap();
+    let db = rusqlite::Connection::open(data.path().join("profiles").join("line").join("rigger.db")).unwrap();
     db.execute(
         "UPDATE tasks SET status = 'done', closed_at = '2026-09-02T10:00:00Z' WHERE title = 'сделать одно'",
         [],

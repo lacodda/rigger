@@ -15,6 +15,7 @@ mod mcp;
 mod open;
 mod owner;
 mod paths;
+mod profile;
 mod repo;
 mod retro;
 mod search;
@@ -58,11 +59,21 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Switch, list and add profiles: one record per way of working
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
+    /// Give a task a status
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
     /// Record every repository under a directory, with its hub and its tags
     Adopt {
-        /// Directory whose children are repositories
-        root: PathBuf,
-        /// Directory whose children are hubs, one per project name
+        /// Directory whose children are repositories; the profile's roots when omitted
+        root: Option<PathBuf>,
+        /// Directory whose children are hubs, one per project name; the profile's when omitted
         #[arg(long)]
         hubs: Option<PathBuf>,
         /// Say what would be recorded, and write nothing
@@ -331,6 +342,82 @@ impl NoteKind {
 }
 
 #[derive(Subcommand)]
+enum ProfileCommand {
+    /// List the profiles, marking the one in use
+    List {
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one profile; the one in use when no name is given
+    Show {
+        /// Profile name
+        name: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make a profile the one every command uses
+    Use {
+        /// Profile name
+        name: String,
+    },
+    /// Add a profile, with a database of its own
+    Add {
+        /// Profile name
+        name: String,
+        /// What the unit of work is
+        #[arg(long, value_enum, default_value_t = profile::Kind::Line)]
+        kind: profile::Kind,
+        /// A directory whose children are repositories; may be given more than once
+        #[arg(long = "root", value_name = "DIR")]
+        roots: Vec<PathBuf>,
+        /// The directory whose children are hubs, one per project name
+        #[arg(long, value_name = "DIR")]
+        hubs: Option<PathBuf>,
+        /// How a ticket id is spelt, as a regular expression
+        #[arg(long, value_name = "REGEX")]
+        id_pattern: Option<String>,
+        /// Where incoming material lands
+        #[arg(long, value_name = "DIR")]
+        inbox: Option<PathBuf>,
+        /// Switch to it right away
+        #[arg(long)]
+        r#use: bool,
+    },
+    /// Change what a profile says about itself; a field given replaces what it had
+    Set {
+        /// Profile name; the one in use when omitted
+        name: Option<String>,
+        /// A directory whose children are repositories; may be given more than once, replaces the roots
+        #[arg(long = "root", value_name = "DIR")]
+        roots: Vec<PathBuf>,
+        /// The directory whose children are hubs, one per project name
+        #[arg(long, value_name = "DIR")]
+        hubs: Option<PathBuf>,
+        /// How a ticket id is spelt, as a regular expression
+        #[arg(long, value_name = "REGEX")]
+        id_pattern: Option<String>,
+        /// Where incoming material lands
+        #[arg(long, value_name = "DIR")]
+        inbox: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaskCommand {
+    /// Give a task a status: new, active, waiting-handoff, frozen or done
+    Status {
+        /// Project name
+        project: String,
+        /// Task id, as the packet or `plan` lists it
+        task: i64,
+        /// The status
+        status: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProjectCommand {
     /// Record a repository as a project
     Add {
@@ -463,7 +550,41 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
         },
         Command::Import { project, hub, json } => import_hub(&project, &hub, json),
-        Command::Adopt { root, hubs, check, json } => adopt_root(&root, hubs.as_deref(), check, json),
+        Command::Profile { command } => match command {
+            ProfileCommand::List { json } => profile_list(json),
+            ProfileCommand::Show { name, json } => profile_show(name.as_deref(), json),
+            ProfileCommand::Use { name } => profile_use(&name),
+            ProfileCommand::Add {
+                name,
+                kind,
+                roots,
+                hubs,
+                id_pattern,
+                inbox,
+                r#use,
+            } => profile_add(
+                &name,
+                profile::Profile {
+                    kind,
+                    roots,
+                    hubs,
+                    id_pattern,
+                    inbox,
+                },
+                r#use,
+            ),
+            ProfileCommand::Set {
+                name,
+                roots,
+                hubs,
+                id_pattern,
+                inbox,
+            } => profile_set(name.as_deref(), roots, hubs, id_pattern, inbox),
+        },
+        Command::Task { command } => match command {
+            TaskCommand::Status { project, task, status } => task_status(&project, task, &status),
+        },
+        Command::Adopt { root, hubs, check, json } => adopt_root(root.as_deref(), hubs.as_deref(), check, json),
         Command::Skill {
             project,
             install,
@@ -595,9 +716,26 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
 
 /// Records every checkout under a directory, and reads each one's hub and
 /// tags - the three commands a project used to take, once for the line.
-fn adopt_root(root: &Path, hubs: Option<&Path>, check: bool, json: bool) -> Result<()> {
+///
+/// Told nothing, it walks the roots the profile names, with the profile's
+/// hubs: a line that has said once where it keeps things need not say so
+/// again every time it has grown.
+fn adopt_root(root: Option<&Path>, hubs: Option<&Path>, check: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let adopted = adopt::adopt(&db, root, hubs, check)?;
+    let config = profile::Config::load()?;
+    let (name, current) = config.current()?;
+    let roots: Vec<PathBuf> = match root {
+        Some(root) => vec![root.to_path_buf()],
+        None if current.roots.is_empty() => {
+            bail!("profile '{name}' names no roots; give a directory, or set one with `rigger profile set {name} --root <dir>`")
+        }
+        None => current.roots.clone(),
+    };
+    let hubs = hubs.or(current.hubs.as_deref());
+    let mut adopted = Vec::new();
+    for root in &roots {
+        adopted.extend(adopt::adopt(&db, root, hubs, check)?);
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&adopted)?);
@@ -1178,15 +1316,162 @@ fn backup() -> Result<()> {
 }
 
 fn init() -> Result<()> {
+    // The config first, so that a fresh install has a profile to speak of
+    // and the file a person can edit is where `doctor` says it is.
+    let config_path = profile::Config::path()?;
+    if !config_path.exists() {
+        profile::Config::default().save()?;
+        println!("Created {} with the '{}' profile", config_path.display(), profile::DEFAULT);
+    }
     let path = paths::db_path()?;
     if path.exists() {
         Db::open(&path)?;
         println!("Already initialised: {}", path.display());
         return Ok(());
     }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
     let db = Db::create(&path)?;
     println!("Created {} (schema version {})", db.path().display(), db.schema_version()?);
     println!("Next: rigger project add <path>");
+    Ok(())
+}
+
+fn profile_list(json: bool) -> Result<()> {
+    let config = profile::Config::load()?;
+    let current = config.current_name();
+    if json {
+        let rows: Vec<serde_json::Value> = config
+            .profiles
+            .iter()
+            .map(|(name, p)| serde_json::json!({ "name": name, "current": *name == current, "profile": p }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    let width = config.profiles.keys().map(String::len).max().unwrap_or(0);
+    for (name, p) in &config.profiles {
+        let mark = if *name == current { "*" } else { " " };
+        println!("{mark} {name:width$}  {}  {}", p.kind.as_str(), profile::db_path_for(name)?.display());
+    }
+    Ok(())
+}
+
+fn profile_show(name: Option<&str>, json: bool) -> Result<()> {
+    let config = profile::Config::load()?;
+    let name = name.map(str::to_string).unwrap_or_else(|| config.current_name());
+    let Some(p) = config.profiles.get(&name) else {
+        bail!("no profile named '{name}'; see `rigger profile list`");
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "name": name, "profile": p }))?);
+        return Ok(());
+    }
+    println!("{name}");
+    println!("  kind:      {}", p.kind.as_str());
+    println!("  database:  {}", profile::db_path_for(&name)?.display());
+    if !p.roots.is_empty() {
+        println!(
+            "  roots:     {}",
+            p.roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    if let Some(hubs) = &p.hubs {
+        println!("  hubs:      {}", hubs.display());
+    }
+    if let Some(pattern) = &p.id_pattern {
+        println!("  ids:       {pattern}");
+    }
+    if let Some(inbox) = &p.inbox {
+        println!("  inbox:     {}", inbox.display());
+    }
+    println!("  config:    {}", profile::Config::path()?.display());
+    Ok(())
+}
+
+fn profile_use(name: &str) -> Result<()> {
+    let mut config = profile::Config::load()?;
+    if !config.profiles.contains_key(name) {
+        bail!("no profile named '{name}'; see `rigger profile list`");
+    }
+    config.current = name.to_string();
+    config.save()?;
+    println!("Every command now uses the '{name}' profile");
+    if std::env::var_os(profile::PROFILE_ENV).is_some() {
+        println!("  note: {} is set and overrides this while it is", profile::PROFILE_ENV);
+    }
+    Ok(())
+}
+
+/// Adds a profile and its database. The database is created here rather
+/// than on first use, so that `profile list` can point at a file that is
+/// there.
+fn profile_add(name: &str, p: profile::Profile, use_it: bool) -> Result<()> {
+    if name.trim().is_empty() || name.contains(['/', '\\', ' ']) {
+        bail!("a profile name is one word, without slashes: '{name}' is not");
+    }
+    let mut config = profile::Config::load()?;
+    if config.profiles.contains_key(name) {
+        bail!("a profile named '{name}' already exists; see `rigger profile show {name}`");
+    }
+    let path = profile::db_path_for(name)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    if !path.exists() {
+        Db::create(&path)?;
+    }
+    config.profiles.insert(name.to_string(), p.clone());
+    if use_it {
+        config.current = name.to_string();
+    }
+    config.save()?;
+    println!("Added the '{name}' profile ({}) with its database at {}", p.kind.as_str(), path.display());
+    match use_it {
+        true => println!("Every command now uses it"),
+        false => println!("Switch to it with: rigger profile use {name}"),
+    }
+    Ok(())
+}
+
+/// Changes what a profile says about itself. Only the fields given change;
+/// the roots given replace the roots it had, because a list appended to
+/// can never be shortened.
+fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, id_pattern: Option<String>, inbox: Option<PathBuf>) -> Result<()> {
+    let mut config = profile::Config::load()?;
+    let name = name.map(str::to_string).unwrap_or_else(|| config.current_name());
+    let Some(p) = config.profiles.get_mut(&name) else {
+        bail!("no profile named '{name}'; see `rigger profile list`");
+    };
+    if roots.is_empty() && hubs.is_none() && id_pattern.is_none() && inbox.is_none() {
+        bail!("nothing to set; give --root, --hubs, --id-pattern or --inbox");
+    }
+    if !roots.is_empty() {
+        p.roots = roots;
+    }
+    if let Some(hubs) = hubs {
+        p.hubs = Some(hubs);
+    }
+    if let Some(pattern) = id_pattern {
+        p.id_pattern = Some(pattern);
+    }
+    if let Some(inbox) = inbox {
+        p.inbox = Some(inbox);
+    }
+    config.save()?;
+    println!("Profile '{name}' updated");
+    profile_show(Some(&name), false)
+}
+
+fn task_status(project: &str, task: i64, status: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let (title, was) = db.set_task_status(project.id, task, status)?;
+    match was == status {
+        true => println!("Task {task} was already {status}: {title}"),
+        false => println!("Task {task} is now {status} (was {was}): {title}"),
+    }
     Ok(())
 }
 
@@ -2461,14 +2746,20 @@ fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
 }
 
 fn doctor(hubs: bool, json: bool) -> Result<()> {
+    let config = profile::Config::load()?;
+    let (profile_name, _) = config.current()?;
     let path = paths::db_path()?;
     if !path.exists() {
         if json {
-            println!("{}", serde_json::json!({ "database": path, "initialised": false }));
+            println!("{}", serde_json::json!({ "profile": profile_name, "database": path, "initialised": false }));
         } else {
+            println!("profile:   {profile_name}");
             println!("database:  {} (missing - run `rigger init`)", path.display());
         }
         return Ok(());
+    }
+    if !json {
+        println!("profile:   {profile_name} ({})", profile::Config::path()?.display());
     }
     let db = Db::open(&path)?;
     let schema = db.schema_version()?;
@@ -2499,6 +2790,7 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
+                "profile": profile_name,
                 "database": path,
                 "initialised": true,
                 "schema_version": schema,

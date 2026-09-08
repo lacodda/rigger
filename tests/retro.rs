@@ -357,8 +357,10 @@ fn a_place_the_record_keeps_for_itself_is_not_asked_about_git() {
 
     // And it never joins the list of projects waiting to be synced, where
     // it would have sat for ever.
+    // (The profile of the same name is printed on its own line; the list
+    // of projects is the indented one.)
     let doctor = output(data.path(), &["doctor"]);
-    assert!(!doctor.contains("line"), "{doctor}");
+    assert!(!doctor.lines().any(|l| l.starts_with("  line")), "{doctor}");
 
     // The alpha project, which git can answer for, is unaffected.
     let doctor: serde_json::Value = serde_json::from_str(&output(data.path(), &["doctor", "--json"])).unwrap();

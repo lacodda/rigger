@@ -75,24 +75,27 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// The template of the data directory.
-pub fn template_path() -> Result<PathBuf> {
-    Ok(paths::data_dir()?.join(TEMPLATE_FILE))
+/// Where a template is looked for: the profile's directory first - a line
+/// and a ticket desk do not share rituals - then the data directory.
+pub fn template_paths() -> Result<Vec<PathBuf>> {
+    Ok(vec![crate::profile::current_dir()?.join(TEMPLATE_FILE), paths::data_dir()?.join(TEMPLATE_FILE)])
 }
 
-/// The template named, else the one in the data directory, else the
-/// built-in one.
+/// The template named, else the profile's, else the data directory's, else
+/// the built-in one.
 pub fn load_template(explicit: Option<&Path>) -> Result<(String, Source)> {
     if let Some(path) = explicit {
         let text = std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
         return Ok((text, Source::File(path.to_path_buf())));
     }
-    let path = template_path()?;
-    match std::fs::read_to_string(&path) {
-        Ok(text) => Ok((text, Source::File(path))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((DEFAULT_TEMPLATE.to_string(), Source::BuiltIn)),
-        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    for path in template_paths()? {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return Ok((text, Source::File(path))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+        }
     }
+    Ok((DEFAULT_TEMPLATE.to_string(), Source::BuiltIn))
 }
 
 /// Where skills are installed: `RIGGER_SKILLS_DIR`, else the directory the

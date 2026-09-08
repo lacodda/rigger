@@ -228,6 +228,16 @@ fn tools() -> Vec<Value> {
             &["project", "id"],
         ),
         tool(
+            "set_task_status",
+            "Give a task of the current stage a status: new, active, waiting-handoff, frozen or done. Ids come from `plan`. `active` is the one being worked on; `waiting-handoff` is handed to someone else; `frozen` is set aside on purpose.",
+            json!({
+                "project": project_arg(),
+                "task": { "type": "integer", "description": "Task id, as `plan` lists it" },
+                "status": { "type": "string", "description": "One of new, active, waiting-handoff, frozen, done" },
+            }),
+            &["project", "task", "status"],
+        ),
+        tool(
             "close_task",
             "Mark a task of the current stage done. Ids come from `plan`.",
             json!({
@@ -306,6 +316,20 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 _ => format!("Sorted [{id}]: {first_line}"),
             })
         }
+        "set_task_status" => {
+            let project = project(db)?;
+            let Some(task) = args.get("task").and_then(Value::as_i64) else {
+                bail!("this tool needs a `task` id; `plan` lists them");
+            };
+            let Some(status) = args.get("status").and_then(Value::as_str) else {
+                bail!("this tool needs a `status`: one of {}", crate::db::TASK_STATUSES[..5].join(", "));
+            };
+            let (title, was) = db.set_task_status(project.id, task, status)?;
+            Ok(match was == status {
+                true => format!("Task {task} was already {status}: {title}"),
+                false => format!("Task {task} is now {status} (was {was}): {title}"),
+            })
+        }
         "close_task" => {
             let project = project(db)?;
             let Some(task) = args.get("task").and_then(Value::as_i64) else {
@@ -360,7 +384,10 @@ fn render_plan(db: &Db, project: &Project) -> Result<String> {
         out.push_str("Every task of this stage is done.\n");
     }
     for task in &stage.tasks {
-        out.push_str(&format!("- [{}] {}\n", task.id, task.title));
+        match task.status.as_str() {
+            "new" => out.push_str(&format!("- [{}] {}\n", task.id, task.title)),
+            status => out.push_str(&format!("- [{}] {} ({status})\n", task.id, task.title)),
+        }
     }
     Ok(out)
 }
@@ -486,6 +513,7 @@ mod tests {
             "wish",
             "resolve",
             "close_task",
+            "set_task_status",
         ] {
             assert!(names.contains(&promised.to_string()), "{promised} is missing from {names:?}");
         }

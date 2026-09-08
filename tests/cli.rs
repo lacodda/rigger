@@ -44,7 +44,8 @@ fn init_creates_the_database_and_is_idempotent() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Created").and(predicate::str::contains("schema version")));
-    assert!(data.path().join("rigger.db").exists());
+    assert!(data.path().join("profiles").join("line").join("rigger.db").exists());
+    assert!(data.path().join("config.toml").exists(), "init writes the config with the default profile");
 
     rigger(data.path())
         .arg("init")
@@ -683,7 +684,8 @@ fn backup_copies_the_database_beside_itself() {
         .success()
         .stdout(predicate::str::contains("Copied to"));
 
-    let copies: Vec<_> = std::fs::read_dir(data.path())
+    // Beside the database, which is the profile's.
+    let copies: Vec<_> = std::fs::read_dir(data.path().join("profiles").join("line"))
         .unwrap()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))

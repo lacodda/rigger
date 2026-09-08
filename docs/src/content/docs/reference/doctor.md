@@ -7,11 +7,12 @@ description: Where the database is and what it holds.
 rigger doctor [--json]
 ```
 
-Prints the database path, its schema version and how many records of each kind it holds. Before `init` it says so instead of failing, so `doctor` is always safe to run first.
+Prints the [profile](/rigger/reference/profile/) in use, the database path, its schema version and how many records of each kind it holds. Before `init` it says so instead of failing, so `doctor` is always safe to run first.
 
 ```console
 $ rigger doctor
-database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
+profile:   line (C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml)
+database:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db
 schema:    version 4
 projects:  1
 versions:  0

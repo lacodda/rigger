@@ -409,7 +409,11 @@ fn render_stage(stage: &Stage) -> String {
     }
     out.push('\n');
     for task in &stage.tasks {
-        out.push_str(&format!("- {}\n", task.title));
+        // The box of a plan means `new`; any other word is worth a mark.
+        match task.status.as_str() {
+            "new" => out.push_str(&format!("- {}\n", task.title)),
+            status => out.push_str(&format!("- {} ({status})\n", task.title)),
+        }
     }
     out
 }

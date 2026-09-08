@@ -66,7 +66,8 @@ Both scripts read these environment variables:
 
 ```console
 $ rigger init
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 4)
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml with the 'line' profile
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db (schema version 17)
 Next: rigger project add <path>
 ```
 
