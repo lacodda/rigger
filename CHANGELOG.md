@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.16.0] - 2026-09-08
+
+### Features
+- Let a hub written from the record keep growing, and strike what a hand struck
+- Withdraw a struck question, and keep a tag-only version out of the changelog
 ## [0.15.0] - 2026-09-08
 
 ### Bug Fixes
@@ -16,6 +21,9 @@ All notable changes to this project are documented in this file.
 
 ### Features
 - Adopt a directory of repositories, and write a thin skill
+
+### Testing
+- Compare the hub path the way the record spells it
 ## [0.14.0] - 2026-09-06
 
 ### Bug Fixes
