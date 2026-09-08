@@ -541,7 +541,9 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     };
     let hub = hub::read(hub_dir)?;
     // Where the hub is, so a later check can find it. Not guessed from the
-    // repository path: the hubs of this line live in a notes vault.
+    // repository path: the hubs of this line live in a notes vault. Spelt
+    // the way the platform spells it, not the way the shell happened to.
+    let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
     db.set_hub_path(project.id, hub_dir)?;
     let report = import::import(&db, project.id, &hub)?;
 
