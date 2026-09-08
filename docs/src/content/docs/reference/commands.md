@@ -30,7 +30,8 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger retro`](/rigger/reference/retro/) | v0.12.0 | Planned against shipped, per cycle |
 | [`rigger session`](/rigger/reference/session/) | v0.13.0 | Start and end a sitting; the end writes the journal |
 | [`rigger export`](/rigger/reference/export/) | v0.14.0 | Write a hub back out of the record |
-| `rigger skill`, `rigger adopt` | planned v0.15.0 | Generate a thin project skill; record a whole directory of repositories |
+| [`rigger adopt`](/rigger/reference/adopt/) | v0.15.0 | Record every repository under a directory, with its hub and its tags |
+| [`rigger skill`](/rigger/reference/skill/) | v0.15.0 | Write a thin project skill from a template and the record |
 | `rigger profile`, `rigger task` | planned v0.17.0+ | Switch profiles; find, open and close tasks |
 
 ## Common to all commands

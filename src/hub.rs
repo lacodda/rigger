@@ -176,6 +176,18 @@ pub struct Hub {
     pub warnings: Vec<String>,
 }
 
+/// The files a hub is read from.
+pub const FILES: [&str; 5] = ["План.md", "Изменения.md", "README.md", "Решения.md", "Дневник.md"];
+
+/// Whether a directory holds any of the files a hub is read from.
+///
+/// A directory with the right name and none of them is not a hub, and
+/// reading it would say five files were missing from something that was
+/// never meant to have them.
+pub fn looks_like_a_hub(dir: &Path) -> bool {
+    FILES.iter().any(|name| dir.join(name).is_file())
+}
+
 pub fn read(dir: &Path) -> Result<Hub> {
     let mut hub = Hub::default();
     read_file(dir, "План.md", &mut hub, |text, hub| {

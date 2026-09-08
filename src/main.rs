@@ -3,6 +3,7 @@
 //! The command surface grows one release at a time; this release brings the
 //! database, projects and `doctor`.
 
+mod adopt;
 mod calendar;
 mod commit;
 mod context;
@@ -18,6 +19,7 @@ mod repo;
 mod retro;
 mod search;
 mod session;
+mod skill;
 mod sync;
 mod week;
 
@@ -55,6 +57,41 @@ enum Command {
         /// Print the report as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Record every repository under a directory, with its hub and its tags
+    Adopt {
+        /// Directory whose children are repositories
+        root: PathBuf,
+        /// Directory whose children are hubs, one per project name
+        #[arg(long)]
+        hubs: Option<PathBuf>,
+        /// Say what would be recorded, and write nothing
+        #[arg(long)]
+        check: bool,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a thin project skill from a template and the record
+    Skill {
+        /// Project name
+        #[arg(required_unless_present = "print_template")]
+        project: Option<String>,
+        /// Write it into the assistant's skills directory instead of printing it
+        #[arg(long)]
+        install: bool,
+        /// Write it under this directory instead; implies --install
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// Overwrite a skill file that was written by hand
+        #[arg(long)]
+        replace: bool,
+        /// Read the template from this file instead of the data directory
+        #[arg(long, value_name = "FILE")]
+        template: Option<PathBuf>,
+        /// Print the built-in template, to start one of your own from
+        #[arg(long)]
+        print_template: bool,
     },
     /// Print what an assistant needs to start a session on a project
     Context {
@@ -423,6 +460,22 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
         },
         Command::Import { project, hub, json } => import_hub(&project, &hub, json),
+        Command::Adopt { root, hubs, check, json } => adopt_root(&root, hubs.as_deref(), check, json),
+        Command::Skill {
+            project,
+            install,
+            dir,
+            replace,
+            template,
+            print_template,
+        } => write_skill(
+            project.as_deref(),
+            install || dir.is_some(),
+            dir.as_deref(),
+            replace,
+            template.as_deref(),
+            print_template,
+        ),
         Command::Context {
             project,
             json,
@@ -517,6 +570,145 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     if report.questions_added > 0 {
         println!("  {:<10} {} added", "questions", report.questions_added);
     }
+    Ok(())
+}
+
+/// Records every checkout under a directory, and reads each one's hub and
+/// tags - the three commands a project used to take, once for the line.
+fn adopt_root(root: &Path, hubs: Option<&Path>, check: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let adopted = adopt::adopt(&db, root, hubs, check)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&adopted)?);
+        return Ok(());
+    }
+    let width = adopted.iter().map(|a| a.name.len()).max().unwrap_or(0);
+    let mut recorded = 0;
+    let mut known = 0;
+    let mut without = 0;
+    let mut skipped = 0;
+    let mut hubs_read = 0;
+    for a in &adopted {
+        let status = match (&a.status, check) {
+            (adopt::Status::Recorded, true) => "would record",
+            (adopt::Status::Recorded, false) => "recorded",
+            (adopt::Status::Known, _) => "known",
+            (adopt::Status::NoHub, _) => "no hub",
+            (adopt::Status::Skipped(_), _) => "skipped",
+        };
+        match &a.status {
+            adopt::Status::Recorded => recorded += 1,
+            adopt::Status::Known => known += 1,
+            adopt::Status::NoHub => without += 1,
+            adopt::Status::Skipped(_) => skipped += 1,
+        }
+        let hub = match (&a.hub, &a.status, check) {
+            (_, adopt::Status::NoHub, _) => String::new(),
+            (None, _, _) => "hub: none".to_string(),
+            (Some(_), adopt::Status::Skipped(_), _) | (Some(_), _, true) => "hub: found".to_string(),
+            (Some(_), _, false) => {
+                hubs_read += 1;
+                match a.versions_added + a.tasks_added {
+                    0 => "hub: nothing new".to_string(),
+                    _ => format!(
+                        "hub: {} new, {} new",
+                        plural(a.versions_added as usize, "version", "versions"),
+                        plural(a.tasks_added as usize, "task", "tasks")
+                    ),
+                }
+            }
+        };
+        let git = match (&a.status, check) {
+            (adopt::Status::Skipped(_) | adopt::Status::NoHub, _) | (_, true) => String::new(),
+            _ if a.shipped + a.changes_read == 0 => "   git: nothing new".to_string(),
+            _ => format!(
+                "   git: {} shipped, {} read",
+                plural(a.shipped as usize, "version", "versions"),
+                plural(a.changes_read as usize, "change", "changes")
+            ),
+        };
+        println!("{:width$}  {status:<12} {hub}{git}", a.name);
+        if let adopt::Status::Skipped(reason) = &a.status {
+            println!("{:width$}  {reason}", "");
+        }
+        for warning in &a.warnings {
+            println!("{:width$}  note: {warning}", "");
+        }
+    }
+    let total = adopted.len();
+    let verb = if check { "would be recorded" } else { "recorded" };
+    let without = match without {
+        0 => String::new(),
+        n => format!(", {n} without a hub"),
+    };
+    println!(
+        "\n{}: {recorded} {verb}, {known} known{without}, {skipped} skipped; {} read.",
+        plural(total, "repository", "repositories"),
+        plural(hubs_read, "hub", "hubs")
+    );
+    if check {
+        println!("Nothing was written. Run again without --check to record them.");
+    }
+    Ok(())
+}
+
+/// Writes a project's skill from the template and the record.
+///
+/// Printed unless asked to install, so the first run shows what a skill
+/// will say before anything is overwritten. A file somebody wrote by hand
+/// is not replaced without `--replace`: what it holds may belong in the hub
+/// first, and the mark is how the next run knows the file is rigger's.
+fn write_skill(project: Option<&str>, install: bool, dir: Option<&Path>, replace: bool, template: Option<&Path>, print_template: bool) -> Result<()> {
+    if print_template {
+        print!("{}", skill::DEFAULT_TEMPLATE);
+        return Ok(());
+    }
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project.unwrap_or_default())?;
+    let (template, source) = skill::load_template(template)?;
+    let about = match project.kind {
+        db::Kind::Repo => repo::detect_about(Path::new(&project.path)),
+        db::Kind::Service => None,
+    };
+    let fields = skill::Fields {
+        name: &project.name,
+        path: &project.path,
+        remote: project.remote.as_deref(),
+        hub: project.hub_path.as_deref().map(Path::new),
+        about: about.as_deref(),
+    };
+    let rendered = skill::render(&template, &fields)?;
+    for note in &rendered.notes {
+        eprintln!("note: {note}");
+    }
+    if !install {
+        print!("{}", rendered.text);
+        return Ok(());
+    }
+
+    let dir = match dir {
+        Some(dir) => dir.to_path_buf(),
+        None => skill::skills_dir()?,
+    }
+    .join(&project.name);
+    let path = dir.join("SKILL.md");
+    let before = std::fs::read_to_string(&path).unwrap_or_default();
+    if !before.is_empty() && !skill::is_generated(&before) && !replace {
+        bail!(
+            "{} was written by hand and rigger has not written it before.
+Move what it says that only this project can say into the hub, then run again with `--replace`.",
+            path.display()
+        );
+    }
+    if before == rendered.text {
+        println!("{} is already what the template says.", path.display());
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
+    let what = if before.is_empty() { "Wrote" } else { "Rewrote" };
+    println!("{what} {} from {source}.", path.display());
     Ok(())
 }
 

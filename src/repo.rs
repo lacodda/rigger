@@ -55,9 +55,64 @@ fn git_config(root: &Path) -> Option<String> {
     std::fs::read_to_string(git_dir.join("config")).ok()
 }
 
+/// One line about the project, from the manifest that publishes it.
+///
+/// The `description` of a `Cargo.toml` or a `package.json`, whichever the
+/// root holds - written once by the owner for the registry, and good enough
+/// for a skill's front matter to say what the name stands for. Nothing is
+/// guessed when neither says anything.
+pub fn detect_about(root: &Path) -> Option<String> {
+    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
+        let mut in_package = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_package = line == "[package]";
+                continue;
+            }
+            if in_package
+                && let Some((key, value)) = line.split_once('=')
+                && key.trim() == "description"
+            {
+                let value = value.trim().trim_matches('"').trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(about) = json.get("description").and_then(|d| d.as_str())
+        && !about.trim().is_empty()
+    {
+        return Some(about.trim().to_string());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_comes_from_the_package_section_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\ndescription = \"A thing\"\n[dependencies]\ndescription = \"not this\"\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(dir.path()).as_deref(), Some("A thing"));
+    }
+
+    #[test]
+    fn about_falls_back_to_package_json_then_to_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(detect_about(dir.path()), None);
+        std::fs::write(dir.path().join("package.json"), "{\"name\":\"x\",\"description\":\"From npm\"}").unwrap();
+        assert_eq!(detect_about(dir.path()).as_deref(), Some("From npm"));
+    }
 
     #[test]
     fn the_name_is_the_directory_name_whatever_the_manifest_says() {
