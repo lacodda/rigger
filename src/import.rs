@@ -65,9 +65,16 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // the entry about each - so a second pass that rewrote the shape moved
     // every one of them out of the changelog and into the plan's order.
     // The file a stage is being read from decides: a stage in hand from
-    // the changelog owns its shape, one from the plan defers.
+    // the changelog owns its shape, and one from the plan defers - but
+    // only when the changelog has it. A stage the plan alone holds has no
+    // other reading to defer to, and deferring anyway left it with the
+    // shape the record happened to have: none, for every stage recorded
+    // before the record kept shapes, so the whole plan of a real line
+    // exported at the wrong depth in the wrong place; and yesterday's, for
+    // a stage the owner had since moved to another block.
+    let in_changelog: std::collections::HashSet<&str> = hub.closed_stages.iter().map(|s| s.version.as_str()).collect();
     let closed = hub.closed_stages.iter().map(|stage| (stage, true));
-    let open = hub.open_stages.iter().map(|stage| (stage, false));
+    let open = hub.open_stages.iter().map(|stage| (stage, !in_changelog.contains(stage.version.as_str())));
     for (stage, owns_shape) in closed.chain(open) {
         let (version_id, change) = db.upsert_version(project_id, stage, owns_shape)?;
         tally(change, &mut report.versions_added, &mut report.versions_updated);

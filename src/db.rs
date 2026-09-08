@@ -794,6 +794,7 @@ impl Db {
         let rows = stmt.query_map(params![project_id, shipped], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
+                r.get::<_, Option<i64>>(9)?,
                 crate::hub::Stage {
                     version: r.get(1)?,
                     title: r.get(2)?,
@@ -813,7 +814,7 @@ impl Db {
             ))
         })?;
 
-        let mut stages: Vec<(i64, crate::hub::Stage)> = rows.collect::<rusqlite::Result<_>>()?;
+        let mut stages: Vec<(i64, Option<i64>, crate::hub::Stage)> = rows.collect::<rusqlite::Result<_>>()?;
         // The order a hub had, when the record knows it. A hub does not
         // always run by version number: one changelog writes v0.17.0 above
         // v0.17.1, because the patch was written up after the release it
@@ -823,18 +824,40 @@ impl Db {
         // recorded by a command rather than read from a hub. Newest first
         // for the changelog, oldest first for the plan: a hub reads its
         // history backwards and its future forwards.
-        let known = stages.iter().any(|(_, s)| s.rank > 0);
-        match known {
-            true => stages.sort_by_key(|(_, s)| s.rank),
-            false => {
-                stages.sort_by_key(|(_, s)| version_order(&s.version));
-                if shipped {
-                    stages.reverse();
+        let known = stages.iter().any(|(_, rank, _)| rank.is_some());
+        if known {
+            // A stage the file never held stands where the next entry
+            // would be written: at the top of a changelog, at the foot of
+            // a plan, in the same run of prose as its neighbour. A version
+            // a tag closed after the hub was last read used to land below
+            // the oldest entry, under the prose that ends the file.
+            let (mut ranked, mut fresh): (Vec<_>, Vec<_>) = stages.into_iter().partition(|(_, rank, _)| rank.is_some());
+            ranked.sort_by_key(|(_, rank, _)| rank.unwrap_or(0));
+            fresh.sort_by_key(|(_, _, s)| version_order(&s.version));
+            if shipped {
+                fresh.reverse();
+                if let Some((_, _, first)) = ranked.first() {
+                    let at = first.after_prose;
+                    fresh.iter_mut().for_each(|(_, _, s)| s.after_prose = at);
                 }
+                fresh.append(&mut ranked);
+                stages = fresh;
+            } else {
+                if let Some((_, _, last)) = ranked.last() {
+                    let at = last.after_prose;
+                    fresh.iter_mut().for_each(|(_, _, s)| s.after_prose = at);
+                }
+                ranked.append(&mut fresh);
+                stages = ranked;
+            }
+        } else {
+            stages.sort_by_key(|(_, _, s)| version_order(&s.version));
+            if shipped {
+                stages.reverse();
             }
         }
         let mut out = Vec::new();
-        for (id, mut stage) in stages {
+        for (id, _, mut stage) in stages {
             stage.tasks = self.tasks_of_version(id)?;
             out.push(stage);
         }
@@ -984,9 +1007,18 @@ impl Db {
                 .optional()?,
             None => None,
         };
-        let (status, shipped_on) = match from_git {
-            Some(day) => ("shipped", Some(day)),
-            None => (if stage.shipped_on.is_some() { "shipped" } else { "planned" }, stage.shipped_on.clone()),
+        // Nor does the plan's copy of a shipped stage un-ship it: a major
+        // map lists what went out without a date, and reading it as
+        // "planned" moved the whole changelog into the plan on the second
+        // import of a hub.
+        let already_shipped = match &existing {
+            Some((_, _, was, was_at, ..)) if was == "shipped" && stage.shipped_on.is_none() => Some(was_at.clone()),
+            _ => None,
+        };
+        let (status, shipped_on) = match (from_git, already_shipped) {
+            (Some(day), _) => ("shipped", Some(day)),
+            (None, Some(day)) => ("shipped", day),
+            (None, None) => (if stage.shipped_on.is_some() { "shipped" } else { "planned" }, stage.shipped_on.clone()),
         };
         // A reading that does not own the shape keeps the one already
         // recorded, so the plan's copy of a shipped stage cannot move it
@@ -1000,6 +1032,14 @@ impl Db {
         // storing "" would make an export print a blank line for it.
         let notes = (!stage.notes.trim().is_empty()).then(|| stage.notes.clone());
         let notes_after = (!stage.notes_after.trim().is_empty()).then(|| stage.notes_after.clone());
+        // A reading that defers on the shape defers on the prose too. The
+        // plan's copy of a shipped stage carries a line of its own - "already
+        // out" under the major map - and writing it over the changelog's
+        // entry lost what was written about the release.
+        let (notes, notes_after) = match (owns_shape, &existing) {
+            (false, Some((_, _, _, _, was_notes, was_after, _))) => (was_notes.clone(), was_after.clone()),
+            _ => (notes, notes_after),
+        };
         match existing {
             Some((id, title, was_status, shipped_at, was_notes, was_after, was_shape)) => {
                 // The prose and the shape join the comparison, or a hub whose
@@ -1584,6 +1624,18 @@ impl Db {
                     "UPDATE versions SET status = 'shipped', shipped_at = ?1, shipped_ts = ?2, shipped_source = 'tag' WHERE id = ?3",
                     params![date, moment, id],
                 )?;
+                // A stage that just shipped leaves the plan, and the shape
+                // it had there - its heading, depth and place among the
+                // plan's stages - says nothing about where it stands in
+                // the changelog. Cleared, it is written where the next
+                // entry goes; kept, it sorted among the changelog's ranks
+                // by a number from another file.
+                if status != "shipped" {
+                    self.conn.execute(
+                        "UPDATE versions SET heading = NULL, heading_depth = NULL, rank = NULL, after_prose = NULL, gap_after = NULL WHERE id = ?1",
+                        [id],
+                    )?;
+                }
                 Ok(Change::Updated)
             }
             None => {
