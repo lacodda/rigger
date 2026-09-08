@@ -85,6 +85,8 @@ $ rigger project list
 sample  C:\dev\sample
 ```
 
+A whole directory of repositories, with their hubs and tags, is one command: [`rigger adopt`](/rigger/reference/adopt/).
+
 ## Check the state
 
 ```console
