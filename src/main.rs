@@ -577,6 +577,13 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
             plural(report.tasks_dropped as usize, "task", "tasks")
         );
     }
+    if report.questions_withdrawn > 0 {
+        println!(
+            "  {:<10} {} struck from the hub",
+            "withdrawn",
+            plural(report.questions_withdrawn as usize, "question", "questions")
+        );
+    }
     if report.decisions_added > 0 {
         println!("  {:<10} {} added", "decisions", report.decisions_added);
     }
@@ -2316,6 +2323,8 @@ fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, json: boo
     if !hub_dir.is_dir() {
         bail!("{} is not a directory", hub_dir.display());
     }
+    // Spelt the way the platform spells it, the way import records it.
+    let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
 
     let mut files = Vec::new();
     for name in export::GENERATED {

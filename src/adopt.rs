@@ -32,6 +32,9 @@ pub struct Adopted {
     pub diary_added: u32,
     /// Files whose prose the record took in on this run.
     pub prose_files: u32,
+    /// Struck from the hub since it was last read.
+    pub tasks_dropped: u32,
+    pub versions_dropped: u32,
     /// Versions a tag proved shipped, on this run.
     pub shipped: u32,
     /// Changes read from commit messages, on this run.
@@ -57,9 +60,22 @@ impl Adopted {
         part(self.tasks_added, "task", "tasks");
         part(self.diary_added, "diary entry", "diary entries");
         part(self.prose_files, "file of prose", "files of prose");
+        let mut struck = Vec::new();
+        let mut gone = |n: u32, one: &str, many: &str| {
+            if n > 0 {
+                struck.push(format!("{n} {}", if n == 1 { one } else { many }));
+            }
+        };
+        gone(self.versions_dropped, "version", "versions");
+        gone(self.tasks_dropped, "task", "tasks");
+        let struck = match struck.is_empty() {
+            true => String::new(),
+            false => format!("; {} struck", struck.join(", ")),
+        };
         match parts.is_empty() {
-            true => "hub: nothing new".to_string(),
-            false => format!("hub: {} new", parts.join(", ")),
+            true if struck.is_empty() => "hub: nothing new".to_string(),
+            true => format!("hub: nothing new{struck}"),
+            false => format!("hub: {} new{struck}", parts.join(", ")),
         }
     }
 }
@@ -143,6 +159,8 @@ pub fn adopt(db: &Db, root: &Path, hubs: Option<&Path>, check: bool) -> Result<V
             tasks_added: 0,
             diary_added: 0,
             prose_files: 0,
+            tasks_dropped: 0,
+            versions_dropped: 0,
             shipped: 0,
             changes_read: 0,
             warnings: Vec::new(),
@@ -203,6 +221,8 @@ fn read_into(db: &Db, project: &Project, adopted: &mut Adopted) -> Result<()> {
         adopted.tasks_added = report.tasks_added;
         adopted.diary_added = report.diary_added;
         adopted.prose_files = report.prose_files;
+        adopted.tasks_dropped = report.tasks_dropped;
+        adopted.versions_dropped = report.versions_dropped;
         adopted.warnings.extend(report.warnings);
     }
     let report = sync::sync(db, project)?;

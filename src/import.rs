@@ -21,6 +21,7 @@ pub struct Report {
     /// Struck from the hub since it was last read.
     pub tasks_dropped: u32,
     pub versions_dropped: u32,
+    pub questions_withdrawn: u32,
     pub decisions_added: u32,
     pub questions_added: u32,
     pub diary_added: u32,
@@ -38,6 +39,7 @@ impl Report {
             + self.tasks_updated
             + self.tasks_dropped
             + self.versions_dropped
+            + self.questions_withdrawn
             + self.decisions_added
             + self.questions_added
             + self.diary_added
@@ -120,6 +122,9 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
             report.questions_added += 1;
         }
     }
+    // One the owner struck from the hub by hand is withdrawn; one an
+    // assistant asked was never in the file and stays.
+    report.questions_withdrawn += db.withdraw_questions_not_in(project_id, &hub.questions)?;
 
     // The diary becomes sessions that already ended: an entry is one
     // sitting, written before rigger knew what a sitting was, and it has

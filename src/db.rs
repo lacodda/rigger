@@ -972,6 +972,15 @@ impl Db {
             stage.tasks = self.tasks_of_version(id)?;
             out.push(stage);
         }
+        // A version the record knows only from a tag has nothing to write
+        // up: no title, no prose, no tasks. It is a fact for the calendar
+        // and for `why`, not an entry - and writing a bare heading for
+        // each put forty empty releases into one changelog of this line.
+        if shipped {
+            out.retain(|s| {
+                !s.heading.trim().is_empty() || s.title.is_some() || !s.notes.trim().is_empty() || !s.notes_after.trim().is_empty() || !s.tasks.is_empty()
+            });
+        }
         Ok(out)
     }
 
@@ -1524,7 +1533,7 @@ impl Db {
         let mut sql = String::from(
             "SELECT p.name, e.kind, e.created_at, e.body, e.author, e.commit_hash
              FROM events e JOIN projects p ON p.id = e.project_id
-             WHERE e.project_id = ?1 AND e.kind <> 'next'",
+             WHERE e.project_id = ?1 AND e.kind NOT IN ('next', 'withdrawn')",
         );
         // Both ends are compared as text, which sorts correctly for RFC 3339.
         // A bound may be a whole timestamp (from a tag) or a bare day (from a
@@ -1615,7 +1624,7 @@ impl Db {
         let mut changes = 0u32;
         let mut stmt = self.conn.prepare(
             "SELECT kind, COUNT(*) FROM events
-             WHERE project_id = ?1 AND created_at >= ?2 AND kind <> 'next'
+             WHERE project_id = ?1 AND created_at >= ?2 AND kind NOT IN ('next', 'withdrawn')
              GROUP BY kind",
         )?;
         let rows = stmt.query_map(params![project_id, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?;
@@ -2006,6 +2015,25 @@ impl Db {
 
     /// Events of a kind that are still open - questions and wishes are
     /// answered by being resolved, which a later release will do.
+    /// Withdraws the owner's questions a hub no longer lists.
+    ///
+    /// A question the owner struck from the hub by hand was settled or let
+    /// go, and the record used to keep asking it in every packet. Only the
+    /// owner's own questions - read from a hub - are withdrawn this way; a
+    /// question an assistant asked through `ask_owner` has never been in
+    /// the file, and the file cannot strike what it never held.
+    pub fn withdraw_questions_not_in(&self, project_id: i64, keep: &[String]) -> Result<u32> {
+        let marks = std::iter::repeat_n("?", keep.len()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "UPDATE events SET kind = 'withdrawn' WHERE project_id = ?1 AND kind = 'question' AND author = 'owner' \
+             AND body NOT IN ({marks})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        args.extend(keep.iter().map(|k| k as &dyn rusqlite::ToSql));
+        Ok(stmt.execute(args.as_slice())? as u32)
+    }
+
     pub fn open_events(&self, project_id: i64, kind: &str) -> Result<Vec<(i64, String)>> {
         let mut stmt = self
             .conn
@@ -2031,7 +2059,7 @@ impl Db {
     pub fn recent_events(&self, project_id: i64, limit: u32) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
             "SELECT kind, created_at, body, author FROM events
-             WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next')
+             WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn')
              ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_id, limit], |r| {
@@ -2153,7 +2181,7 @@ impl Db {
     /// including the boundary cannot pull them back in.
     pub fn events_since(&self, project_id: i64, after: &str) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
-            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL              FROM events WHERE project_id = ?1 AND created_at >= ?2 AND session_id IS NULL              AND kind NOT IN ('wish', 'next') ORDER BY created_at DESC, id DESC",
+            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL              FROM events WHERE project_id = ?1 AND created_at >= ?2 AND session_id IS NULL              AND kind NOT IN ('wish', 'next', 'withdrawn') ORDER BY created_at DESC, id DESC",
         )?;
         let rows = stmt.query_map(params![project_id, after], |r| {
             Ok(RecentEvent {
@@ -2179,7 +2207,7 @@ impl Db {
     /// it can say how many it left out rather than quietly ending its list.
     pub fn count_recent_events(&self, project_id: i64) -> Result<u64> {
         let n: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next')",
+            "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn')",
             [project_id],
             |r| r.get(0),
         )?;
