@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.18.0] - 2026-09-08
+
+### Features
+- Task cards - find, make, open, link, write against and close
 ## [0.17.0] - 2026-09-08
 
 ### Breaking Changes
