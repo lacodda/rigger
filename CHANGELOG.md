@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.17.0] - 2026-09-08
+
+### Breaking Changes
+
+- **Profiles with a record of their own, and a vocabulary of task statuses**
+the database moves from `<data>/rigger.db` to
+`<data>/profiles/line/rigger.db`. The first profile-aware rigger to run
+moves it and keeps the old file as `rigger.db.before-profiles`; nothing
+has to be done by hand, and `RIGGER_DATA_DIR` still names the root.
+Schema 17 renames the task status `open` to `new`; a copy of the
+database is taken before the migration, as always. `adopt` no longer
+requires a root when the profile names one.
+
+### Features
+- Profiles with a record of their own, and a vocabulary of task statuses
 ## [0.16.0] - 2026-09-08
 
 ### Features
