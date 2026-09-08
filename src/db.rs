@@ -441,6 +441,15 @@ struct Shape {
     rank: Option<i64>,
 }
 
+/// What recording a stage did, and whether the stage stands shipped now -
+/// the import needs the last to know whether the plan's boxes still speak
+/// for its tasks.
+pub struct Upserted {
+    pub id: i64,
+    pub change: Change,
+    pub shipped: bool,
+}
+
 /// A stage as the record already holds it: its id, title, status, the
 /// date it shipped, the prose written before and after its list, and the
 /// shape its heading had. Named because an upsert compares all of it at
@@ -826,30 +835,27 @@ impl Db {
         // history backwards and its future forwards.
         let known = stages.iter().any(|(_, rank, _)| rank.is_some());
         if known {
-            // A stage the file never held stands where the next entry
-            // would be written: at the top of a changelog, at the foot of
-            // a plan, in the same run of prose as its neighbour. A version
-            // a tag closed after the hub was last read used to land below
-            // the oldest entry, under the prose that ends the file.
-            let (mut ranked, mut fresh): (Vec<_>, Vec<_>) = stages.into_iter().partition(|(_, rank, _)| rank.is_some());
+            // A stage the file never held is put where its number says,
+            // among the stages the file did hold, in the same run of prose
+            // as the neighbour it goes before. A version a tag closed after
+            // the hub was last read used to land below the oldest entry,
+            // under the prose that ends the file; put at the top instead,
+            // a patch of an old release would have led the changelog.
+            let (mut ranked, fresh): (Vec<_>, Vec<_>) = stages.into_iter().partition(|(_, rank, _)| rank.is_some());
             ranked.sort_by_key(|(_, rank, _)| rank.unwrap_or(0));
-            fresh.sort_by_key(|(_, _, s)| version_order(&s.version));
-            if shipped {
-                fresh.reverse();
-                if let Some((_, _, first)) = ranked.first() {
-                    let at = first.after_prose;
-                    fresh.iter_mut().for_each(|(_, _, s)| s.after_prose = at);
+            for (id, rank, mut stage) in fresh {
+                let order = version_order(&stage.version);
+                let at = ranked.iter().position(|(_, _, s)| {
+                    let other = version_order(&s.version);
+                    if shipped { other < order } else { other > order }
+                });
+                let neighbour = at.map(|i| &ranked[i].2).or(ranked.last().map(|(_, _, s)| s));
+                if let Some(neighbour) = neighbour {
+                    stage.after_prose = neighbour.after_prose;
                 }
-                fresh.append(&mut ranked);
-                stages = fresh;
-            } else {
-                if let Some((_, _, last)) = ranked.last() {
-                    let at = last.after_prose;
-                    fresh.iter_mut().for_each(|(_, _, s)| s.after_prose = at);
-                }
-                ranked.append(&mut fresh);
-                stages = ranked;
+                ranked.insert(at.unwrap_or(ranked.len()), (id, rank, stage));
             }
+            stages = ranked;
         } else {
             stages.sort_by_key(|(_, _, s)| version_order(&s.version));
             if shipped {
@@ -949,7 +955,7 @@ impl Db {
     /// keeps its shipped stages in the major map, the changelog holds the
     /// entry about each - and only one of them can decide the heading, the
     /// depth and the place. The changelog does, for a stage that shipped.
-    pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage, owns_shape: bool) -> Result<(i64, Change)> {
+    pub fn upsert_version(&self, project_id: i64, stage: &crate::hub::Stage, from_changelog: bool) -> Result<Upserted> {
         let mut existing: Option<Recorded> = self
             .conn
             .query_row(
@@ -1023,6 +1029,13 @@ impl Db {
         // A reading that does not own the shape keeps the one already
         // recorded, so the plan's copy of a shipped stage cannot move it
         // out of the changelog it was written in.
+        // Which reading says how a stage is written. The changelog always
+        // does. The plan does for a stage that has not shipped - it is the
+        // only file that holds one - and never for a stage that has: its
+        // copy of one is a line in the major map, or a stage the tag
+        // closed before the plan was told, and the plan's depth and place
+        // say nothing about where the entry stands in the changelog.
+        let owns_shape = from_changelog || status != "shipped";
         let shape = match owns_shape {
             true => Shape::of(stage),
             false => existing.as_ref().map(|(.., recorded)| recorded.clone()).unwrap_or_else(|| Shape::of(stage)),
@@ -1054,7 +1067,11 @@ impl Db {
                     && was_after == notes_after
                     && was_shape == shape
                 {
-                    return Ok((id, Change::Unchanged));
+                    return Ok(Upserted {
+                        id,
+                        change: Change::Unchanged,
+                        shipped: status == "shipped",
+                    });
                 }
                 self.conn.execute(
                     "UPDATE versions SET title = ?1, status = ?2, shipped_at = ?3, notes = ?4, \
@@ -1074,7 +1091,11 @@ impl Db {
                         id
                     ],
                 )?;
-                Ok((id, Change::Updated))
+                Ok(Upserted {
+                    id,
+                    change: Change::Updated,
+                    shipped: status == "shipped",
+                })
             }
             None => {
                 self.conn.execute(
@@ -1095,7 +1116,11 @@ impl Db {
                         shape.gap_after
                     ],
                 )?;
-                Ok((self.conn.last_insert_rowid(), Change::Added))
+                Ok(Upserted {
+                    id: self.conn.last_insert_rowid(),
+                    change: Change::Added,
+                    shipped: status == "shipped",
+                })
             }
         }
     }
@@ -1118,7 +1143,7 @@ impl Db {
     /// Records a task of a version. The pair (version, title) identifies it:
     /// the hub has no ids, and the text of a line is what the owner edits
     /// least once a stage is written.
-    pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task) -> Result<Change> {
+    pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task, may_reopen: bool) -> Result<Change> {
         let status = if task.done { "done" } else { "open" };
         let position = position as i64;
 
@@ -1148,12 +1173,21 @@ impl Db {
 
         match existing {
             Some((id, was, title, at)) => {
+                // A task the record closed is not reopened by a plan that
+                // has not been told. The stage shipped, the task was closed
+                // through the record, and the plan's empty box is stale
+                // rather than a decision - found when adopting this
+                // project's own hub reopened the three tasks of a version
+                // tagged two days before.
+                let status = if !may_reopen && was == "done" { "done" } else { status };
                 if was == status && title == task.title && at == Some(position) {
                     return Ok(Change::Unchanged);
                 }
-                let closed_at = task.done.then(now);
+                let closed_at = (status == "done").then(now);
                 self.conn.execute(
-                    "UPDATE tasks SET status = ?1, closed_at = ?2, title = ?3, position = ?4 WHERE id = ?5",
+                    "UPDATE tasks SET status = ?1, \
+                     closed_at = CASE WHEN ?1 = 'done' AND status = 'done' THEN closed_at ELSE ?2 END, \
+                     title = ?3, position = ?4 WHERE id = ?5",
                     params![status, closed_at, task.title, position, id],
                 )?;
                 Ok(Change::Updated)

@@ -168,6 +168,70 @@ fn a_version_shipped_since_the_last_import_leads_the_changelog() {
     assert!(written.starts_with("# Изменения\n\nЗакрытые этапы, новые сверху.\n\n## v0.2.0"), "{written}");
 }
 
+/// A plan that has not been told the stage shipped is stale, not a
+/// decision. Its empty boxes do not reopen the tasks the record closed,
+/// and its depth and place do not follow the stage into the changelog.
+#[test]
+fn a_stale_plan_neither_reopens_a_closed_task_nor_shapes_a_shipped_stage() {
+    let data = tempfile::tempdir().unwrap();
+    let hub = project(data.path());
+    let root = data.path().join("sample");
+    git(&root, &["init", "--quiet", "--initial-branch", "main"]);
+    std::fs::write(root.join("README.md"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "feat: start"]);
+
+    let plan = "\
+# План
+
+## Блок «Первый»
+
+### v0.2.0 · Второй
+
+- [ ] сделать одно
+- [ ] сделать другое
+
+**Результат:** что-то работает.
+";
+    std::fs::write(hub.join("План.md"), plan).unwrap();
+    std::fs::write(hub.join("Изменения.md"), "# Изменения\n\n## v0.1.0 · Первый — выпущена 2026-09-01\n\nБыло.\n").unwrap();
+    rigger(data.path()).args(["import", "sample", "--hub"]).arg(&hub).assert().success();
+
+    // The record closes one task - the way `close_task` does - and a tag closes the stage.
+    let db = rusqlite::Connection::open(data.path().join("rigger.db")).unwrap();
+    db.execute(
+        "UPDATE tasks SET status = 'done', closed_at = '2026-09-02T10:00:00Z' WHERE title = 'сделать одно'",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    git(&root, &["tag", "v0.2.0"]);
+    rigger(data.path()).args(["sync", "sample"]).assert().success();
+
+    // The plan is read again, unchanged and behind the times.
+    rigger(data.path()).args(["import", "sample", "--hub"]).arg(&hub).assert().success();
+
+    let out = data.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    rigger(data.path()).args(["export", "sample", "--hub"]).arg(&out).assert().success();
+    let changes = body(&out.join("Изменения.md"));
+    let plan_out = body(&out.join("План.md"));
+    assert!(
+        changes.contains("## v0.2.0 · Второй — выпущен"),
+        "the stage is a changelog entry, at the changelog's depth: {changes}"
+    );
+    assert!(
+        changes.contains("- [x] сделать одно\n- [ ] сделать другое"),
+        "the closed task stays closed: {changes}"
+    );
+    assert!(changes.contains("**Результат:** что-то работает."), "its prose travels with it: {changes}");
+    assert!(
+        changes.find("## v0.2.0").unwrap() < changes.find("## v0.1.0").unwrap(),
+        "newest first: {changes}"
+    );
+    assert!(!plan_out.contains("v0.2.0"), "a shipped stage has left the plan: {plan_out}");
+}
+
 /// A version in both files keeps the changelog's shape: the plan's copy
 /// of a shipped stage - in a major map, at another depth - must not move
 /// it out of the changelog.
