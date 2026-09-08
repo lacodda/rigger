@@ -971,7 +971,23 @@ impl Db {
                 existing = Some((twin_id, stage.title.clone(), String::new(), None, None, None, Shape::default()));
             }
         }
-        let status = if stage.shipped_on.is_some() { "shipped" } else { "planned" };
+        // A version a tag proved shipped keeps the day the tag says. The
+        // changelog may carry another - written up the day after, or the
+        // day before the tag was pushed - and a fact from git outranks what
+        // was written. Found by adopting a line twice: each import put the
+        // hub's day back, and each sync then reported the version shipped
+        // anew.
+        let from_git: Option<String> = match &existing {
+            Some((id, ..)) => self
+                .conn
+                .query_row("SELECT shipped_at FROM versions WHERE id = ?1 AND shipped_source = 'tag'", [id], |r| r.get(0))
+                .optional()?,
+            None => None,
+        };
+        let (status, shipped_on) = match from_git {
+            Some(day) => ("shipped", Some(day)),
+            None => (if stage.shipped_on.is_some() { "shipped" } else { "planned" }, stage.shipped_on.clone()),
+        };
         // A reading that does not own the shape keeps the one already
         // recorded, so the plan's copy of a shipped stage cannot move it
         // out of the changelog it was written in.
@@ -993,7 +1009,7 @@ impl Db {
                 // and it cannot be composed from the other fields.
                 if title.as_deref() == stage.title.as_deref()
                     && was_status == status
-                    && shipped_at == stage.shipped_on
+                    && shipped_at == shipped_on
                     && was_notes == notes
                     && was_after == notes_after
                     && was_shape == shape
@@ -1007,7 +1023,7 @@ impl Db {
                     params![
                         stage.title,
                         status,
-                        stage.shipped_on,
+                        shipped_on,
                         notes,
                         notes_after,
                         shape.depth,
@@ -1029,7 +1045,7 @@ impl Db {
                         stage.version,
                         stage.title,
                         status,
-                        stage.shipped_on,
+                        shipped_on,
                         notes,
                         notes_after,
                         shape.depth,
