@@ -371,7 +371,11 @@ fn render_state(p: &Packet) -> String {
         (Some(v), Some(on)) => out.push_str(&format!("Last shipped: {v} on {on}\n")),
         _ => out.push_str("Nothing shipped yet\n"),
     }
-    out.push_str(&format!("{} versions planned, {} tasks open\n", p.state.versions_planned, p.state.tasks_open));
+    out.push_str(&format!(
+        "{} planned, {} open\n",
+        plural(p.state.versions_planned as usize, "version", "versions"),
+        plural(p.state.tasks_open as usize, "task", "tasks")
+    ));
     // What git says, which is a different question from what the record
     // says: a project can be busy in commits and silent in events, and the
     // owner's question is how long it has actually been still.

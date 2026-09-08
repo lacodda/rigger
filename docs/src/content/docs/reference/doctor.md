@@ -76,6 +76,14 @@ A project whose hub the record has never seen is named too, rather than passed o
 
 That is not pedantry. A check that skips what it cannot find prints the same clean line as a check that looked and found nothing wrong - and the record learns where a hub is only when one is imported or exported, so before that it genuinely cannot speak for it.
 
+A hub still kept by hand is named as such, with the files that are:
+
+```console
+  beta         План.md, Изменения.md  kept by hand; `rigger export --adopt` hands it over
+```
+
+It is the one thing "every project through rigger" has left to do, so the list says how far along a line is rather than staying quiet about the files it skipped.
+
 ## What it leaves out
 
 A [service project](/rigger/reference/project/) never appears among the projects waiting to be synced. There is no repository to read, so it would have sat in that list for ever being advised a command that could not help it.

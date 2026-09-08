@@ -194,6 +194,12 @@ fn tools() -> Vec<Value> {
         record("pitfall", "Record a trap worth remembering: what looked right, what actually happened."),
         record("change", "Record something that changed in the product."),
         tool(
+            "record_state",
+            "Put one line at the top of the hub's state block: where the project stands after this sitting, the way a README's «Состояние» tells it. Only when the state shifted - a release, a block closed, a plan reground.",
+            json!({ "project": project_arg(), "text": text_arg("One sentence, bold headline first, for the README's state block") }),
+            &["project", "text"],
+        ),
+        tool(
             "set_next_step",
             "Leave the next session one line to start from. The newest one wins; it is not a list.",
             json!({ "project": project_arg(), "text": text_arg("The one line the next session starts from") }),
@@ -320,10 +326,15 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 "set_next_step" => "next",
                 "ask_owner" => "question",
                 "wish" => "wish",
+                "record_state" => "state",
                 other => bail!("rigger serves no tool named `{other}`"),
             };
             let project = project(db)?;
             let text = text()?;
+            if kind == "state" {
+                db.add_state_line(project.id, &crate::db::today(), text)?;
+                return Ok(format!("Added a state line for {}; `rigger export` writes it into the README.", project.name));
+            }
             db.record_event(project.id, kind, text, &crate::db::now(), "assistant")?;
             Ok(match kind {
                 "next" => format!("The next session for {} starts from this line.", project.name),
@@ -469,6 +480,7 @@ mod tests {
             "record_finding",
             "record_pitfall",
             "record_change",
+            "record_state",
             "set_next_step",
             "ask_owner",
             "wish",

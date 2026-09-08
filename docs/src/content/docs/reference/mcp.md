@@ -32,6 +32,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `record_finding` | Something learnt about the code or the domain |
 | `record_pitfall` | A trap worth remembering |
 | `record_change` | Something that changed in the product |
+| `record_state` | One line for the top of the hub's state block, when the state shifted |
 | `set_next_step` | The one line the next session starts from; the newest wins |
 | `ask_owner` | A question only the owner can settle; it waits in the packet |
 | `wish` | Something to sort into the plan later |

@@ -264,6 +264,16 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE (project_id, position)
     );
     ",
+    // v16: the day a session's diary entry is dated. A sitting read from a
+    // hub started at that day's midnight, but a sitting the record opened
+    // itself started when it started - and may end days later, which is
+    // the day its entry belongs to. Without a day of its own, the entry a
+    // session leaves could not be told apart from the same entry read
+    // back from the file.
+    "
+    ALTER TABLE sessions ADD COLUMN day TEXT;
+    UPDATE sessions SET day = substr(started_at, 1, 10) WHERE notes IS NOT NULL;
+    ",
 ];
 
 /// Columns that migration 7 gained after a database had already recorded it
@@ -441,6 +451,16 @@ struct Shape {
     rank: Option<i64>,
 }
 
+/// A diary heading without the date it opens with, for telling one entry
+/// from another when the same entry was read with and without its date.
+fn heading_sans_date(heading: Option<&str>) -> String {
+    let text = heading.unwrap_or("").trim();
+    let date_len = text.chars().take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.').count();
+    let rest = if date_len >= 8 { &text[date_len..] } else { text };
+    rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '·' | '—' | '-' | ':' | '–'))
+        .to_string()
+}
+
 /// What recording a stage did, and whether the stage stands shipped now -
 /// the import needs the last to know whether the plan's boxes still speak
 /// for its tasks.
@@ -456,10 +476,11 @@ pub struct Upserted {
 /// once.
 type Recorded = (i64, Option<String>, String, Option<String>, Option<String>, Option<String>, Shape);
 
-/// A diary entry as the record already holds it: its id, what was written
-/// under it, whether a rule followed it, and how many blank lines came
-/// after that rule. Named because an upsert compares all of it at once.
-type RecordedEntry = (i64, Option<String>, Option<bool>, Option<i64>, Option<i64>);
+/// A diary entry as the record already holds it: its id, its heading, what
+/// was written under it, whether a rule followed it, how many blank lines
+/// came after that rule, and its rank. Named because an upsert compares
+/// all of it at once.
+type RecordedEntry = (i64, Option<String>, Option<String>, Option<bool>, Option<i64>, Option<i64>);
 
 impl Shape {
     fn of(stage: &crate::hub::Stage) -> Shape {
@@ -651,46 +672,129 @@ impl Db {
     /// quiet - a day may hold two entries, but not two with the same title.
     pub fn upsert_diary_entry(&self, project_id: i64, entry: &crate::hub::DiaryEntry) -> Result<Change> {
         let at = format!("{}T00:00:00Z", entry.date);
-        let existing: Option<RecordedEntry> = self
+        // Every entry of that day. Matched by heading exactly first, and
+        // then by the heading without its date: an earlier reader kept the
+        // date apart from the heading, so a hub read by it and read again
+        // now held every entry twice - once as `(ночь) · v0.2.1` and once
+        // as `2026-09-03 (ночь) · v0.2.1` - and the export wrote both.
+        let mut stmt = self.conn.prepare(
+            "SELECT id, heading, notes, followed_by_rule, gap_after, rank FROM sessions \
+             WHERE project_id = ?1 AND COALESCE(day, substr(started_at, 1, 10)) = ?2 AND notes IS NOT NULL ORDER BY id",
+        )?;
+        let rows: Vec<RecordedEntry> = stmt
+            .query_map(params![project_id, entry.date], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let wanted = heading_sans_date(entry.heading.as_deref());
+        let same = |heading: &Option<String>| heading_sans_date(heading.as_deref()) == wanted;
+        let matched = rows.iter().find(|r| r.1 == entry.heading).or_else(|| rows.iter().find(|r| same(&r.1)));
+
+        let notes = (!entry.body.trim().is_empty()).then(|| entry.body.clone());
+        let Some((id, heading, was, rule, gap, rank)) = matched else {
+            self.conn.execute(
+                "INSERT INTO sessions (project_id, started_at, ended_at, day, heading, notes, followed_by_rule, gap_after, rank) \
+                 VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    project_id,
+                    at,
+                    entry.date,
+                    entry.heading,
+                    notes,
+                    entry.followed_by_rule,
+                    entry.gap_after as i64,
+                    entry.rank as i64
+                ],
+            )?;
+            return Ok(Change::Added);
+        };
+        // The same entry under another spelling of its heading is one
+        // entry, and the record keeps one row for it.
+        let mut merged = 0;
+        for (other, ..) in rows.iter().filter(|r| r.0 != *id && same(&r.1)) {
+            merged += self.conn.execute("DELETE FROM sessions WHERE id = ?1", [other])?;
+        }
+        if merged == 0
+            && *heading == entry.heading
+            && *was == notes
+            && *rule == Some(entry.followed_by_rule)
+            && *gap == Some(entry.gap_after as i64)
+            && *rank == Some(entry.rank as i64)
+        {
+            return Ok(Change::Unchanged);
+        }
+        self.conn.execute(
+            "UPDATE sessions SET day = ?2, heading = ?3, notes = ?4, followed_by_rule = ?5, gap_after = ?6, rank = ?7 WHERE id = ?1",
+            params![
+                id,
+                entry.date,
+                entry.heading,
+                notes,
+                entry.followed_by_rule,
+                entry.gap_after as i64,
+                entry.rank as i64
+            ],
+        )?;
+        Ok(Change::Updated)
+    }
+
+    /// Leaves a session's diary entry in the record, where an export of the
+    /// diary reads it.
+    ///
+    /// Until this, `end` could only append the entry to a file - and once a
+    /// hub is written from the record, that file is generated, so the
+    /// entry went into a file the next export would rewrite without it.
+    /// The entry takes the newest rank, and the rule and spacing the diary
+    /// already uses between its entries.
+    pub fn write_session_diary(&self, session_id: i64, project_id: i64, day: &str, heading: Option<&str>, notes: &str) -> Result<()> {
+        let (rule, gap, rank): (Option<bool>, Option<i64>, Option<i64>) = self
             .conn
             .query_row(
-                "SELECT id, notes, followed_by_rule, gap_after, rank FROM sessions WHERE project_id = ?1 AND started_at = ?2 \
-                 AND ((heading IS NULL AND ?3 IS NULL) OR heading = ?3)",
-                params![project_id, at, entry.heading],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                "SELECT followed_by_rule, gap_after, MIN(COALESCE(rank, 0)) FROM sessions WHERE project_id = ?1 AND notes IS NOT NULL",
+                [project_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .optional()?;
-        let notes = (!entry.body.trim().is_empty()).then(|| entry.body.clone());
-        match existing {
-            Some((_, was, rule, gap, rank))
-                if was == notes && rule == Some(entry.followed_by_rule) && gap == Some(entry.gap_after as i64) && rank == Some(entry.rank as i64) =>
-            {
-                Ok(Change::Unchanged)
-            }
-            Some((id, ..)) => {
-                self.conn.execute(
-                    "UPDATE sessions SET notes = ?2, followed_by_rule = ?3, gap_after = ?4, rank = ?5 WHERE id = ?1",
-                    params![id, notes, entry.followed_by_rule, entry.gap_after as i64, entry.rank as i64],
-                )?;
-                Ok(Change::Updated)
-            }
-            None => {
-                self.conn.execute(
-                    "INSERT INTO sessions (project_id, started_at, ended_at, heading, notes, followed_by_rule, gap_after, rank) \
-                     VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        project_id,
-                        at,
-                        entry.heading,
-                        notes,
-                        entry.followed_by_rule,
-                        entry.gap_after as i64,
-                        entry.rank as i64
-                    ],
-                )?;
-                Ok(Change::Added)
-            }
-        }
+            .unwrap_or((None, None, None));
+        self.conn.execute(
+            "UPDATE sessions SET day = ?2, heading = ?3, notes = ?4, followed_by_rule = ?5, gap_after = ?6, rank = ?7 WHERE id = ?1",
+            params![
+                session_id,
+                day,
+                heading,
+                notes,
+                rule.unwrap_or(false),
+                gap.unwrap_or(1),
+                rank.map(|r| r - 1).unwrap_or(0)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Puts a line at the top of a README's state block.
+    ///
+    /// The block is the owner's summary of where things stand, newest
+    /// first, and a hub written from the record had no way to grow it: the
+    /// lines came in with an import and never after. Now a sitting that
+    /// shifts the state says so with one line, the way the ritual always
+    /// asked, and the export writes it where the hub keeps them.
+    pub fn add_state_line(&self, project_id: i64, stamp: &str, body: &str) -> Result<()> {
+        let gap: i64 = self
+            .conn
+            .query_row("SELECT gap_after FROM state_lines WHERE project_id = ?1 AND position = 0", [project_id], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0);
+        // Shifted from the bottom up: the column is unique per position,
+        // and moving the top line first would land on the one below it.
+        self.conn
+            .execute("UPDATE state_lines SET position = -position - 1 WHERE project_id = ?1", [project_id])?;
+        self.conn
+            .execute("UPDATE state_lines SET position = -position WHERE project_id = ?1", [project_id])?;
+        self.conn.execute(
+            "INSERT INTO state_lines (project_id, position, stamp, body, gap_after) VALUES (?1, 0, ?2, ?3, ?4)",
+            params![project_id, stamp, body, gap],
+        )?;
+        Ok(())
     }
 
     /// Every diary entry the record holds for a project, newest first.
@@ -703,7 +807,7 @@ impl Db {
     /// reverse every busy day, which is what the first live run did.
     pub fn diary_entries(&self, project_id: i64) -> Result<Vec<crate::hub::DiaryEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT substr(started_at, 1, 10), heading, notes, followed_by_rule, gap_after, rank FROM sessions \
+            "SELECT COALESCE(day, substr(started_at, 1, 10)), heading, notes, followed_by_rule, gap_after, rank FROM sessions \
              WHERE project_id = ?1 AND notes IS NOT NULL \
              ORDER BY COALESCE(rank, 0) ASC, started_at DESC, id ASC",
         )?;
@@ -797,10 +901,11 @@ impl Db {
     pub fn stages(&self, project_id: i64, shipped: bool) -> Result<Vec<crate::hub::Stage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, title, shipped_at, notes, heading_depth, notes_after, heading, after_prose, rank, gap_after FROM versions \
-             WHERE project_id = ?1 AND (status = 'shipped') = ?2 \
+             WHERE project_id = ?1 AND status = ?2 \
              ORDER BY COALESCE(rank, 0), id",
         )?;
-        let rows = stmt.query_map(params![project_id, shipped], |r| {
+        let status = if shipped { "shipped" } else { "planned" };
+        let rows = stmt.query_map(params![project_id, status], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, Option<i64>>(9)?,
@@ -874,7 +979,7 @@ impl Db {
     fn tasks_of_version(&self, version_id: i64) -> Result<Vec<crate::hub::Task>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT title, status FROM tasks WHERE version_id = ?1 ORDER BY COALESCE(position, id), id")?;
+            .prepare("SELECT title, status FROM tasks WHERE version_id = ?1 AND status <> 'dropped' ORDER BY COALESCE(position, id), id")?;
         let rows = stmt.query_map([version_id], |r| {
             Ok(crate::hub::Task {
                 title: r.get(0)?,
@@ -1143,7 +1248,7 @@ impl Db {
     /// Records a task of a version. The pair (version, title) identifies it:
     /// the hub has no ids, and the text of a line is what the owner edits
     /// least once a stage is written.
-    pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task, may_reopen: bool) -> Result<Change> {
+    pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task, may_reopen: bool) -> Result<(i64, Change)> {
         let status = if task.done { "done" } else { "open" };
         let position = position as i64;
 
@@ -1181,7 +1286,7 @@ impl Db {
                 // tagged two days before.
                 let status = if !may_reopen && was == "done" { "done" } else { status };
                 if was == status && title == task.title && at == Some(position) {
-                    return Ok(Change::Unchanged);
+                    return Ok((id, Change::Unchanged));
                 }
                 let closed_at = (status == "done").then(now);
                 self.conn.execute(
@@ -1190,7 +1295,7 @@ impl Db {
                      title = ?3, position = ?4 WHERE id = ?5",
                     params![status, closed_at, task.title, position, id],
                 )?;
-                Ok(Change::Updated)
+                Ok((id, Change::Updated))
             }
             None => {
                 self.conn.execute(
@@ -1198,9 +1303,47 @@ impl Db {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![project_id, version_id, task.title, status, now(), task.done.then(now), position],
                 )?;
-                Ok(Change::Added)
+                Ok((self.conn.last_insert_rowid(), Change::Added))
             }
         }
+    }
+
+    /// Marks the open tasks of a stage that its reading no longer lists.
+    ///
+    /// A hub kept by hand is the owner's pen, and a line struck from it is
+    /// struck: the record used to keep every task ever read as open, so a
+    /// hub that had lived a month by hand exported every rewording of
+    /// every task beside the current one. Done tasks stay - they are
+    /// history - and a dropped task listed again comes back as open.
+    pub fn drop_tasks_not_in(&self, version_id: i64, keep: &[i64]) -> Result<u32> {
+        let ids = keep.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let dropped = self.conn.execute(
+            &format!("UPDATE tasks SET status = 'dropped' WHERE version_id = ?1 AND status = 'open' AND id NOT IN ({ids})"),
+            [version_id],
+        )?;
+        Ok(dropped as u32)
+    }
+
+    /// Marks the planned versions a hub no longer names, in either file.
+    ///
+    /// A stage renumbered by hand - v1.10 becoming v1.11 when the queue
+    /// moved - left its old number in the record as a stage still to come,
+    /// with every task under it, and the export printed both.
+    pub fn drop_versions_not_in(&self, project_id: i64, keep: &[&str]) -> Result<u32> {
+        let marks = std::iter::repeat_n("?", keep.len()).collect::<Vec<_>>().join(",");
+        let sql = format!("UPDATE versions SET status = 'dropped' WHERE project_id = ?1 AND status = 'planned' AND name NOT IN ({marks})");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        args.extend(keep.iter().map(|k| k as &dyn rusqlite::ToSql));
+        let dropped = stmt.execute(args.as_slice())?;
+        // Its open tasks go with it: they would otherwise go on being
+        // counted as the project's open work under a stage nobody can see.
+        self.conn.execute(
+            "UPDATE tasks SET status = 'dropped' WHERE status = 'open' \
+             AND version_id IN (SELECT id FROM versions WHERE project_id = ?1 AND status = 'dropped')",
+            [project_id],
+        )?;
+        Ok(dropped as u32)
     }
 
     /// Records an event unless the same one is already there.
@@ -1753,7 +1896,7 @@ impl Db {
         let mut stmt = self.conn.prepare(
             "SELECT name, title, planned_week, shipped_at
              FROM versions
-             WHERE project_id = ?1 AND (planned_week IS NOT NULL OR shipped_at IS NOT NULL)",
+             WHERE project_id = ?1 AND status <> 'dropped' AND (planned_week IS NOT NULL OR shipped_at IS NOT NULL)",
         )?;
         let rows = stmt.query_map([project_id], |r| {
             let name: String = r.get(0)?;
@@ -2102,6 +2245,11 @@ pub fn now() -> String {
         .round(jiff::Unit::Second)
         .map(|t| t.to_string())
         .unwrap_or_else(|_| jiff::Timestamp::now().to_string())
+}
+
+/// Today, as a hub dates its lines: `2026-09-08`.
+pub fn today() -> String {
+    now().split('T').next().unwrap_or_default().to_string()
 }
 
 #[cfg(test)]

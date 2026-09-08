@@ -313,6 +313,8 @@ enum NoteKind {
     Change,
     /// The one line the next session starts from
     Next,
+    /// A line for the hub's state block: where things stand, in one sentence
+    State,
 }
 
 impl NoteKind {
@@ -323,6 +325,7 @@ impl NoteKind {
             NoteKind::Pitfall => "pitfall",
             NoteKind::Change => "change",
             NoteKind::Next => "next",
+            NoteKind::State => "state",
         }
     }
 }
@@ -566,6 +569,14 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     };
     line("versions", report.versions_added, report.versions_updated);
     line("tasks", report.tasks_added, report.tasks_updated);
+    if report.versions_dropped + report.tasks_dropped > 0 {
+        println!(
+            "  {:<10} {} and {} struck from the hub",
+            "dropped",
+            plural(report.versions_dropped as usize, "version", "versions"),
+            plural(report.tasks_dropped as usize, "task", "tasks")
+        );
+    }
     if report.decisions_added > 0 {
         println!("  {:<10} {} added", "decisions", report.decisions_added);
     }
@@ -863,6 +874,13 @@ fn print_sync(report: &sync::Report, many: bool) {
 fn note(project: &str, kind: &str, text: &str) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
+    // A state line is not an event: it is the top of the README's state
+    // block, which an export writes from the record.
+    if kind == "state" {
+        db.add_state_line(project.id, &db::today(), text)?;
+        println!("Added a state line for {}; `rigger export` writes it into the README", project.name);
+        return Ok(());
+    }
     db.record_event(project.id, kind, text, &db::now(), "assistant")?;
     println!("Recorded a {kind} for {}", project.name);
     Ok(())
@@ -2139,6 +2157,17 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
 
     db.end_session(open.id, &at)?;
 
+    // The entry goes into the record whatever else happens to it: a hub
+    // written from the record reads its diary from there, and a sitting
+    // that only wrote to a file was lost the moment the file was generated.
+    // `--diary` still appends it to a file, for a hub kept by hand.
+    let day = at.split('T').next().unwrap_or_default().to_string();
+    if !summary.empty() {
+        let entry = session::diary_entry(&summary, &day, heading);
+        let body = entry.split_once('\n').map(|(_, rest)| rest.trim()).unwrap_or_default();
+        let title = heading.map(str::trim).filter(|h| !h.is_empty()).map(|h| format!("{day} · {h}"));
+        db.write_session_diary(open.id, project.id, &day, title.as_deref(), body)?;
+    }
     let written = match diary {
         Some(path) => Some(write_diary(path, &summary, heading)?),
         None => None,
@@ -2397,10 +2426,12 @@ fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
             out.push((project.name.clone(), String::from("-"), "the hub is not where the record says"));
             continue;
         }
+        let mut by_hand = Vec::new();
         for name in export::GENERATED {
             let path = dir.join(name);
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
             if !export::is_generated(&text) {
+                by_hand.push(name);
                 continue;
             }
             let want = generate(db, &project, name)?;
@@ -2408,6 +2439,13 @@ fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
             if want != text {
                 out.push((project.name.clone(), name.to_string(), "edited since it was generated"));
             }
+        }
+        // A hub still kept by hand is one the record cannot vouch for
+        // either - and the one thing "every project through rigger" has
+        // left to do. Named as such, so the list says how far along the
+        // line is rather than staying silent about the files it skipped.
+        if !by_hand.is_empty() {
+            out.push((project.name.clone(), by_hand.join(", "), "kept by hand; `rigger export --adopt` hands it over"));
         }
     }
     Ok(out)
@@ -2519,7 +2557,7 @@ closed in the plan, no tag in git ({}):",
             }
             // The advice only fits an edit; a hub the record has never
             // seen needs the other sentence.
-            if drift.iter().any(|(_, file, _)| file != "-") {
+            if drift.iter().any(|(_, file, why)| file != "-" && why.starts_with("edited")) {
                 println!("  edited: `rigger import` takes the edit into the record; `rigger export` discards it");
             }
         }

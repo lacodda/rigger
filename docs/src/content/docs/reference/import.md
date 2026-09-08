@@ -39,7 +39,28 @@ $ rigger import sample --hub C:\dev\sample\hub
 sample: nothing changed
 ```
 
-A stage is identified by its version, a task by its text within its stage, a decision by its date and body, and a question by its text. So a stage that moves from the plan to the changelog when it ships is updated, not duplicated; and a line dropped from the plan stays in the record as the task it was, because an import never deletes.
+A stage is identified by its version, a task by its text within its stage, a decision by its date and body, and a question by its text. So a stage that moves from the plan to the changelog when it ships is updated, not duplicated.
+
+## What the hub struck
+
+A hub kept by hand is the owner's pen, and a line struck from it is struck. A task the plan no longer lists is marked `dropped`: the export does not write it, the packet does not count it, and it comes back as open the moment the plan lists it again. A planned stage that neither file names any more - renumbered when the queue moved, or given up - is dropped the same way, with its open tasks. Done tasks and shipped stages stay: they are history, and a tag outranks a plan that has not been told.
+
+```console
+$ rigger import sample --hub C:\dev\sample\hub
+sample:
+  tasks      2 added, 1 updated
+  dropped    1 version and 4 tasks struck from the hub
+```
+
+Nothing is deleted. A dropped row keeps its id and its history, and reads as what it is.
+
+## What a stale plan cannot do
+
+A plan that has not been told a stage shipped is behind, not a decision. Its empty boxes do not reopen the tasks the record closed, and its depth and place do not follow the stage into the changelog. Its copy of a shipped stage - a line in the major map - neither un-ships it nor writes over the changelog's entry.
+
+## The diary
+
+`Дневник.md` is read into sittings: one entry per heading, with the heading exactly as written. An entry read once by an older reader - its date kept apart from its heading - is the same entry when read again, not a second one; the record keeps one row and the heading the hub writes now.
 
 ## When a file is missing
 

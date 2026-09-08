@@ -64,9 +64,13 @@ Work with nothing written down about why is work the record cannot explain later
 
 This is not a gate: the session closes either way. rigger reports; what to do about it is yours.
 
+## The entry it leaves
+
+The sitting's entry goes into the record whatever else happens to it, dated the day the session ended and titled by `--heading` when one is given. A hub written from the record reads its diary from there, so the next [`export`](/rigger/reference/export/) writes the entry at the top of `Дневник.md` - in the rule and spacing the diary already uses. Before this, `end` could only append to a file, and once that file was generated the entry went into a file the next export rewrote without it.
+
 ## `--diary`
 
-Appends an entry to a diary file, newest first, under whatever preamble the file already has:
+For a hub still kept by hand. Appends the same entry to a diary file, newest first, under whatever preamble the file already has:
 
 ```markdown
 # Дневник работы
@@ -88,7 +92,7 @@ Appends an entry to a diary file, newest first, under whatever preamble the file
 **Следующий шаг.** ship the retro next
 ```
 
-`--heading` names the entry; without one it is titled by its day alone. A file that does not exist yet is created rather than being a reason to fail at the end of a session.
+`--heading` names the entry; without one it is titled by its day alone. A file that does not exist yet is created rather than being a reason to fail at the end of a session. A hub that has been handed to the record (`export --adopt`) does not need this: the file is generated, and appending to it would be an edit the next export discards.
 
 The entry is the session's **own sentences, arranged** — rigger has no opinion about the day, and inventing one would put words in your diary that nobody said. Empty sections are left out rather than printed as bare headings.
 

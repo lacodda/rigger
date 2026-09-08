@@ -18,6 +18,9 @@ pub struct Report {
     pub versions_updated: u32,
     pub tasks_added: u32,
     pub tasks_updated: u32,
+    /// Struck from the hub since it was last read.
+    pub tasks_dropped: u32,
+    pub versions_dropped: u32,
     pub decisions_added: u32,
     pub questions_added: u32,
     pub diary_added: u32,
@@ -33,6 +36,8 @@ impl Report {
             + self.versions_updated
             + self.tasks_added
             + self.tasks_updated
+            + self.tasks_dropped
+            + self.versions_dropped
             + self.decisions_added
             + self.questions_added
             + self.diary_added
@@ -73,15 +78,27 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // closed since is not reopened by them.
     let closed = hub.closed_stages.iter().map(|stage| (stage, true));
     let open = hub.open_stages.iter().map(|stage| (stage, false));
+    let mut named = Vec::new();
     for (stage, from_changelog) in closed.chain(open) {
         let version = db.upsert_version(project_id, stage, from_changelog)?;
         tally(version.change, &mut report.versions_added, &mut report.versions_updated);
+        named.push(stage.version.as_str());
         let may_reopen = from_changelog || !version.shipped;
+        let mut kept = Vec::new();
         for (position, task) in stage.tasks.iter().enumerate() {
-            let change = db.upsert_task(project_id, version.id, position, task, may_reopen)?;
+            let (id, change) = db.upsert_task(project_id, version.id, position, task, may_reopen)?;
             tally(change, &mut report.tasks_added, &mut report.tasks_updated);
+            kept.push(id);
+        }
+        // What the reading no longer lists is struck, when the reading is
+        // the one that speaks for the stage. A plan behind a tag does not.
+        if may_reopen {
+            report.tasks_dropped += db.drop_tasks_not_in(version.id, &kept)?;
         }
     }
+    // A stage neither file names any more was renumbered or struck by
+    // hand; a tag would have shipped it, and a shipped stage is kept.
+    report.versions_dropped += db.drop_versions_not_in(project_id, &named)?;
 
     for decision in &hub.decisions {
         // Decisions are dated by day in the hub; the record keeps timestamps.

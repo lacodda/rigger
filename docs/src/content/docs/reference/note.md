@@ -27,8 +27,16 @@ Recorded a next for sample
 | `pitfall` | a trap worth remembering |
 | `change` | something that changed in the product |
 | `next` | the one line the next session starts from |
+| `state` | one line for the hub's state block: where things stand after this sitting |
 
 `finding` is the default. Decisions, findings, pitfalls and changes appear under **Recent** in the [context packet](/rigger/reference/context/); the newest `next` becomes its **Next step** and is not repeated among the events.
+
+`state` is not an event. It goes to the top of the README's «Состояние» block, which [`export`](/rigger/reference/export/) writes from the record - the one line the old ritual asked for whenever the state shifted, now with somewhere to go once the hub is generated:
+
+```console
+$ rigger note sample "**v0.2.0 shipped.** The second stage is closed." --kind state
+Added a state line for sample; `rigger export` writes it into the README
+```
 
 A question is not a kind here: questions are addressed to the owner, and they arrive from the hub or from an assistant calling [`ask_owner`](/rigger/reference/mcp/). Answering one is [`rigger resolve`](/rigger/reference/resolve/).
 
