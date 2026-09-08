@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.15.0] - 2026-09-08
+
+### Bug Fixes
+- Keep the day a tag says a version shipped
+- Read a hub into a record that already holds it
+- Name everything a hub gave, and skip the service project in the hub check
+- Let a stale plan neither reopen a closed task nor shape a shipped stage
+- Keep a hub path the way the platform spells it
+
+### Documentation
+- Point getting started at adopt
+
+### Features
+- Adopt a directory of repositories, and write a thin skill
 ## [0.14.0] - 2026-09-06
 
 ### Bug Fixes
@@ -16,6 +30,7 @@ All notable changes to this project are documented in this file.
 - Keep the blank lines a hub leaves where it writes no rule
 - Let the hub check look where the hub actually is
 - Read a README the way its hub wrote it
+- Put back a column an edited migration left out
 
 ### Documentation
 - The export command, and the hub check in doctor
