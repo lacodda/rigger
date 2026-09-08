@@ -11,8 +11,8 @@ Walks a directory and records the checkouts in it - a child with a `.git` inside
 
 ```console
 $ rigger adopt C:\dev --hubs C:\notes\Projects
-alpha  recorded     hub: 12 versions new, 31 tasks new   git: 9 versions shipped, 40 changes read
-beta   recorded     hub: 4 versions new, 9 tasks new     git: 2 versions shipped, 11 changes read
+alpha  recorded     hub: 12 versions, 31 tasks, 40 diary entries, 4 files of prose new   git: 9 versions shipped, 40 changes read
+beta   recorded     hub: 4 versions, 9 tasks, 6 diary entries, 3 files of prose new   git: 2 versions shipped, 11 changes read
 gamma  no hub
 
 3 repositories: 2 recorded, 0 known, 1 without a hub, 0 skipped; 2 hubs read.
@@ -36,7 +36,7 @@ A project already recorded is not recorded twice; its hub and its tags are read 
 $ rigger adopt C:\dev --hubs C:\notes\Projects
 alpha  known        hub: nothing new   git: nothing new
 beta   known        hub: nothing new   git: 1 version shipped, 3 changes read
-delta  recorded     hub: 2 versions new, 5 tasks new   git: nothing new
+delta  recorded     hub: 2 versions, 5 tasks, 3 diary entries, 2 files of prose new   git: nothing new
 gamma  no hub
 
 4 repositories: 1 recorded, 2 known, 1 without a hub, 0 skipped; 3 hubs read.

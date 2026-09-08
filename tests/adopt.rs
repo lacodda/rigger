@@ -80,7 +80,8 @@ fn a_checkout_with_a_hub_is_recorded_and_its_hub_and_tags_read() {
 
     let out = output(data.path(), &["adopt", repos.to_str().unwrap(), "--hubs", hubs.to_str().unwrap()]);
     assert!(out.contains("alpha  recorded"), "{out}");
-    assert!(out.contains("hub: 2 versions new, 2 tasks new"), "{out}");
+    // Every kind the hub gave is named: the prose of its two files counts.
+    assert!(out.contains("hub: 2 versions, 2 tasks, 2 files of prose new"), "{out}");
     assert!(out.contains("git: 1 version shipped"), "{out}");
     // The hub is what makes a checkout one of the line; beta has none.
     assert!(out.contains("beta   no hub"), "{out}");

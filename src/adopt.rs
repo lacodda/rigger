@@ -29,11 +29,39 @@ pub struct Adopted {
     pub hub: Option<String>,
     pub versions_added: u32,
     pub tasks_added: u32,
+    pub diary_added: u32,
+    /// Files whose prose the record took in on this run.
+    pub prose_files: u32,
     /// Versions a tag proved shipped, on this run.
     pub shipped: u32,
     /// Changes read from commit messages, on this run.
     pub changes_read: u32,
     pub warnings: Vec<String>,
+}
+
+impl Adopted {
+    /// What the hub gave, as a phrase: `2 versions, 6 tasks, 30 diary entries new`.
+    ///
+    /// Every kind is named, not only versions and tasks. The first run on
+    /// a real line said "nothing new" for sixteen hubs whose prose and
+    /// diary had just been read for the first time - the counts that were
+    /// printed were the two that happened to be zero.
+    pub fn hub_summary(&self) -> String {
+        let mut parts = Vec::new();
+        let mut part = |n: u32, one: &str, many: &str| {
+            if n > 0 {
+                parts.push(format!("{n} {}", if n == 1 { one } else { many }));
+            }
+        };
+        part(self.versions_added, "version", "versions");
+        part(self.tasks_added, "task", "tasks");
+        part(self.diary_added, "diary entry", "diary entries");
+        part(self.prose_files, "file of prose", "files of prose");
+        match parts.is_empty() {
+            true => "hub: nothing new".to_string(),
+            false => format!("hub: {} new", parts.join(", ")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -113,6 +141,8 @@ pub fn adopt(db: &Db, root: &Path, hubs: Option<&Path>, check: bool) -> Result<V
             hub: hub_for(hubs, &name).map(|h| h.display().to_string()),
             versions_added: 0,
             tasks_added: 0,
+            diary_added: 0,
+            prose_files: 0,
             shipped: 0,
             changes_read: 0,
             warnings: Vec::new(),
@@ -171,6 +201,8 @@ fn read_into(db: &Db, project: &Project, adopted: &mut Adopted) -> Result<()> {
         let report = import::import(db, project.id, &hub)?;
         adopted.versions_added = report.versions_added;
         adopted.tasks_added = report.tasks_added;
+        adopted.diary_added = report.diary_added;
+        adopted.prose_files = report.prose_files;
         adopted.warnings.extend(report.warnings);
     }
     let report = sync::sync(db, project)?;

@@ -609,14 +609,7 @@ fn adopt_root(root: &Path, hubs: Option<&Path>, check: bool, json: bool) -> Resu
             (Some(_), adopt::Status::Skipped(_), _) | (Some(_), _, true) => "hub: found".to_string(),
             (Some(_), _, false) => {
                 hubs_read += 1;
-                match a.versions_added + a.tasks_added {
-                    0 => "hub: nothing new".to_string(),
-                    _ => format!(
-                        "hub: {} new, {} new",
-                        plural(a.versions_added as usize, "version", "versions"),
-                        plural(a.tasks_added as usize, "task", "tasks")
-                    ),
-                }
+                a.hub_summary()
             }
         };
         let git = match (&a.status, check) {
@@ -2386,6 +2379,10 @@ fn generate(db: &Db, project: &db::Project, name: &str) -> Result<String> {
 fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
     let mut out = Vec::new();
     for project in db.projects()? {
+        // A place the record keeps for itself has no hub to vouch for.
+        if !project.kind.reads_git() {
+            continue;
+        }
         // Where the record says the hub is. It used to be guessed beside
         // the repository, and every hub of this line lives in a notes vault
         // instead - so the check read no files at all and reported that
