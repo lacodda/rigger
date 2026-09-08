@@ -281,7 +281,36 @@ const MIGRATIONS: &[&str] = &[
     "
     UPDATE tasks SET status = 'new' WHERE status = 'open';
     ",
+    // v18: a task can be a card - the unit of work at a desk. A card has a
+    // key (the ticket id, or a local one until a tracker gives it one),
+    // aliases (the ids it went by before it moved), a summary, and links
+    // to the repositories it is worked in, each with a branch. Events
+    // already carried a task id; now they have something to point at.
+    // `settings` holds what the desk needs to remember between commands:
+    // which card is open.
+    "
+    ALTER TABLE tasks ADD COLUMN key TEXT;
+    ALTER TABLE tasks ADD COLUMN aliases TEXT;
+    ALTER TABLE tasks ADD COLUMN summary TEXT;
+    ALTER TABLE tasks ADD COLUMN updated_at TEXT;
+    CREATE INDEX tasks_by_key ON tasks (key);
+    CREATE TABLE task_projects (
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        branch     TEXT,
+        role       TEXT,
+        PRIMARY KEY (task_id, project_id)
+    );
+    CREATE TABLE settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    ",
 ];
+
+/// The place a desk keeps its cards: a project the record keeps for
+/// itself, made on first use.
+pub const DESK: &str = "desk";
 
 /// The words a task's status can be. Everything before `done` is work
 /// still to do; `dropped` is a line struck from a hub.
@@ -2052,6 +2081,272 @@ impl Db {
             |r| r.get(0),
         )?;
         Ok(n.unsigned_abs())
+    }
+
+    /// The desk: where cards live, made the first time one is needed.
+    pub fn desk_project(&self) -> Result<Project> {
+        if let Some(desk) = self.project_by_name(DESK)? {
+            return Ok(desk);
+        }
+        self.add_project(DESK, &format!("service:{DESK}"), None, Kind::Service)
+    }
+
+    /// Makes a card. Without a key it gets a local one, `LOCAL-<day>-<n>`,
+    /// to be renamed when a tracker names the task.
+    pub fn new_card(&self, key: Option<&str>, title: &str, aliases: &[String]) -> Result<crate::card::Card> {
+        let desk = self.desk_project()?;
+        let key = match key {
+            Some(key) => key.trim().to_ascii_uppercase(),
+            None => {
+                let day = today().replace('-', "");
+                let n: i64 = self
+                    .conn
+                    .query_row("SELECT COUNT(*) FROM tasks WHERE key LIKE ?1", [format!("LOCAL-{day}-%")], |r| r.get(0))?;
+                format!("LOCAL-{day}-{}", n + 1)
+            }
+        };
+        if key.is_empty() {
+            bail!("a card needs a key or none at all; an empty one is neither");
+        }
+        if let Some(taken) = self.card_by_ref(&key)? {
+            bail!("'{key}' already names a card: {}", taken.title);
+        }
+        let at = now();
+        let aliases = serde_json::to_string(aliases)?;
+        self.conn.execute(
+            "INSERT INTO tasks (project_id, title, status, created_at, key, aliases, updated_at) VALUES (?1, ?2, 'new', ?3, ?4, ?5, ?3)",
+            params![desk.id, title.trim(), at, key, aliases],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(self.card(id)?.expect("the card just made"))
+    }
+
+    fn row_to_card(r: &rusqlite::Row) -> rusqlite::Result<crate::card::Card> {
+        let aliases: Option<String> = r.get(4)?;
+        Ok(crate::card::Card {
+            id: r.get(0)?,
+            key: r.get(1)?,
+            title: r.get(2)?,
+            status: r.get(3)?,
+            aliases: aliases.and_then(|a| serde_json::from_str(&a).ok()).unwrap_or_default(),
+            summary: r.get(5)?,
+            created_at: r.get(6)?,
+            updated_at: r.get(7)?,
+        })
+    }
+
+    const CARD_COLUMNS: &'static str = "id, key, title, status, aliases, summary, created_at, updated_at";
+
+    pub fn card(&self, id: i64) -> Result<Option<crate::card::Card>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {} FROM tasks WHERE id = ?1 AND key IS NOT NULL", Self::CARD_COLUMNS),
+                [id],
+                Self::row_to_card,
+            )
+            .optional()?)
+    }
+
+    /// A card by whatever names it: its numeric id, its key, or an alias -
+    /// case does not matter.
+    pub fn card_by_ref(&self, text: &str) -> Result<Option<crate::card::Card>> {
+        let text = text.trim();
+        if let Ok(id) = text.parse::<i64>()
+            && let Some(card) = self.card(id)?
+        {
+            return Ok(Some(card));
+        }
+        let upper = text.to_ascii_uppercase();
+        if let Some(card) = self
+            .conn
+            .query_row(
+                &format!("SELECT {} FROM tasks WHERE key IS NOT NULL AND UPPER(key) = ?1", Self::CARD_COLUMNS),
+                [&upper],
+                Self::row_to_card,
+            )
+            .optional()?
+        {
+            return Ok(Some(card));
+        }
+        Ok(self.cards(None)?.into_iter().find(|c| c.aliases.iter().any(|a| a.eq_ignore_ascii_case(text))))
+    }
+
+    /// Every card, newest first; `status` narrows it - `open` is everything
+    /// short of done and dropped.
+    pub fn cards(&self, status: Option<&str>) -> Result<Vec<crate::card::Card>> {
+        let filter = match status {
+            None | Some("all") => String::new(),
+            Some("open") => " AND status NOT IN ('done', 'dropped')".to_string(),
+            Some(s) => format!(" AND status = '{}'", s.replace('\'', "")),
+        };
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {} FROM tasks WHERE key IS NOT NULL{filter} ORDER BY COALESCE(updated_at, created_at) DESC, id DESC",
+            Self::CARD_COLUMNS
+        ))?;
+        let rows = stmt.query_map([], Self::row_to_card)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Gives a card a new key, keeping the old one as an alias: tasks move
+    /// between trackers, and the folder of a card is not renamed because
+    /// things link to it.
+    pub fn rename_card(&self, id: i64, key: &str) -> Result<crate::card::Card> {
+        let Some(card) = self.card(id)? else { bail!("no card [{id}]") };
+        let key = key.trim().to_ascii_uppercase();
+        if let Some(taken) = self.card_by_ref(&key)?
+            && taken.id != id
+        {
+            bail!("'{key}' already names a card: {}", taken.title);
+        }
+        let mut aliases = card.aliases.clone();
+        if !aliases.iter().any(|a| a.eq_ignore_ascii_case(&card.key)) {
+            aliases.push(card.key.clone());
+        }
+        self.conn.execute(
+            "UPDATE tasks SET key = ?2, aliases = ?3, updated_at = ?4 WHERE id = ?1",
+            params![id, key, serde_json::to_string(&aliases)?, now()],
+        )?;
+        Ok(self.card(id)?.expect("the card just renamed"))
+    }
+
+    pub fn add_alias(&self, id: i64, alias: &str) -> Result<crate::card::Card> {
+        let Some(card) = self.card(id)? else { bail!("no card [{id}]") };
+        let alias = alias.trim();
+        let mut aliases = card.aliases.clone();
+        if !aliases.iter().any(|a| a.eq_ignore_ascii_case(alias)) {
+            aliases.push(alias.to_string());
+        }
+        self.conn.execute(
+            "UPDATE tasks SET aliases = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, serde_json::to_string(&aliases)?, now()],
+        )?;
+        Ok(self.card(id)?.expect("the card just changed"))
+    }
+
+    pub fn set_card_summary(&self, id: i64, summary: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET summary = ?2, updated_at = ?3 WHERE id = ?1 AND key IS NOT NULL",
+            params![id, summary.trim(), now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn touch_card(&self, id: i64) -> Result<()> {
+        self.conn.execute("UPDATE tasks SET updated_at = ?2 WHERE id = ?1", params![id, now()])?;
+        Ok(())
+    }
+
+    /// Links a card to a repository, with the branch it is worked on
+    /// there. Linking again replaces the branch and the role.
+    pub fn link_card(&self, task_id: i64, project_id: i64, branch: Option<&str>, role: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO task_projects (task_id, project_id, branch, role) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT (task_id, project_id) DO UPDATE SET branch = COALESCE(excluded.branch, branch), role = COALESCE(excluded.role, role)",
+            params![task_id, project_id, branch, role],
+        )?;
+        self.touch_card(task_id)
+    }
+
+    pub fn card_links(&self, task_id: i64) -> Result<Vec<crate::card::Link>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.name, p.path, tp.branch, tp.role FROM task_projects tp JOIN projects p ON p.id = tp.project_id \
+             WHERE tp.task_id = ?1 ORDER BY p.name",
+        )?;
+        let rows = stmt.query_map([task_id], |r| {
+            Ok(crate::card::Link {
+                project: r.get(0)?,
+                path: r.get(1)?,
+                branch: r.get(2)?,
+                role: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The events written against a card, oldest first.
+    pub fn task_events(&self, task_id: i64) -> Result<Vec<RecentEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL FROM events \
+             WHERE task_id = ?1 AND kind NOT IN ('withdrawn') ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([task_id], |r| {
+            Ok(RecentEvent {
+                kind: r.get(0)?,
+                date: r.get(1)?,
+                body: r.get(2)?,
+                from_git: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Cards other than the one given whose events mention a needle - an
+    /// id or a case number. The weak trail: a task that moved leaves its
+    /// old number in the text of the card that took it over.
+    pub fn cards_mentioning(&self, needle: &str, except: &[String]) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.key, t.title FROM events e JOIN tasks t ON t.id = e.task_id \
+             WHERE t.key IS NOT NULL AND instr(e.body, ?1) > 0 ORDER BY t.key",
+        )?;
+        let rows = stmt.query_map([needle], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|(k, _)| !except.contains(k))
+            .collect())
+    }
+
+    /// Records an event against a card as well as a project.
+    pub fn record_task_event(&self, project_id: i64, task_id: i64, kind: &str, body: &str, at: &str, author: &str) -> Result<Change> {
+        let seen: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM events WHERE task_id = ?1 AND kind = ?2 AND body = ?3",
+                params![task_id, kind, body],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if seen.is_some() {
+            return Ok(Change::Unchanged);
+        }
+        let session = self.open_session(project_id)?.map(|s| s.id);
+        self.conn.execute(
+            "INSERT INTO events (project_id, session_id, task_id, kind, body, author, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![project_id, session, task_id, kind, body, author, at],
+        )?;
+        self.touch_card(task_id)?;
+        Ok(Change::Added)
+    }
+
+    /// The project a task belongs to, by id.
+    pub fn task_owner(&self, task_id: i64) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row("SELECT project_id FROM tasks WHERE id = ?1", [task_id], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(value) => {
+                self.conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    params![key, value],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+            }
+        }
+        Ok(())
     }
 
     pub fn count_open_tasks(&self, project_id: i64) -> Result<u64> {

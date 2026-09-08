@@ -28,6 +28,9 @@ Recorded a next for sample
 | `change` | something that changed in the product |
 | `next` | the one line the next session starts from |
 | `state` | one line for the hub's state block: where things stand after this sitting |
+| `plan` | a step of the plan of edits, for a [card](/rigger/reference/task/) |
+
+An event against a [card](/rigger/reference/task/) rather than a project is `rigger task note <CARD> <TEXT> [--kind <KIND>]` - by the card's key, an alias or its id; cards live in the desk, so no project is named. A card's packet reads these back by kind.
 
 `finding` is the default. Decisions, findings, pitfalls and changes appear under **Recent** in the [context packet](/rigger/reference/context/); the newest `next` becomes its **Next step** and is not repeated among the events.
 

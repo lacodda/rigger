@@ -156,6 +156,10 @@ fn text_arg(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+fn task_arg() -> Value {
+    json!({ "type": "string", "description": "A card's key, alias or id, to write against the card instead of a project" })
+}
+
 /// The tools, in the order a session uses them: read the record, then write
 /// to it.
 fn tools() -> Vec<Value> {
@@ -163,8 +167,8 @@ fn tools() -> Vec<Value> {
         tool(
             &format!("record_{kind}"),
             what,
-            json!({ "project": project_arg(), "text": text_arg("What happened, in full sentences") }),
-            &["project", "text"],
+            json!({ "project": project_arg(), "task": task_arg(), "text": text_arg("What happened, in full sentences") }),
+            &["text"],
         )
     };
     vec![
@@ -194,6 +198,27 @@ fn tools() -> Vec<Value> {
         record("pitfall", "Record a trap worth remembering: what looked right, what actually happened."),
         record("change", "Record something that changed in the product."),
         tool(
+            "task_find",
+            "Find the card a line of text means - by ticket id, by title, by case number - and say whether to take it, ask, or make a new one. Give the task exactly as it was handed over.",
+            json!({ "query": text_arg("The task as it was handed over: id, title, numbers, any of them") }),
+            &["query"],
+        ),
+        tool(
+            "task_context",
+            "Where a task stands: what it is, where it is worked, and everything written against it - decisions, findings, pitfalls, the plan of edits, changes, the next step. A session on a card starts here.",
+            json!({
+                "task": { "type": "string", "description": "Card key, alias or id" },
+                "budget": { "type": "integer", "description": "Token budget for the packet; the default is 3000" },
+            }),
+            &["task"],
+        ),
+        tool(
+            "record_plan",
+            "A step of the plan of edits for a card: what will be changed, where, in what order. Give `task`.",
+            json!({ "project": project_arg(), "task": task_arg(), "text": text_arg("The step, in full sentences") }),
+            &["text"],
+        ),
+        tool(
             "record_state",
             "Put one line at the top of the hub's state block: where the project stands after this sitting, the way a README's «Состояние» tells it. Only when the state shifted - a release, a block closed, a plan reground.",
             json!({ "project": project_arg(), "text": text_arg("One sentence, bold headline first, for the README's state block") }),
@@ -201,9 +226,9 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "set_next_step",
-            "Leave the next session one line to start from. The newest one wins; it is not a list.",
-            json!({ "project": project_arg(), "text": text_arg("The one line the next session starts from") }),
-            &["project", "text"],
+            "Leave the next session one line to start from. The newest one wins; it is not a list. With `task`, the line belongs to the card.",
+            json!({ "project": project_arg(), "task": task_arg(), "text": text_arg("The one line the next session starts from") }),
+            &["text"],
         ),
         tool(
             "ask_owner",
@@ -271,9 +296,23 @@ fn call_tool(db: &Db, params: &Value) -> Result<Value, Failure> {
 }
 
 fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
+    // A card named instead of a project: the event goes against the card,
+    // under the desk the cards live in.
+    let card = |db: &Db| -> Result<Option<crate::card::Card>> {
+        match args.get("task").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) {
+            Some(text) => match db.card_by_ref(text)? {
+                Some(card) => Ok(Some(card)),
+                None => bail!("no card named '{text}'; `task_find` looks one up"),
+            },
+            None => Ok(None),
+        }
+    };
     let project = |db: &Db| -> Result<Project> {
+        if card(db)?.is_some() {
+            return db.desk_project();
+        }
         let Some(name) = args.get("project").and_then(Value::as_str) else {
-            bail!("this tool needs a `project`");
+            bail!("this tool needs a `project`, or a `task` to write against");
         };
         match db.project_by_name(name)? {
             Some(project) => Ok(project),
@@ -301,6 +340,43 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
         "plan" => {
             let project = project(db)?;
             Ok(render_plan(db, &project)?)
+        }
+        "task_find" => {
+            let Some(query) = args.get("query").and_then(Value::as_str).map(str::trim).filter(|q| !q.is_empty()) else {
+                bail!("this tool needs a `query`: the task as it was handed over");
+            };
+            let parsed = crate::card::parse(query);
+            let cards = db.cards(None)?;
+            let (hits, verdict) = crate::card::find(&parsed, &cards, 8);
+            let mut out = match verdict {
+                crate::card::Verdict::Take => format!("take {}: it is the one.\n", hits[0].key),
+                crate::card::Verdict::Ask => "ask: show these and let the owner pick, or say it is new.\n".to_string(),
+                crate::card::Verdict::New => "new: nothing is close; make a card with `rigger task new`.\n".to_string(),
+            };
+            for h in &hits {
+                out.push_str(&format!("{:>3}  {}  {}  {}  ({})\n", h.score, h.key, h.status, h.title, h.why));
+            }
+            let shown: Vec<String> = hits.iter().map(|h| h.key.clone()).collect();
+            for needle in parsed.ids.iter().chain(parsed.numbers.iter()) {
+                for (key, title) in db.cards_mentioning(needle, &shown)? {
+                    out.push_str(&format!("mentioned {needle}: {key} - {title}\n"));
+                }
+            }
+            Ok(out)
+        }
+        "task_context" => {
+            let Some(card) = card(db)? else {
+                bail!("this tool needs a `task`: a card's key, alias or id")
+            };
+            let budget = args
+                .get("budget")
+                .and_then(Value::as_u64)
+                .map(|b| b as usize)
+                .unwrap_or(crate::context::DEFAULT_BUDGET);
+            let first = "This is where the task stands, from rigger. Pick up from the next step; record against it with the `task` argument \
+                 of `record_decision`, `record_finding`, `record_pitfall`, `record_plan` and `record_change`, and leave the next line \
+                 with `set_next_step`.\n\n";
+            Ok(first.to_string() + &crate::render_card(db, &card, budget)?)
         }
         "resolve" => {
             let project = project(db)?;
@@ -351,6 +427,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 "ask_owner" => "question",
                 "wish" => "wish",
                 "record_state" => "state",
+                "record_plan" => "plan",
                 other => bail!("rigger serves no tool named `{other}`"),
             };
             let project = project(db)?;
@@ -358,6 +435,13 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             if kind == "state" {
                 db.add_state_line(project.id, &crate::db::today(), text)?;
                 return Ok(format!("Added a state line for {}; `rigger export` writes it into the README.", project.name));
+            }
+            if let Some(card) = card(db)? {
+                db.record_task_event(project.id, card.id, kind, text, &crate::db::now(), "assistant")?;
+                return Ok(match kind {
+                    "next" => format!("The next session on {} starts from this line.", card.key),
+                    _ => format!("Recorded a {kind} on {}.", card.key),
+                });
             }
             db.record_event(project.id, kind, text, &crate::db::now(), "assistant")?;
             Ok(match kind {
@@ -508,6 +592,9 @@ mod tests {
             "record_pitfall",
             "record_change",
             "record_state",
+            "record_plan",
+            "task_find",
+            "task_context",
             "set_next_step",
             "ask_owner",
             "wish",

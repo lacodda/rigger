@@ -51,18 +51,18 @@ fn a_status_is_given_shown_and_counted() {
     project(data.path());
     let id = first_task(data.path());
 
-    let out = output(data.path(), &["task", "status", "sample", &id, "active"]);
+    let out = output(data.path(), &["task", "status", &id, "active"]);
     assert!(out.contains("is now active (was new)"), "{out}");
     let packet = output(data.path(), &["context", "sample"]);
     assert!(packet.contains("- сделать одно (active)"), "{packet}");
     assert!(packet.contains("- сделать другое\n"), "a new task carries no mark: {packet}");
     assert!(packet.contains("2 tasks open"), "active is still open work: {packet}");
 
-    output(data.path(), &["task", "status", "sample", &id, "waiting-handoff"]);
+    output(data.path(), &["task", "status", &id, "waiting-handoff"]);
     let packet = output(data.path(), &["context", "sample"]);
     assert!(packet.contains("(waiting-handoff)") && packet.contains("2 tasks open"), "{packet}");
 
-    output(data.path(), &["task", "status", "sample", &id, "done"]);
+    output(data.path(), &["task", "status", &id, "done"]);
     let packet = output(data.path(), &["context", "sample"]);
     assert!(!packet.contains("сделать одно"), "done leaves the stage's list: {packet}");
     assert!(packet.contains("1 task open"), "{packet}");
@@ -74,12 +74,12 @@ fn a_status_outside_the_vocabulary_is_refused_by_name() {
     project(data.path());
     let id = first_task(data.path());
     rigger(data.path())
-        .args(["task", "status", "sample", &id, "sleeping"])
+        .args(["task", "status", &id, "sleeping"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("'sleeping' is not a status").and(predicate::str::contains("waiting-handoff")));
     rigger(data.path())
-        .args(["task", "status", "sample", &id, "dropped"])
+        .args(["task", "status", &id, "dropped"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("not a status a task can be given"));
@@ -92,7 +92,7 @@ fn a_hubs_box_neither_resets_nor_loses_a_status() {
     let data = tempfile::tempdir().unwrap();
     let hub = project(data.path());
     let id = first_task(data.path());
-    output(data.path(), &["task", "status", "sample", &id, "frozen"]);
+    output(data.path(), &["task", "status", &id, "frozen"]);
 
     rigger(data.path()).args(["import", "sample", "--hub"]).arg(&hub).assert().success();
     let packet = output(data.path(), &["context", "sample"]);
@@ -105,7 +105,7 @@ fn a_hubs_box_neither_resets_nor_loses_a_status() {
     assert!(plan.contains("- [ ] сделать одно\n- [ ] сделать другое\n"), "{plan}");
 
     // And once done, the box is ticked, whatever the word before was.
-    output(data.path(), &["task", "status", "sample", &id, "done"]);
+    output(data.path(), &["task", "status", &id, "done"]);
     rigger(data.path()).args(["export", "sample", "--hub"]).arg(&out).assert().success();
     let plan = std::fs::read_to_string(out.join("План.md")).unwrap();
     assert!(plan.contains("- [x] сделать одно\n- [ ] сделать другое\n"), "{plan}");
@@ -119,8 +119,16 @@ fn an_open_task_from_before_reads_as_new() {
     project(data.path());
     let db_path = data.path().join("profiles").join("line").join("rigger.db");
     let db = rusqlite::Connection::open(&db_path).unwrap();
-    // What an older rigger wrote, and the version it wrote it at.
-    db.execute_batch("UPDATE tasks SET status = 'open'; PRAGMA user_version = 16;").unwrap();
+    // What an older rigger wrote, and the version it wrote it at - with
+    // what later schemas added taken away, so the migrations run again.
+    db.execute_batch(
+        "UPDATE tasks SET status = 'open'; \
+         DROP TABLE task_projects; DROP TABLE settings; DROP INDEX tasks_by_key; \
+         ALTER TABLE tasks DROP COLUMN key; ALTER TABLE tasks DROP COLUMN aliases; \
+         ALTER TABLE tasks DROP COLUMN summary; ALTER TABLE tasks DROP COLUMN updated_at; \
+         PRAGMA user_version = 16;",
+    )
+    .unwrap();
     drop(db);
 
     let packet = output(data.path(), &["context", "sample"]);

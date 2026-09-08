@@ -39,6 +39,11 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `resolve` | Answers a question or sorts a wish, so it leaves the packet |
 | `close_task` | Marks a task of the current stage done |
 | `set_task_status` | Gives a task a [status](/rigger/reference/task/): new, active, waiting-handoff, frozen or done |
+| `task_find` | Finds the [card](/rigger/reference/task/) a line of text means, and says whether to take it, ask, or make a new one |
+| `task_context` | Where a card stands: what it is, where it is worked, everything written against it |
+| `record_plan` | A step of the plan of edits, against a card |
+
+The recording tools - `record_decision`, `record_finding`, `record_pitfall`, `record_change`, `record_plan` and `set_next_step` - take a `task` instead of a `project`: the event is then written against that card, under the desk the cards live in.
 
 Every tool takes a `project` - the name [`rigger project list`](/rigger/reference/project/) shows. The recording tools take a `text`; an empty one is refused, because a record with nothing in it helps nobody.
 

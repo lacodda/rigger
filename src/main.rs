@@ -5,6 +5,7 @@
 
 mod adopt;
 mod calendar;
+mod card;
 mod commit;
 mod context;
 mod db;
@@ -326,6 +327,8 @@ enum NoteKind {
     Next,
     /// A line for the hub's state block: where things stand, in one sentence
     State,
+    /// A step of the plan of edits, for a card
+    Plan,
 }
 
 impl NoteKind {
@@ -337,6 +340,7 @@ impl NoteKind {
             NoteKind::Change => "change",
             NoteKind::Next => "next",
             NoteKind::State => "state",
+            NoteKind::Plan => "plan",
         }
     }
 }
@@ -406,12 +410,126 @@ enum ProfileCommand {
 
 #[derive(Subcommand)]
 enum TaskCommand {
-    /// Give a task a status: new, active, waiting-handoff, frozen or done
-    Status {
+    /// Make a card for a task: a ticket id, or a local key until one is given
+    New {
+        /// The task's title
+        title: String,
+        /// Ticket id, such as WA-4130; a local key is made when omitted
+        #[arg(long = "id", value_name = "KEY")]
+        key: Option<String>,
+        /// Another name the task goes by; may be given more than once
+        #[arg(long = "alias", value_name = "TEXT")]
+        aliases: Vec<String>,
+        /// A project the task is worked in; may be given more than once
+        #[arg(long = "project", value_name = "NAME")]
+        projects: Vec<String>,
+        /// The branch it is worked on, in every project given
+        #[arg(long)]
+        branch: Option<String>,
+        /// What the task is, in one paragraph
+        #[arg(long)]
+        summary: Option<String>,
+    },
+    /// Find the card a line of text means: by id, by title, by case number
+    Find {
+        /// The task as it was handed over: id, title, numbers, any of them
+        query: String,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make a card the open one, so that the record knows what is in hand
+    Open {
+        /// Card key, alias or id
+        task: String,
+    },
+    /// The card in hand, if one is open
+    Active {
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close a card: done by default, or the status given
+    Close {
+        /// Card key, alias or id; the open card when omitted
+        task: Option<String>,
+        /// The status to leave it in
+        #[arg(long, default_value = "done")]
+        status: String,
+    },
+    /// Show a card: what it is, where it is worked, what was written
+    Show {
+        /// Card key, alias or id
+        task: String,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The packet an assistant starts a task from
+    Context {
+        /// Card key, alias or id
+        task: String,
+        /// Token budget for the packet
+        #[arg(long, default_value_t = context::DEFAULT_BUDGET)]
+        budget: usize,
+    },
+    /// Link a card to a project, with the branch it is worked on there
+    Link {
+        /// Card key, alias or id
+        task: String,
         /// Project name
         project: String,
-        /// Task id, as the packet or `plan` lists it
-        task: i64,
+        /// The branch
+        #[arg(long)]
+        branch: Option<String>,
+        /// What the project is to the task: where it is fixed, or only read
+        #[arg(long)]
+        role: Option<String>,
+    },
+    /// List cards
+    List {
+        /// open (the default), all, or one status
+        #[arg(long, default_value = "open")]
+        status: String,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Give a card a new key; the old one stays as an alias
+    Rename {
+        /// Card key, alias or id
+        task: String,
+        /// The new key
+        key: String,
+    },
+    /// Add a name a card goes by
+    Alias {
+        /// Card key, alias or id
+        task: String,
+        /// The alias
+        alias: String,
+    },
+    /// Say what a card is, in one paragraph
+    Summary {
+        /// Card key, alias or id
+        task: String,
+        /// The paragraph
+        text: String,
+    },
+    /// Record an event against a card: a decision, a finding, a pitfall, a plan step, a change, the next step
+    Note {
+        /// Card key, alias or id
+        task: String,
+        /// What happened
+        text: String,
+        /// Kind of event
+        #[arg(long, value_name = "KIND", default_value = "finding")]
+        kind: NoteKind,
+    },
+    /// Give a task a status: new, active, waiting-handoff, frozen or done
+    Status {
+        /// Card key, alias, or the id the packet or `plan` lists
+        task: String,
         /// The status
         status: String,
     },
@@ -582,7 +700,27 @@ fn run(cli: Cli) -> Result<()> {
             } => profile_set(name.as_deref(), roots, hubs, id_pattern, inbox),
         },
         Command::Task { command } => match command {
-            TaskCommand::Status { project, task, status } => task_status(&project, task, &status),
+            TaskCommand::New {
+                title,
+                key,
+                aliases,
+                projects,
+                branch,
+                summary,
+            } => task_new(&title, key.as_deref(), &aliases, &projects, branch.as_deref(), summary.as_deref()),
+            TaskCommand::Find { query, json } => task_find(&query, json),
+            TaskCommand::Open { task } => task_open(&task),
+            TaskCommand::Active { json } => task_active(json),
+            TaskCommand::Close { task, status } => task_close(task.as_deref(), &status),
+            TaskCommand::Show { task, json } => task_show(&task, json),
+            TaskCommand::Context { task, budget } => task_context(&task, budget),
+            TaskCommand::Link { task, project, branch, role } => task_link(&task, &project, branch.as_deref(), role.as_deref()),
+            TaskCommand::List { status, json } => task_list(&status, json),
+            TaskCommand::Rename { task, key } => task_rename(&task, &key),
+            TaskCommand::Alias { task, alias } => task_alias(&task, &alias),
+            TaskCommand::Summary { task, text } => task_summary(&task, &text),
+            TaskCommand::Note { task, text, kind } => note_on_card(&task, kind.as_str(), &text),
+            TaskCommand::Status { task, status } => task_status(&task, &status),
         },
         Command::Adopt { root, hubs, check, json } => adopt_root(root.as_deref(), hubs.as_deref(), check, json),
         Command::Skill {
@@ -1014,6 +1152,19 @@ fn print_sync(report: &sync::Report, many: bool) {
     if quiet {
         println!("  nothing changed");
     }
+}
+
+/// An event written against a card, under the desk.
+fn note_on_card(task: &str, kind: &str, text: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    if kind == "state" {
+        bail!("a state line belongs to a project's README, not to a card");
+    }
+    let card = find_card(&db, task)?;
+    let desk = db.desk_project()?;
+    db.record_task_event(desk.id, card.id, kind, text, &db::now(), "assistant")?;
+    println!("Recorded a {kind} on {}", card.key);
+    Ok(())
 }
 
 fn note(project: &str, kind: &str, text: &str) -> Result<()> {
@@ -1464,14 +1615,342 @@ fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, i
     profile_show(Some(&name), false)
 }
 
-fn task_status(project: &str, task: i64, status: &str) -> Result<()> {
+/// The setting that names the card in hand, and when it was taken up.
+const ACTIVE_CARD: &str = "active_card";
+const ACTIVE_SINCE: &str = "active_since";
+/// A card left open this long is not in hand any more: a desk that forgot
+/// to close it yesterday must not be told today that it is.
+const STALE_HOURS: i64 = 8;
+
+/// A card by whatever names it, or a clear refusal.
+fn find_card(db: &Db, text: &str) -> Result<card::Card> {
+    match db.card_by_ref(text)? {
+        Some(card) => Ok(card),
+        None => bail!("no card named '{text}'; `rigger task find` looks one up, `rigger task new` makes one"),
+    }
+}
+
+/// The task a reference means - a card by key or alias, or a plain task
+/// of a project by id - with the project it belongs to.
+fn find_task(db: &Db, text: &str) -> Result<(i64, i64)> {
+    if let Some(card) = db.card_by_ref(text)? {
+        return Ok((db.desk_project()?.id, card.id));
+    }
+    if let Ok(id) = text.trim().parse::<i64>()
+        && let Some(project_id) = db.task_owner(id)?
+    {
+        return Ok((project_id, id));
+    }
+    bail!("no task named '{text}'; a card's key, or the id the packet lists")
+}
+
+fn task_status(task: &str, status: &str) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
-    let (title, was) = db.set_task_status(project.id, task, status)?;
+    let (project_id, id) = find_task(&db, task)?;
+    let (title, was) = db.set_task_status(project_id, id, status)?;
     match was == status {
         true => println!("Task {task} was already {status}: {title}"),
         false => println!("Task {task} is now {status} (was {was}): {title}"),
     }
+    Ok(())
+}
+
+fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[String], branch: Option<&str>, summary: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    if title.trim().is_empty() {
+        bail!("a card needs a title");
+    }
+    let card = db.new_card(key, title, aliases)?;
+    if let Some(summary) = summary {
+        db.set_card_summary(card.id, summary)?;
+    }
+    for name in projects {
+        let project = open_project(&db, name)?;
+        db.link_card(card.id, project.id, branch, None)?;
+    }
+    // The card just made is the one in hand: nobody makes a card for a
+    // task they are not about to work on.
+    db.set_setting(ACTIVE_CARD, Some(&card.id.to_string()))?;
+    db.set_setting(ACTIVE_SINCE, Some(&db::now()))?;
+    println!("Made card {} and opened it: {}", card.key, card.title);
+    if key.is_none() {
+        println!("  a local key; `rigger task rename {} <ID>` when the tracker names it", card.key);
+    }
+    print_links(&db, card.id)?;
+    Ok(())
+}
+
+fn print_links(db: &Db, task_id: i64) -> Result<()> {
+    for link in db.card_links(task_id)? {
+        let branch = link.branch.as_deref().map(|b| format!(" on {b}")).unwrap_or_default();
+        let role = link.role.as_deref().map(|r| format!(" - {r}")).unwrap_or_default();
+        println!("  {} ({}){branch}{role}", link.project, link.path);
+    }
+    Ok(())
+}
+
+fn task_find(query: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let parsed = card::parse(query);
+    let cards = db.cards(None)?;
+    let (hits, verdict) = card::find(&parsed, &cards, 8);
+    // The weak trail: an id or a case number mentioned in the text of
+    // other cards - a task that moved leaves its old number behind.
+    let shown: Vec<String> = hits.iter().map(|h| h.key.clone()).collect();
+    let mut mentions = Vec::new();
+    for needle in parsed.ids.iter().chain(parsed.numbers.iter()) {
+        for (key, title) in db.cards_mentioning(needle, &shown)? {
+            mentions.push((needle.clone(), key, title));
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "verdict": verdict,
+                "hits": hits,
+                "mentions": mentions.iter().map(|(n, k, t)| serde_json::json!({ "needle": n, "key": k, "title": t })).collect::<Vec<_>>(),
+            }))?
+        );
+        return Ok(());
+    }
+    if cards.is_empty() {
+        println!("No cards yet. Make one with: rigger task new \"<title>\" [--id <KEY>]");
+        return Ok(());
+    }
+    if hits.is_empty() {
+        println!("No match among {} cards.", cards.len());
+    } else {
+        let width = hits.iter().map(|h| h.key.len()).max().unwrap_or(0);
+        for h in &hits {
+            println!("{:>3}  {:width$}  {:<16} {}  ({})", h.score, h.key, h.status, h.title, h.why);
+        }
+    }
+    for (needle, key, title) in &mentions {
+        println!("mentioned {needle}: {key} - {title}");
+    }
+    println!(
+        "\n{}",
+        match verdict {
+            card::Verdict::Take => format!("take {}: it is the one.", hits[0].key),
+            card::Verdict::Ask => "ask: show these and let the owner pick, or say it is new.".to_string(),
+            card::Verdict::New => "new: nothing is close; make a card.".to_string(),
+        }
+    );
+    Ok(())
+}
+
+/// The card in hand, unless it was left open longer than a working day.
+fn active_card(db: &Db) -> Result<Option<card::Card>> {
+    let Some(id) = db.setting(ACTIVE_CARD)? else { return Ok(None) };
+    if let Some(since) = db.setting(ACTIVE_SINCE)?
+        && let Ok(then) = since.parse::<jiff::Timestamp>()
+        && (jiff::Timestamp::now().as_second() - then.as_second()) > STALE_HOURS * 3600
+    {
+        return Ok(None);
+    }
+    db.card(id.parse().unwrap_or_default())
+}
+
+fn task_open(task: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    db.set_setting(ACTIVE_CARD, Some(&card.id.to_string()))?;
+    db.set_setting(ACTIVE_SINCE, Some(&db::now()))?;
+    println!("Card {} is in hand: {}", card.key, card.title);
+    Ok(())
+}
+
+fn task_active(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = active_card(&db)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&card)?);
+        return Ok(());
+    }
+    match card {
+        Some(card) => println!("{}  {:<16} {}", card.key, card.status, card.title),
+        None => println!("No card is in hand. Open one with: rigger task open <KEY>"),
+    }
+    Ok(())
+}
+
+fn task_close(task: Option<&str>, status: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = match task {
+        Some(text) => find_card(&db, text)?,
+        None => match active_card(&db)? {
+            Some(card) => card,
+            None => bail!("no card is in hand; name one: rigger task close <KEY>"),
+        },
+    };
+    let desk = db.desk_project()?;
+    let (title, was) = db.set_task_status(desk.id, card.id, status)?;
+    if db.setting(ACTIVE_CARD)?.as_deref() == Some(&card.id.to_string()) {
+        db.set_setting(ACTIVE_CARD, None)?;
+        db.set_setting(ACTIVE_SINCE, None)?;
+    }
+    println!("Closed {} as {status} (was {was}): {title}", card.key);
+    Ok(())
+}
+
+fn task_show(task: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    let links = db.card_links(card.id)?;
+    let events = db.task_events(card.id)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "card": card, "links": links, "events": events.len() }))?
+        );
+        return Ok(());
+    }
+    println!("{} · {}", card.key, card.title);
+    println!("  status:   {}", card.status);
+    if !card.aliases.is_empty() {
+        println!("  aliases:  {}", card.aliases.join(", "));
+    }
+    println!("  since:    {}", card.created_at);
+    if let Some(summary) = &card.summary {
+        println!("  summary:  {summary}");
+    }
+    if !links.is_empty() {
+        println!("  worked in:");
+        print_links(&db, card.id)?;
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for e in &events {
+        *counts.entry(e.kind.as_str()).or_insert(0) += 1;
+    }
+    if !counts.is_empty() {
+        let parts: Vec<String> = counts.iter().map(|(k, n)| format!("{n} {k}")).collect();
+        println!("  recorded: {}", parts.join(", "));
+    }
+    if let Some(next) = events.iter().rev().find(|e| e.kind == "next") {
+        println!("  next:     {}", first_line(&next.body));
+    }
+    Ok(())
+}
+
+/// The packet a task starts from: what it is, where it is worked, and
+/// everything written against it, by kind, newest first.
+fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
+    let links = db.card_links(card.id)?;
+    let events = db.task_events(card.id)?;
+    let mut out = format!("# {} · {}\n\n", card.key, card.title);
+    out.push_str(&format!("Status: {}", card.status));
+    if !card.aliases.is_empty() {
+        out.push_str(&format!(" · also {}", card.aliases.join(", ")));
+    }
+    out.push('\n');
+    if let Some(summary) = &card.summary {
+        out.push_str(&format!("\n{summary}\n"));
+    }
+    if !links.is_empty() {
+        out.push_str("\n## Worked in\n");
+        for link in &links {
+            let branch = link.branch.as_deref().map(|b| format!(" on `{b}`")).unwrap_or_default();
+            let role = link.role.as_deref().map(|r| format!(" - {r}")).unwrap_or_default();
+            out.push_str(&format!("- {} ({}){branch}{role}\n", link.project, link.path));
+        }
+    }
+    if let Some(next) = events.iter().rev().find(|e| e.kind == "next") {
+        out.push_str(&format!("\n## Next step\n{}\n", next.body.trim()));
+    }
+    // Newest first within a kind, and the kinds in the order a session
+    // reads them: what was decided, what was found, what bit, what is
+    // planned, what changed.
+    let sections = [
+        ("decision", "Decisions"),
+        ("finding", "Findings"),
+        ("pitfall", "Pitfalls"),
+        ("plan", "Plan"),
+        ("change", "Changes"),
+        ("question", "Waiting for the owner"),
+    ];
+    let mut left_out = 0usize;
+    for (kind, heading) in sections {
+        let mut items: Vec<&db::RecentEvent> = events.iter().filter(|e| e.kind == kind).collect();
+        items.reverse();
+        if items.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n## {heading}\n"));
+        for item in items {
+            let line = format!("- {} · {}\n", item.date, item.body.trim());
+            if context::estimate_tokens(&out) + context::estimate_tokens(&line) > budget {
+                left_out += 1;
+                continue;
+            }
+            out.push_str(&line);
+        }
+    }
+    if left_out > 0 {
+        out.push_str(&format!("\n({left_out} older events left out by the budget)\n"));
+    }
+    Ok(out)
+}
+
+fn task_context(task: &str, budget: usize) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    print!("{}", render_card(&db, &card, budget)?);
+    Ok(())
+}
+
+fn task_link(task: &str, project: &str, branch: Option<&str>, role: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    let project = open_project(&db, project)?;
+    db.link_card(card.id, project.id, branch, role)?;
+    println!("{} is worked in:", card.key);
+    print_links(&db, card.id)
+}
+
+fn task_list(status: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let cards = db.cards(Some(status))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&cards)?);
+        return Ok(());
+    }
+    if cards.is_empty() {
+        println!(
+            "No cards{}.",
+            if status == "all" { "" } else { " that are " }.to_string() + if status == "all" { "" } else { status }
+        );
+        return Ok(());
+    }
+    let width = cards.iter().map(|c| c.key.len()).max().unwrap_or(0);
+    for c in &cards {
+        println!("{:width$}  {:<16} {}", c.key, c.status, c.title);
+    }
+    Ok(())
+}
+
+fn task_rename(task: &str, key: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    let renamed = db.rename_card(card.id, key)?;
+    println!("{} is now {}; {} stays as an alias", card.key, renamed.key, card.key);
+    Ok(())
+}
+
+fn task_alias(task: &str, alias: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    let card = db.add_alias(card.id, alias)?;
+    println!("{} also goes by: {}", card.key, card.aliases.join(", "));
+    Ok(())
+}
+
+fn task_summary(task: &str, text: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = find_card(&db, task)?;
+    db.set_card_summary(card.id, text)?;
+    println!("{} summarised", card.key);
     Ok(())
 }
 
