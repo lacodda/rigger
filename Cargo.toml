@@ -44,7 +44,7 @@ jiff = "0.2"
 # bundled: no system SQLite to find or version-match on any platform.
 # backup: the database is copied through SQLite's own API before a migration,
 # which is consistent even while another process holds it open.
-rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The profile config is a file a person edits, so it is TOML rather than JSON.
@@ -54,7 +54,7 @@ toml = "1"
 assert_cmd = "2"
 # The integration tests open the database directly to set up a state the
 # CLI cannot make on its own - a schema an edited migration left short.
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 predicates = "3"
 tempfile = "3"
 
