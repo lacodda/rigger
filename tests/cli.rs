@@ -1544,7 +1544,10 @@ fn exporting_documents_writes_files_that_import_reads_back_unchanged() {
     std::fs::create_dir_all(hub.join("Исследования")).unwrap();
     std::fs::write(hub.join("Видение.md"), "# Видение demo\n\nТекст.\n").unwrap();
     std::fs::write(hub.join("Ритуалы.md"), "# Ритуалы demo\n\nПравила.\n").unwrap();
-    std::fs::write(hub.join("Исследования").join("2026-09-04 — Заметка.md"), "# Заметка\n\nТело.\n").unwrap();
+    // A title that is not the filename, which is the case that broke: the
+    // export composed a name from the title and wrote a second file beside
+    // the one the note came from, so one note became two.
+    std::fs::write(hub.join("Исследования").join("2026-09-04 — Заметка.md"), "# Заметка о другом\n\nТело.\n").unwrap();
     rigger(data.path()).args(["import", "demo", "--hub"]).arg(&hub).assert().success();
 
     let out = data.path().join("out");
@@ -1566,6 +1569,14 @@ fn exporting_documents_writes_files_that_import_reads_back_unchanged() {
             .map(|e| e.file_name())
             .collect::<Vec<_>>()
     );
+
+    // One note, one file: written back under the name it came in as.
+    let names: Vec<String> = std::fs::read_dir(out.join("Исследования"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names.len(), 1, "one note must not become two files: {names:?}");
 
     // Read back, they say the same thing: nothing changed.
     rigger(data.path())

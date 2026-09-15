@@ -194,6 +194,8 @@ pub struct Document {
     pub slug: String,
     pub title: String,
     pub body: String,
+    /// The file it was read from, relative to the hub.
+    pub source_file: String,
 }
 
 /// The files a hub is read from.
@@ -257,7 +259,7 @@ fn read_documents(dir: &Path) -> Vec<Document> {
         if let Ok(text) = std::fs::read_to_string(dir.join(file))
             && !text.trim().is_empty()
         {
-            out.push(document_from(kind, kind, &text));
+            out.push(document_from(kind, kind, &text, file));
         }
     }
     // The prose above the first entry of the decisions journal: how the
@@ -266,7 +268,7 @@ fn read_documents(dir: &Path) -> Vec<Document> {
     if let Ok(text) = std::fs::read_to_string(dir.join("Решения.md")) {
         let preamble = decisions_preamble(&text);
         if !preamble.trim().is_empty() {
-            out.push(document_from("decisions", "decisions", &preamble));
+            out.push(document_from("decisions", "decisions", &preamble, "Решения.md"));
         }
     }
     if let Ok(entries) = std::fs::read_dir(dir.join(RESEARCH_DIR)) {
@@ -306,7 +308,11 @@ fn read_documents(dir: &Path) -> Vec<Document> {
                 }
             }
             seen.push(slug.clone());
-            out.push(document_from("research", &slug, &text));
+            let file = format!(
+                "{RESEARCH_DIR}/{}",
+                path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            );
+            out.push(document_from("research", &slug, &text, &file));
         }
     }
     out
@@ -332,7 +338,7 @@ fn decisions_preamble(text: &str) -> String {
 
 /// A document from a file: its first heading is the title, and the whole
 /// text is the body - a hub file is edited as a whole.
-fn document_from(kind: &str, slug: &str, text: &str) -> Document {
+fn document_from(kind: &str, slug: &str, text: &str, source_file: &str) -> Document {
     let title = text
         .lines()
         .find(|l| l.starts_with("# "))
@@ -343,6 +349,7 @@ fn document_from(kind: &str, slug: &str, text: &str) -> Document {
         slug: slug.to_string(),
         title,
         body: text.trim_end().to_string(),
+        source_file: source_file.to_string(),
     }
 }
 

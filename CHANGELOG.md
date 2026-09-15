@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.19.0] - 2026-09-15
+
+### Bug Fixes
+- Let a generated plan describe the record rather than overrule it
+
+### Features
+- Keep the last few copies of the record, and say how old the newest is
+- Keep a project's handwritten texts in the record, not in files
+- Start a document from the questions its kind exists to answer
+- Read a hub's handwritten texts into the record
+- Write the handwritten texts back out, and show what a check would lose
+- Let an assistant read and write a project's handwritten texts
+
+### Testing
+- Give the editor stubs a script on disk instead of a quoted one-liner
 ## [0.18.0] - 2026-09-08
 
 ### Features

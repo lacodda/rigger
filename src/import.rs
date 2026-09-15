@@ -176,11 +176,27 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     for document in &hub.documents {
         let existing = db.document(project_id, &document.slug)?;
         match &existing {
-            Some(held) if held.body == document.body && held.title == document.title => continue,
+            // Unchanged in substance, but the record may not yet know which
+            // file it came from - documents predate that column. Learning it
+            // is not a change worth reporting; not learning it makes the
+            // export invent a filename and write the note out twice.
+            Some(held) if held.body == document.body && held.title == document.title => {
+                if held.source_file.as_deref() != Some(document.source_file.as_str()) {
+                    db.set_document_source(held.id, &document.source_file)?;
+                }
+                continue;
+            }
             Some(_) => report.documents_updated += 1,
             None => report.documents_added += 1,
         }
-        db.write_document(project_id, &document.kind, &document.slug, &document.title, &document.body)?;
+        db.write_document_from(
+            project_id,
+            &document.kind,
+            &document.slug,
+            &document.title,
+            &document.body,
+            Some(&document.source_file),
+        )?;
     }
 
     Ok(report)

@@ -331,6 +331,12 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX documents_by_kind ON documents (project_id, kind);
     ",
+    // v20: the file a document was read from, so an export writes it back
+    // to the same place. Without it the filename was composed from the
+    // title, and a research note whose title is not its filename came back
+    // as a second file beside the first - found on this project's own hub,
+    // where one note became two on the first `export --docs`.
+    "ALTER TABLE documents ADD COLUMN source_file TEXT;",
 ];
 
 /// The place a desk keeps its cards: a project the record keeps for
@@ -393,6 +399,9 @@ pub struct Document {
     pub body: String,
     pub created_at: String,
     pub updated_at: String,
+    /// The file in a hub this was read from, when it came from one, so an
+    /// export can write it back to the same name rather than composing one.
+    pub source_file: Option<String>,
 }
 
 impl Document {
@@ -406,6 +415,7 @@ impl Document {
             body: row.get(5)?,
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
+            source_file: row.get(8)?,
         })
     }
 }
@@ -815,7 +825,7 @@ impl Db {
     /// Every document of a project, newest first within each kind, in the
     /// order the kinds are declared: a vision before the research notes.
     pub fn documents(&self, project_id: i64, kind: Option<&str>) -> Result<Vec<Document>> {
-        let mut sql = String::from("SELECT id, project_id, kind, slug, title, body, created_at, updated_at FROM documents WHERE project_id = ?1");
+        let mut sql = String::from("SELECT id, project_id, kind, slug, title, body, created_at, updated_at, source_file FROM documents WHERE project_id = ?1");
         if kind.is_some() {
             sql.push_str(" AND kind = ?2");
         }
@@ -840,7 +850,7 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, project_id, kind, slug, title, body, created_at, updated_at
+                "SELECT id, project_id, kind, slug, title, body, created_at, updated_at, source_file
                  FROM documents WHERE project_id = ?1 AND slug = ?2",
                 params![project_id, slug],
                 Document::from_row,
@@ -852,19 +862,37 @@ impl Db {
     /// title and body if it is not. `created_at` survives a rewrite: a
     /// document keeps the day it was started.
     pub fn write_document(&self, project_id: i64, kind: &str, slug: &str, title: &str, body: &str) -> Result<Document> {
+        self.write_document_from(project_id, kind, slug, title, body, None)
+    }
+
+    /// Writes a document, remembering the hub file it came from.
+    ///
+    /// `source` is only set when it is given: a document edited through
+    /// `doc edit` must not forget the file it is exported to.
+    pub fn write_document_from(&self, project_id: i64, kind: &str, slug: &str, title: &str, body: &str, source: Option<&str>) -> Result<Document> {
         if !DOC_KINDS.contains(&kind) {
             bail!("'{kind}' is not a kind of document; rigger knows {}", DOC_KINDS.join(", "));
         }
         let at = now();
         self.conn.execute(
-            "INSERT INTO documents (project_id, kind, slug, title, body, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+            "INSERT INTO documents (project_id, kind, slug, title, body, created_at, updated_at, source_file)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
              ON CONFLICT (project_id, slug) DO UPDATE SET
-                 kind = excluded.kind, title = excluded.title, body = excluded.body, updated_at = excluded.updated_at",
-            params![project_id, kind, slug, title, body, at],
+                 kind = excluded.kind, title = excluded.title, body = excluded.body, updated_at = excluded.updated_at,
+                 source_file = COALESCE(excluded.source_file, documents.source_file)",
+            params![project_id, kind, slug, title, body, at, source],
         )?;
         self.document(project_id, slug)?
             .with_context(|| format!("the document '{slug}' was written but cannot be read back"))
+    }
+
+    /// Records which hub file a document came from, without touching what
+    /// it says: a document read before the record kept that column learns
+    /// it on the next import.
+    pub fn set_document_source(&self, id: i64, source_file: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE documents SET source_file = ?1 WHERE id = ?2", params![source_file, id])?;
+        Ok(())
     }
 
     pub fn delete_document(&self, project_id: i64, slug: &str) -> Result<bool> {

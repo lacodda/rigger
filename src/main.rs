@@ -3657,6 +3657,15 @@ Check what would change with `--check`, then hand it over with `--adopt`.",
 /// The file a document is written back out to, mirroring what `import`
 /// reads. A kind with no place in a hub is not exported.
 fn hub_file_for(document: &db::Document) -> Option<String> {
+    // The file it was read from, when the record knows it. Composing a name
+    // from the title instead wrote a research note out beside the one it
+    // came from, under a second name, and one note became two.
+    if let Some(file) = document.source_file.as_deref()
+        && !file.is_empty()
+        && document.kind != "decisions"
+    {
+        return Some(file.to_string());
+    }
     match document.kind.as_str() {
         "vision" => Some("Видение.md".to_string()),
         "rituals" => Some("Ритуалы.md".to_string()),
