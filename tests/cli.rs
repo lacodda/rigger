@@ -1122,6 +1122,151 @@ fn a_document_can_be_removed() {
         .stdout(predicate::str::contains("no documents yet"));
 }
 
+/// A new document does not start blank: it starts from the questions its
+/// kind exists to answer.
+#[test]
+fn a_new_document_is_seeded_with_the_skeleton_of_its_kind() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+
+    rigger(data.path())
+        .args(["doc", "template", "vision"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("## Why").and(predicate::str::contains("built-in skeleton")));
+
+    // What the editor is handed is that skeleton, with the title in it.
+    let shown = rigger(data.path())
+        .args(["doc", "add", "demo", "Vision of demo", "--kind", "vision"])
+        .env("RIGGER_EDITOR", editor_that_prints())
+        .assert()
+        .success();
+    let seed = String::from_utf8(shown.get_output().stdout.clone()).unwrap();
+    assert!(seed.contains("# Vision of demo"), "the skeleton carries the title: {seed}");
+    assert!(seed.contains("## Why"), "the skeleton carries its questions: {seed}");
+
+    // Each kind asks its own.
+    let research = rigger(data.path())
+        .args(["doc", "add", "demo", "A question", "--kind", "research"])
+        .env("RIGGER_EDITOR", editor_that_prints())
+        .assert()
+        .success();
+    let seed = String::from_utf8(research.get_output().stdout.clone()).unwrap();
+    assert!(seed.contains("## The question"), "a research note asks its own questions: {seed}");
+}
+
+/// What rigger ships is in English, because everything it ships is. The
+/// headings a person writes under are their own, and a file is how they say
+/// so without patching the binary - the owner's hubs are in Russian.
+#[test]
+fn a_skeleton_of_your_own_replaces_the_one_that_ships() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+
+    rigger(data.path())
+        .args(["doc", "template", "vision", "--write"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("doc.vision.md"));
+
+    // Written where the next run looks for it, and refused twice over so an
+    // edited skeleton is never silently replaced.
+    let written = data.path().join("profiles").join("line").join("doc.vision.md");
+    assert!(written.is_file(), "the skeleton must be written where it is read from");
+    rigger(data.path())
+        .args(["doc", "template", "vision", "--write"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+
+    std::fs::write(&written, "# Видение {{title}}\n\n## 1. Зачем\n\n\n## 2. Главная идея\n").unwrap();
+    rigger(data.path())
+        .args(["doc", "template", "vision"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("## 1. Зачем").and(predicate::str::contains("doc.vision.md")));
+
+    let shown = rigger(data.path())
+        .args(["doc", "add", "demo", "kilna", "--kind", "vision"])
+        .env("RIGGER_EDITOR", editor_that_prints())
+        .assert()
+        .success();
+    let seed = String::from_utf8(shown.get_output().stdout.clone()).unwrap();
+    assert!(seed.contains("# Видение kilna"), "the placeholder becomes the title: {seed}");
+    assert!(!seed.contains("## Why"), "the built-in skeleton must be gone: {seed}");
+
+    // A kind without a file of its own still gets what ships.
+    let research = rigger(data.path())
+        .args(["doc", "add", "demo", "A question", "--kind", "research"])
+        .env("RIGGER_EDITOR", editor_that_prints())
+        .assert()
+        .success();
+    let seed = String::from_utf8(research.get_output().stdout.clone()).unwrap();
+    assert!(seed.contains("## The question"), "an unoverridden kind keeps its skeleton: {seed}");
+}
+
+/// Two rigger processes editing a document of the same name - two projects
+/// each with a `vision`, or two sittings at once - must not share one
+/// scratch file. They did: the name was `rigger-<project>-<slug>.md` in the
+/// shared temporary directory, so the process that saved second won and the
+/// other's prose vanished. Found by two tests colliding in parallel.
+#[test]
+fn two_processes_editing_the_same_document_name_do_not_share_a_scratch_file() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    with_project(a.path(), "demo");
+    with_project(b.path(), "demo");
+
+    // An editor that takes its time, so the two overlap for certain.
+    let slow = if cfg!(windows) {
+        "cmd /c ping -n 2 127.0.0.1 >nul & type"
+    } else {
+        "sh -c 'sleep 1; cat \"$0\"'"
+    };
+
+    let mut first = std::process::Command::new(assert_cmd::cargo::cargo_bin("rigger"));
+    first
+        .env("RIGGER_DATA_DIR", a.path())
+        .env("RIGGER_EDITOR", slow)
+        .args(["doc", "add", "demo", "Vision", "--kind", "vision"])
+        .stdout(std::process::Stdio::piped());
+    let first = first.spawn().unwrap();
+
+    // Both must go through an editor: `--body` never opens a scratch file,
+    // so a test where one takes that path cannot collide at all.
+    let overwrite = if cfg!(windows) {
+        "cmd /c echo written by the other process>"
+    } else {
+        "sh -c 'echo \"written by the other process\" > \"$0\"'"
+    };
+    rigger(b.path())
+        .args(["doc", "add", "demo", "Vision", "--kind", "vision"])
+        .env("RIGGER_EDITOR", overwrite)
+        .assert()
+        .success();
+
+    let out = first.wait_with_output().unwrap();
+    assert!(out.status.success(), "the first process must survive the second");
+
+    // Each kept its own text.
+    rigger(b.path())
+        .args(["doc", "show", "demo", "vision"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("written by the other process"));
+    rigger(a.path())
+        .args(["doc", "show", "demo", "vision"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("## Why").and(predicate::str::contains("written by the other process").not()));
+}
+
+/// An "editor" that prints the file it is given and leaves it alone, so a
+/// test can see what a person would have been shown.
+fn editor_that_prints() -> &'static str {
+    if cfg!(windows) { "cmd /c type" } else { "cat" }
+}
+
 /// The command tree is deep enough that clap's derived parser overflowed
 /// the 1 MB stack Windows gives the main thread, in debug builds only -
 /// `rigger --version` died before reaching any code of ours, and every

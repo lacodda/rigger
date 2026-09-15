@@ -418,6 +418,14 @@ enum DocCommand {
         /// The document's address, as `list` prints it
         slug: String,
     },
+    /// The skeleton a new document of a kind starts from
+    Template {
+        /// Kind: vision, decisions, research, rituals, other
+        kind: String,
+        /// Write it to the profile's directory, to edit into your own
+        #[arg(long)]
+        write: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -906,6 +914,7 @@ fn run(cli: Cli) -> Result<()> {
             } => doc_add(&project, &title, &kind, slug.as_deref(), body.as_deref()),
             DocCommand::Edit { project, slug, title, body } => doc_edit(&project, &slug, title.as_deref(), body.as_deref()),
             DocCommand::Remove { project, slug } => doc_remove(&project, &slug),
+            DocCommand::Template { kind, write } => doc_template(&kind, write),
         },
         Command::Backup { keep, list } => backup(keep, list),
         Command::Doctor { hubs, json } => doctor(hubs, json),
@@ -1594,9 +1603,14 @@ fn body_argument(body: &str) -> Result<String> {
 /// not something a record tool should do.
 fn body_from_editor(project: &str, slug: &str, seed: &str) -> Result<String> {
     let path = doc::scratch_path(project, slug);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
+    }
     std::fs::write(&path, seed).with_context(|| format!("cannot write {}", path.display()))?;
     let edited = doc::edit_file(&path).and_then(|()| std::fs::read_to_string(&path).with_context(|| format!("cannot read back {}", path.display())));
     let _ = std::fs::remove_file(&path);
+    // The directory is this process's, so it goes with the file it held.
+    let _ = std::fs::remove_dir(doc::scratch_dir());
     edited
 }
 
@@ -1757,6 +1771,41 @@ fn doc_remove(project: &str, slug: &str) -> Result<()> {
     let doc = open_document(&db, &project, slug)?;
     db.delete_document(project.id, &doc.slug)?;
     println!("Removed {} ({}) from {}", doc.slug, doc.kind, project.name);
+    Ok(())
+}
+
+/// Shows the skeleton a kind starts from, or writes it out to be edited.
+///
+/// Without this the override is a filename in a doc page: the way to change
+/// what a vision asks you should be to run the command that shows it.
+fn doc_template(kind: &str, write: bool) -> Result<()> {
+    doc::check_kind(kind)?;
+    if !write {
+        let paths = doc::template_paths(kind)?;
+        let from = paths.iter().find(|p| p.is_file());
+        println!("{}", doc::template(kind, doc::TITLE_PLACEHOLDER).trim_end());
+        println!();
+        match from {
+            Some(path) => println!("(from {})", path.display()),
+            None => println!("(the built-in skeleton; `rigger doc template {kind} --write` to make it yours)"),
+        }
+        return Ok(());
+    }
+    let path = doc::template_paths(kind)?
+        .into_iter()
+        .next()
+        .context("the profile has no directory to write a skeleton into")?;
+    if path.exists() {
+        bail!("{} already exists; edit it, or delete it to go back to the built-in one", path.display());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
+    }
+    // Written with the placeholder in it, so the first edit does not have to
+    // discover that the title is substituted.
+    std::fs::write(&path, doc::template(kind, doc::TITLE_PLACEHOLDER)).with_context(|| format!("cannot write {}", path.display()))?;
+    println!("Wrote {}", path.display());
+    println!("Edit it; `{}` in it becomes the document's title.", doc::TITLE_PLACEHOLDER);
     Ok(())
 }
 

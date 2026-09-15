@@ -9,6 +9,7 @@ rigger doc show <project> <slug> [--json]
 rigger doc add  <project> <title> [--kind KIND] [--slug SLUG] [--body TEXT|-]
 rigger doc edit <project> <slug> [--title TITLE] [--body TEXT|-]
 rigger doc remove <project> <slug>
+rigger doc template <kind> [--write]
 ```
 
 A project's plan, changes and diary are written *out of* the record. Its handwritten texts were the opposite: the vision, the prose of the decisions journal, the rituals only that project states about itself, and the research notes lived only as files in a hub. `doc` brings them in, so that the record holds everything and a hub becomes an export rather than a place where half the truth is kept.
@@ -58,7 +59,32 @@ With `--json` it prints the whole row instead - kind, title, body, and the days 
 $ rigger doc add rigger "Vision of rigger" --kind vision
 ```
 
-A new document does not start blank. It starts from the line's own questions for its kind - Why, The idea, Boundaries, What success looks like for a vision; The question, What was found, What was decided for a research note - because a blank file is the surest way to get a document nobody writes.
+A new document does not start blank. It starts from the questions its kind exists to answer, because a blank file is the surest way to get a document nobody writes.
+
+### Skeletons of your own
+
+`doc template <kind>` shows the skeleton a kind starts from, and `--write` puts it in the profile's directory as `doc.<kind>.md` for you to edit:
+
+```console
+$ rigger doc template vision
+# {{title}}
+
+## Why
+
+## The idea
+
+## What it is made of
+
+## Boundaries
+
+## What success looks like
+
+(the built-in skeleton; `rigger doc template vision --write` to make it yours)
+```
+
+`{{title}}` in the file becomes the document's title. What rigger ships is in English, because everything it ships is - the headings you actually write under are yours, and this is how you say so without patching the binary. A kind with no file of its own keeps the skeleton that ships, and deleting the file goes back to it.
+
+The profile's directory comes first, then the data directory shared by every profile: a line of products and a ticket desk do not write the same kind of vision.
 
 `--body` skips the editor, and `--body -` reads standard input, which is how a script or an assistant writes one:
 
@@ -76,7 +102,7 @@ In order: `RIGGER_EDITOR`, then `VISUAL` or `EDITOR`, then [scheda](https://gith
 
 scheda is the line's own markdown notepad, and it takes `--wait FILE`: the process stays alive until the tab is closed and gives back its status, which is the contract an `$EDITOR` has to meet. Preferring it when it is there means a vision is edited in the editor written for exactly that, with nothing to configure. Someone who has set `EDITOR` has said what they want, and that still wins.
 
-The text is edited through a file in the temporary directory, which is removed afterwards whether the edit succeeded or not: it holds your prose, and leaving copies of it lying about is not something a record tool should do.
+The text is edited through a file in a directory of that rigger process's own, under the temporary directory, and both are removed afterwards whether the edit succeeded or not: the file holds your prose, and leaving copies of it lying about is not something a record tool should do. Per process, because two rigger runs editing a document of the same name - two projects each with a `vision`, or two sittings at once - would otherwise share one scratch file, and whichever saved second would win.
 
 ## Related
 

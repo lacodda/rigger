@@ -118,11 +118,20 @@ pub fn edit_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The file a document is edited through, in the system's temporary
-/// directory: a name that says what is being edited, so that an editor
-/// showing several tabs says which is which.
+/// The file a document is edited through: a name that says what is being
+/// edited, so that an editor showing several tabs says which is which.
+///
+/// Under a directory of this process's own, because the name alone is not
+/// unique: two rigger processes editing a document of the same name - two
+/// projects each with a `vision`, two sittings at once - would otherwise
+/// share one scratch file, and the one that saved second would win while
+/// the other's prose vanished.
+pub fn scratch_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("rigger-{}", std::process::id()))
+}
+
 pub fn scratch_path(project: &str, slug: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("rigger-{project}-{slug}.md"))
+    scratch_dir().join(format!("{project}-{slug}.md"))
 }
 
 /// Checks a kind against the vocabulary, with the list in the error.
@@ -138,16 +147,58 @@ pub fn is_singular(kind: &str) -> bool {
     SINGULAR_DOC_KINDS.contains(&kind)
 }
 
+/// Where a kind's skeleton is looked for: the profile's directory first -
+/// a line of products and a ticket desk do not share the shape of a vision
+/// - then the data directory, shared by every profile.
+///
+/// The file is `doc.vision.md`, `doc.research.md`, and so on. What is
+/// shipped is in English, because everything rigger ships is; the headings
+/// a person actually writes under are their own, and a file is how they say
+/// so without patching the binary. The same arrangement as the skill
+/// template, for the same reason.
+pub fn template_paths(kind: &str) -> Result<Vec<PathBuf>> {
+    let file = format!("doc.{kind}.md");
+    Ok(vec![crate::profile::current_dir()?.join(&file), crate::paths::data_dir()?.join(&file)])
+}
+
 /// The skeleton a new document starts from, by kind.
 ///
-/// A blank file is the surest way to get a document nobody writes: the
-/// headings are the line's own, so a vision written in rigger asks the same
-/// four questions as a vision written anywhere else in the line.
+/// A blank file is the surest way to get a document nobody writes. `{{title}}`
+/// in a skeleton file is replaced by the document's title; a file without
+/// one is used as it is, under a heading made from the title.
 pub fn template(kind: &str, title: &str) -> String {
+    match template_file(kind) {
+        Some(text) if text.contains(TITLE_PLACEHOLDER) => text.replace(TITLE_PLACEHOLDER, title),
+        Some(text) => format!("# {title}\n\n{}", text.trim_start_matches('\n')),
+        None => built_in_template(kind, title),
+    }
+}
+
+/// The placeholder a skeleton file puts the document's title in.
+pub const TITLE_PLACEHOLDER: &str = "{{title}}";
+
+/// A skeleton the owner has written, if there is one.
+///
+/// A file that cannot be read is no skeleton rather than an error: a new
+/// document is still a document, and failing here would block writing one
+/// over a file nobody asked for.
+fn template_file(kind: &str) -> Option<String> {
+    for path in template_paths(kind).ok()? {
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && !text.trim().is_empty()
+        {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// What rigger ships: the questions each kind exists to answer.
+fn built_in_template(kind: &str, title: &str) -> String {
     let sections: &[&str] = match kind {
-        "vision" => &["## Why", "## The idea", "## Boundaries", "## What success looks like"],
+        "vision" => &["## Why", "## The idea", "## What it is made of", "## Boundaries", "## What success looks like"],
         "research" => &["## The question", "## What was found", "## What was decided"],
-        "rituals" => &["## What this is", "## Rules of the project", "## Where things are"],
+        "rituals" => &["## What this is", "## Rules of the project", "## Where things are", "## Running it"],
         "decisions" => &["## How this journal is kept"],
         _ => &[],
     };
@@ -172,13 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn a_new_document_starts_from_the_lines_own_questions() {
-        let vision = template("vision", "Vision of rigger");
+    fn a_new_document_starts_from_the_questions_its_kind_exists_to_answer() {
+        let vision = built_in_template("vision", "Vision of rigger");
         assert!(vision.starts_with("# Vision of rigger\n"));
         assert!(vision.contains("## Why"));
         assert!(vision.contains("## What success looks like"));
         // A kind with no skeleton is a title and room to write, not an error.
-        assert_eq!(template("other", "Notes"), "# Notes\n");
+        assert_eq!(built_in_template("other", "Notes"), "# Notes\n");
     }
 
     #[test]
