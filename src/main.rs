@@ -298,7 +298,14 @@ enum Command {
         text: String,
     },
     /// Copy the database aside, stamped with the moment and its schema
-    Backup,
+    Backup {
+        /// How many copies to keep; older ones are deleted
+        #[arg(long, default_value_t = KEEP_BACKUPS, value_name = "N")]
+        keep: usize,
+        /// List the copies instead of taking one
+        #[arg(long)]
+        list: bool,
+    },
     /// Show the database path, schema version and record counts
     Doctor {
         /// Also check the hubs the record generates against what is on disk
@@ -791,7 +798,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
-        Command::Backup => backup(),
+        Command::Backup { keep, list } => backup(keep, list),
         Command::Doctor { hubs, json } => doctor(hubs, json),
     }
 }
@@ -1459,10 +1466,60 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-fn backup() -> Result<()> {
+/// How many copies `backup` keeps when nothing else is asked.
+///
+/// Enough that a fault noticed a few sittings late still has a copy from
+/// before it, few enough that a database of a few megabytes does not turn
+/// its own directory into a disk problem.
+const KEEP_BACKUPS: usize = 10;
+
+/// When `doctor` starts saying the insurance is old, and when it says it is
+/// a problem. A day is one sitting's worth of work at risk; a week is the
+/// point where the copy no longer resembles the record.
+const BACKUP_STALE_DAYS: i64 = 1;
+const BACKUP_OLD_DAYS: i64 = 7;
+
+/// How `doctor` judges the age of the newest copy: fresh, stale, old, or
+/// none at all. One function so the JSON and the printed line cannot drift.
+fn backup_state(age_days: Option<i64>) -> &'static str {
+    match age_days {
+        None => "none",
+        Some(d) if d >= BACKUP_OLD_DAYS => "old",
+        Some(d) if d >= BACKUP_STALE_DAYS => "stale",
+        Some(_) => "fresh",
+    }
+}
+
+fn backup(keep: usize, list: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
+    if list {
+        let copies = db.backups()?;
+        if copies.is_empty() {
+            println!("No copies yet. Take one with: rigger backup");
+            return Ok(());
+        }
+        println!("{} newest first:", plural(copies.len(), "copy", "copies"));
+        for path in &copies {
+            let age = path
+                .file_name()
+                .and_then(|n| db::stamp_of(&n.to_string_lossy()))
+                .and_then(|at| days_since_utc(&at))
+                .map(|d| match d {
+                    0 => "today".to_string(),
+                    1 => "yesterday".to_string(),
+                    d => format!("{d} days ago"),
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            println!("  {:<40} {age}", path.file_name().unwrap_or_default().to_string_lossy());
+        }
+        return Ok(());
+    }
     let target = db.backup()?;
     println!("Copied to {}", target.display());
+    let removed = db.prune_backups(keep)?;
+    if !removed.is_empty() {
+        println!("Kept the {keep} newest, deleted {}.", plural(removed.len(), "older copy", "older copies"));
+    }
     Ok(())
 }
 
@@ -2928,6 +2985,27 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
 
     db.end_session(open.id, &at)?;
 
+    // A sitting's worth of work has just been written down, and the record
+    // is one file. If the newest copy predates today, take one now: the
+    // ritual's step that is most often skipped is the one that costs most
+    // when it is, and a session always ends, hook or not.
+    let insured = match db.newest_backup_at()? {
+        Some(at) if days_since_utc(&at).is_some_and(|d| d < BACKUP_STALE_DAYS) => None,
+        // A copy that will not be written must not fail the close: the
+        // session is already ended and reporting it as an error would
+        // invite a second `end` on a record that has none open.
+        _ => match db.backup() {
+            Ok(target) => {
+                db.prune_backups(KEEP_BACKUPS)?;
+                Some(target)
+            }
+            Err(e) => {
+                eprintln!("The session closed, but the database could not be copied: {e:#}");
+                None
+            }
+        },
+    };
+
     // The entry goes into the record whatever else happens to it: a hub
     // written from the record reads its diary from there, and a sitting
     // that only wrote to a file was lost the moment the file was generated.
@@ -2951,6 +3029,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
                 "session": summary,
                 "missing": summary.missing(),
                 "diary": written,
+                "backup": insured,
             }))?
         );
         return Ok(());
@@ -2995,6 +3074,10 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     }
     if let Some(next) = &summary.next_step {
         println!("next: {}", first_line(next));
+    }
+
+    if let Some(target) = &insured {
+        println!("copied the database to {}", target.display());
     }
 
     let missing = summary.missing();
@@ -3243,6 +3326,11 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     let db = Db::open(&path)?;
     let schema = db.schema_version()?;
     let counts = db.counts()?;
+    // When the record is one file, its age is the one number that says how
+    // much work a corrupt file would cost. It is read before the hub checks
+    // so that it is printed whether or not those are asked for.
+    let newest_backup = db.newest_backup_at()?;
+    let backup_age = newest_backup.as_deref().and_then(days_since_utc);
 
     // Where the plan and git disagree. Reported, never corrected: the record
     // cannot prove a tag's absence - it may simply not have been fetched -
@@ -3274,6 +3362,12 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                 "initialised": true,
                 "schema_version": schema,
                 "counts": counts,
+                "backup": {
+                    "newest_at": newest_backup,
+                    "age_days": backup_age,
+                    "copies": db.backups()?.len(),
+                    "state": backup_state(backup_age),
+                },
                 "hubs": if hubs {
                     serde_json::to_value(
                         hub_drift(&db)?
@@ -3300,6 +3394,23 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     println!("tasks:     {}", counts.tasks);
     println!("sessions:  {}", counts.sessions);
     println!("events:    {}", counts.events);
+    match backup_age {
+        None => println!("backup:    none - one file, no copy of it; run `rigger backup`"),
+        Some(days) => {
+            let copies = db.backups()?.len();
+            let when = match days {
+                0 => "today".to_string(),
+                1 => "yesterday".to_string(),
+                d => format!("{d} days ago"),
+            };
+            let verdict = match backup_state(Some(days)) {
+                "old" => " - older than a week; run `rigger backup`",
+                "stale" => " - older than a day; run `rigger backup`",
+                _ => "",
+            };
+            println!("backup:    {when}, {} kept{verdict}", plural(copies, "copy", "copies"));
+        }
+    }
 
     if !unsynced.is_empty() {
         println!(

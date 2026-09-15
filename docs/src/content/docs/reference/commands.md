@@ -11,7 +11,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project`](/rigger/reference/project/) | v0.1.0 | Add, list and show projects |
 | [`rigger doctor`](/rigger/reference/doctor/) | v0.1.0 | Show the database path, schema version and record counts |
 | [`rigger import`](/rigger/reference/import/) | v0.2.0 | Read a notes hub into versions, tasks and events |
-| [`rigger backup`](/rigger/reference/backup/) | v0.2.0 | Copy the database aside |
+| [`rigger backup`](/rigger/reference/backup/) | v0.2.0 | Copy the database aside, and keep the last few |
 | [`rigger context`](/rigger/reference/context/) | v0.3.0 | Print the context packet for a project |
 | [`rigger note`](/rigger/reference/note/), `rigger wish` | v0.3.0 | Record an event or a wish |
 | [`rigger resolve`](/rigger/reference/resolve/) | v0.7.0 | Answer a question or sort a wish |

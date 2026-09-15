@@ -19,6 +19,7 @@ versions:  0
 tasks:     0
 sessions:  0
 events:    0
+backup:    today, 3 copies kept
 ```
 
 With `--json`:
@@ -28,9 +29,28 @@ With `--json`:
   "database": "C:\\Users\\you\\AppData\\Local\\lacodda\\rigger\\data\\rigger.db",
   "initialised": true,
   "schema_version": 4,
-  "counts": { "projects": 1, "versions": 0, "tasks": 0, "sessions": 0, "events": 0 }
+  "counts": { "projects": 1, "versions": 0, "tasks": 0, "sessions": 0, "events": 0 },
+  "backup": { "newest_at": "2026-09-15T12:02:53Z", "age_days": 0, "copies": 3, "state": "fresh" }
 }
 ```
+
+## How old the insurance is
+
+The record is one file. `backup:` says when the newest copy of it was taken, and how many are kept:
+
+```console
+$ rigger doctor
+...
+backup:    3 days ago, 5 copies kept - older than a day; run `rigger backup`
+```
+
+A copy from today passes without advice, older than a day is worth a line, and older than a week (`"state": "old"`) means the copy no longer resembles the record. Having none at all says so plainly:
+
+```console
+backup:    none - one file, no copy of it; run `rigger backup`
+```
+
+The age is read from the moment in the copy's name, not from the file's own timestamp, which says when it was last moved rather than when its contents were true. See [`backup`](/rigger/reference/backup/).
 
 ## Where the plan and git disagree
 

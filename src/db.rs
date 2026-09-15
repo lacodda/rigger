@@ -646,17 +646,103 @@ impl Db {
     /// schema it holds. SQLite's own backup API is used rather than a file
     /// copy: it is consistent even while something else is connected.
     pub fn backup(&self) -> Result<PathBuf> {
+        let stem = self
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "rigger".into());
         let stamp = now().replace([':', '-'], "").replace('T', "-").replace('Z', "");
-        let name = format!(
-            "{}.v{}-{stamp}.bak",
-            self.path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_else(|| "rigger".into()),
-            self.schema_version()?
-        );
-        let target = self.path.with_file_name(name);
+        let version = self.schema_version()?;
+        // The stamp is second-resolution, so two copies inside one second
+        // would land on one name and the second would overwrite the first.
+        // A suffix is cheaper than a finer stamp and keeps the name readable.
+        let mut target = self.path.with_file_name(format!("{stem}.v{version}-{stamp}.bak"));
+        for n in 2.. {
+            if !target.exists() {
+                break;
+            }
+            target = self.path.with_file_name(format!("{stem}.v{version}-{stamp}-{n}.bak"));
+        }
         let mut out = Connection::open(&target).with_context(|| format!("cannot create {}", target.display()))?;
         let backup = rusqlite::backup::Backup::new(&self.conn, &mut out).context("cannot start the backup")?;
         backup.step(-1).context("the backup did not finish")?;
         Ok(target)
+    }
+
+    /// Every copy taken of this database, newest first.
+    ///
+    /// The moment comes from the name rather than from the filesystem,
+    /// which spells times differently per platform - but the name itself
+    /// cannot be the sort key: the suffix that keeps two copies inside one
+    /// second apart (`...-2.bak`) sorts BEFORE the unsuffixed name it was
+    /// taken after. So copies sort by the moment they carry, then by that
+    /// suffix as the number it is - inside one second it is the only thing
+    /// that says which copy came last, and rotation deletes from the end.
+    pub fn backups(&self) -> Result<Vec<PathBuf>> {
+        let Some(dir) = self.path.parent() else {
+            return Ok(Vec::new());
+        };
+        let stem = self
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "rigger".into());
+        let prefix = format!("{stem}.v");
+        let mut found: Vec<PathBuf> = match std::fs::read_dir(dir) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .map(|n| {
+                            let name = n.to_string_lossy();
+                            name.starts_with(&prefix) && name.ends_with(".bak")
+                        })
+                        .unwrap_or(false)
+                })
+                .collect(),
+            // A missing directory is not a failure to report here: it means
+            // no copies, which is what the caller is asking about.
+            Err(_) => return Ok(Vec::new()),
+        };
+        found.sort_by_key(|p| {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            // Reversed by negating the sequence and leaning on the reverse
+            // of the moment below, so `newest first` needs no second pass.
+            (stamp_of(&name), sequence_of(&name), name)
+        });
+        found.reverse();
+        Ok(found)
+    }
+
+    /// Keeps the `keep` newest copies and deletes the rest, newest first.
+    ///
+    /// Returns what was deleted. `keep` of zero would mean "delete the copy
+    /// just taken", which no caller wants, so it is read as one.
+    pub fn prune_backups(&self, keep: usize) -> Result<Vec<PathBuf>> {
+        let keep = keep.max(1);
+        let all = self.backups()?;
+        let mut removed = Vec::new();
+        for path in all.into_iter().skip(keep) {
+            // One copy that will not delete is not a reason to leave the
+            // rest: rotation is housekeeping, not the point of the command.
+            if std::fs::remove_file(&path).is_ok() {
+                removed.push(path);
+            }
+        }
+        Ok(removed)
+    }
+
+    /// When the newest copy was taken, as an RFC 3339 timestamp.
+    ///
+    /// Read from the stamp in the name rather than the file's own mtime: a
+    /// copied or restored file carries a mtime that says when it was moved,
+    /// and the name says when the record inside it was true.
+    pub fn newest_backup_at(&self) -> Result<Option<String>> {
+        let Some(newest) = self.backups()?.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok(newest.file_name().and_then(|n| stamp_of(&n.to_string_lossy())))
     }
 
     pub fn schema_version(&self) -> Result<u32> {
@@ -2612,6 +2698,57 @@ pub fn version_order(name: &str) -> (u32, u32, u32) {
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
 }
 
+/// The moment a backup name carries, back as an RFC 3339 timestamp.
+///
+/// `rigger.v23-20260915-080501.bak` was taken at `2026-09-15T08:05:01Z`.
+/// A name that does not hold a stamp gives nothing rather than a guess: a
+/// wrong date here would be reported to the owner as the age of their
+/// insurance.
+pub fn stamp_of(name: &str) -> Option<String> {
+    let rest = name.strip_suffix(".bak")?;
+    // `<stem>.v<schema>-<date>-<time>[-<n>]`: take the two fields after the
+    // schema, so the collision suffix is ignored rather than parsed.
+    let after_version = rest.rsplit_once(".v")?.1;
+    let mut parts = after_version.split('-');
+    let _schema = parts.next()?;
+    let date = parts.next()?;
+    let time = parts.next()?;
+    if date.len() != 8 || time.len() != 6 || !date.bytes().chain(time.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let stamp = format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &date[0..4],
+        &date[4..6],
+        &date[6..8],
+        &time[0..2],
+        &time[2..4],
+        &time[4..6]
+    );
+    // Parsed, not just shaped: 20261345 has the right length and is not a day.
+    stamp.parse::<jiff::Timestamp>().ok().map(|_| stamp)
+}
+
+/// The collision suffix a backup name carries, as the number it is.
+///
+/// `rigger.v23-20260915-080501-2.bak` is the second copy taken in that
+/// second; the unsuffixed name is the first. Within one second this is the
+/// only thing that says which copy is newer, and `2` must not sort before
+/// `10` the way its text does.
+fn sequence_of(name: &str) -> u32 {
+    let Some(rest) = name.strip_suffix(".bak") else {
+        return 0;
+    };
+    let Some(after_version) = rest.rsplit_once(".v").map(|(_, tail)| tail) else {
+        return 0;
+    };
+    // `<schema>-<date>-<time>[-<n>]`: a fourth field, if there is one.
+    match after_version.split('-').nth(3) {
+        Some(n) => n.parse().unwrap_or(0),
+        None => 1,
+    }
+}
+
 /// Timestamps are stored as UTC in RFC 3339, which sorts as text.
 pub fn now() -> String {
     jiff::Timestamp::now()
@@ -2627,7 +2764,7 @@ pub fn today() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::version_order;
+    use super::{stamp_of, version_order};
 
     #[test]
     fn ten_sorts_above_nine() {
@@ -2653,5 +2790,32 @@ mod tests {
     #[test]
     fn an_unparseable_name_sorts_lowest_rather_than_panicking() {
         assert_eq!(version_order("draft"), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_backup_name_gives_back_the_moment_it_was_taken() {
+        assert_eq!(stamp_of("rigger.v23-20260915-080501.bak").as_deref(), Some("2026-09-15T08:05:01Z"));
+        // The suffix that keeps two copies inside one second apart is not
+        // part of the moment.
+        assert_eq!(stamp_of("rigger.v23-20260915-080501-2.bak").as_deref(), Some("2026-09-15T08:05:01Z"));
+        // A stem with dots of its own still parses: the schema is found
+        // from the right.
+        assert_eq!(stamp_of("my.db.v1-20260101-000000.bak").as_deref(), Some("2026-01-01T00:00:00Z"));
+    }
+
+    /// A wrong date here would be reported to the owner as the age of their
+    /// insurance, so a name that does not hold a real moment gives nothing.
+    #[test]
+    fn a_name_that_is_not_a_moment_gives_no_moment() {
+        // Right shape, impossible month: shape alone must not be enough.
+        assert_eq!(stamp_of("rigger.v1-20261345-080501.bak"), None);
+        // Impossible hour, and a day that does not exist in that month.
+        assert_eq!(stamp_of("rigger.v1-20260915-250000.bak"), None);
+        assert_eq!(stamp_of("rigger.v1-20260231-080501.bak"), None);
+        // Not stamped at all.
+        assert_eq!(stamp_of("rigger.bak"), None);
+        assert_eq!(stamp_of("rigger.v1-notadate-080501.bak"), None);
+        // Not a copy.
+        assert_eq!(stamp_of("rigger.v1-20260915-080501.db"), None);
     }
 }

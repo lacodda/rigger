@@ -146,9 +146,25 @@ The question an assistant returning to a project actually has is not "what has b
 
 Commits are counted apart from recorded events, because most of what happens to a project is commits, and the two are missed in different ways.
 
+## It insures the record
+
+The record is one file, and a sitting that has just been written down is the work most worth insuring. So `session end` takes a [backup](/rigger/reference/backup/) when the newest copy predates today:
+
+```console
+$ rigger session end rigger
+Session on rigger closed, open since 2026-09-15T08:02:11Z.
+...
+copied the database to ...igger.v18-20260915-120253.bak
+```
+
+A second sitting on the same day does not take another: today's copy is insurance enough. The copy is taken on every path a session can close by, including `--json` and the Stop hook - a step that only runs when someone remembers it is the step that stops happening.
+
+A copy that cannot be written is reported on stderr but does not fail the close: the session has already ended, and an error there would invite a second `end` on a record that has none open.
+
 ## Related
 
 - [`context`](/rigger/reference/context/) - the packet a session starts from.
 - [`note`](/rigger/reference/note/) - what a session fills with.
 - [`digest`](/rigger/reference/digest/) - the same question over days rather than sittings.
 - [`open`](/rigger/reference/open/) - starting an assistant with the packet in hand.
+- [`backup`](/rigger/reference/backup/) - the copy its end takes.

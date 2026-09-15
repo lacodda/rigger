@@ -699,6 +699,244 @@ fn backup_copies_the_database_beside_itself() {
     );
 }
 
+/// The copies directory, newest first, as the product sorts them.
+fn copies(data: &Path) -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(data.join("profiles").join("line"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".bak"))
+        .collect();
+    // Sorted the way the product sorts: by the moment in the name, then by
+    // the suffix as a number, so a text sort here cannot mask one there.
+    found.sort_by_key(|name| {
+        let stem = name.strip_suffix(".bak").unwrap_or(name);
+        let tail = stem.rsplit_once(".v").map(|(_, t)| t).unwrap_or("");
+        let mut parts = tail.split('-');
+        let moment = format!("{}{}", parts.nth(1).unwrap_or(""), parts.next().unwrap_or(""));
+        let seq: u32 = parts.next().map(|n| n.parse().unwrap_or(0)).unwrap_or(1);
+        (moment, seq, name.clone())
+    });
+    found.reverse();
+    found
+}
+
+/// Writes a copy whose name says it was taken `days` ago.
+///
+/// The age is read from the name, so a test can age one without waiting.
+fn copy_aged(data: &Path, days: i64) -> String {
+    let at = jiff::Timestamp::now().as_second() - days * 86_400;
+    let stamp = jiff::Timestamp::from_second(at).unwrap().to_string();
+    let (date, time) = stamp.split_once('T').unwrap();
+    let name = format!(
+        "rigger.v1-{}-{}.bak",
+        date.replace('-', ""),
+        time.chars().filter(char::is_ascii_digit).take(6).collect::<String>()
+    );
+    std::fs::write(data.join("profiles").join("line").join(&name), b"not a database, only a name").unwrap();
+    name
+}
+
+#[test]
+fn backup_keeps_the_newest_copies_and_deletes_the_rest() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+
+    // Four copies, taken inside one second: the stamp is second-resolution,
+    // so this is also the check that they do not overwrite one another.
+    for _ in 0..4 {
+        rigger(data.path()).arg("backup").arg("--keep").arg("10").assert().success();
+    }
+    assert_eq!(copies(data.path()).len(), 4, "four copies must be four files: {:?}", copies(data.path()));
+
+    rigger(data.path())
+        .arg("backup")
+        .arg("--keep")
+        .arg("2")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deleted"));
+
+    // The fifth copy plus the one kept beside it.
+    let left = copies(data.path());
+    assert_eq!(left.len(), 2, "--keep 2 must leave two copies, found {left:?}");
+}
+
+/// The defect a text sort hides: `...-2.bak` sorts BEFORE the unsuffixed
+/// name it was taken after, so "newest first" was backwards inside one
+/// second - and rotation, which deletes from the end, would have thrown
+/// away the copy it had just taken.
+#[test]
+fn a_copy_taken_in_the_same_second_is_the_newer_of_the_two() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    for _ in 0..4 {
+        rigger(data.path()).arg("backup").arg("--keep").arg("10").assert().success();
+    }
+
+    // Whatever the names came out as, the last one taken must head the list.
+    let listed = rigger(data.path()).arg("backup").arg("--list").arg("--keep").arg("10").assert().success();
+    let out = String::from_utf8(listed.get_output().stdout.clone()).unwrap();
+    let first = out.lines().nth(1).unwrap().split_whitespace().next().unwrap().to_string();
+    let newest = copies(data.path()).first().unwrap().clone();
+    assert_eq!(
+        first, newest,
+        "the list must open with the newest copy
+{out}"
+    );
+
+    // And rotation must keep that one rather than delete it.
+    rigger(data.path()).arg("backup").arg("--keep").arg("1").assert().success();
+    let left = copies(data.path());
+    assert_eq!(left.len(), 1, "expected one copy, found {left:?}");
+    rigger(data.path())
+        .arg("backup")
+        .arg("--list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unknown").not());
+}
+
+/// Rotation must never delete every copy, whatever it is asked for.
+#[test]
+fn keeping_none_still_keeps_the_copy_just_taken() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).arg("backup").assert().success();
+    rigger(data.path()).arg("backup").arg("--keep").arg("0").assert().success();
+
+    let left = copies(data.path());
+    assert_eq!(left.len(), 1, "`--keep 0` must keep the copy it just took, found {left:?}");
+}
+
+#[test]
+fn doctor_reports_the_age_of_the_newest_copy() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+
+    // No copy at all is the state worth naming loudest: one file, no insurance.
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backup:    none"));
+
+    copy_aged(data.path(), 3);
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 days ago").and(predicate::str::contains("older than a day")));
+
+    // A week is the point where the copy stops resembling the record. The
+    // fresher copy goes first: what is reported is the age of the NEWEST,
+    // and adding an older one beside it must not change that.
+    let newer = copy_aged(data.path(), 3);
+    copy_aged(data.path(), 9);
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 days ago"));
+    std::fs::remove_file(data.path().join("profiles").join("line").join(&newer)).unwrap();
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("older than a week"));
+
+    // And a copy from today is not advice at all.
+    copy_aged(data.path(), 0);
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backup:    today").and(predicate::str::contains("older than").not()));
+}
+
+/// The age is read from the name, not from the file's own mtime: a copied
+/// or restored file carries a time that says when it was moved.
+#[test]
+fn a_copy_whose_name_holds_no_moment_is_not_given_an_age() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    // Right shape, impossible day: a month 13 must not be read as a date.
+    std::fs::write(data.path().join("profiles").join("line").join("rigger.v1-20261345-080501.bak"), b"x").unwrap();
+
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backup:    none"));
+
+    // `doctor` alone cannot say WHICH layer refused it - the name parser or
+    // the clock behind it - and a test that cannot fail for the reason it
+    // names proves nothing. `--list` prints the age of each copy, so it
+    // shows the name parser itself refusing to turn month 13 into a date,
+    // while a well-formed neighbour on the same screen still gets one.
+    copy_aged(data.path(), 2);
+    rigger(data.path())
+        .arg("backup")
+        .arg("--list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("20261345").and(predicate::str::contains("unknown")))
+        .stdout(predicate::str::contains("2 days ago"));
+}
+
+#[test]
+fn ending_a_session_insures_the_record_when_the_newest_copy_is_a_day_old() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("here");
+    repo(&root);
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path())
+        .arg("project")
+        .arg("add")
+        .arg(&root)
+        .arg("--name")
+        .arg("here")
+        .assert()
+        .success();
+
+    // No copy yet: the first close must take one.
+    rigger(data.path()).arg("session").arg("start").arg("here").assert().success();
+    rigger(data.path())
+        .arg("session")
+        .arg("end")
+        .arg("here")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copied the database"));
+    assert_eq!(copies(data.path()).len(), 1, "the close must leave a copy: {:?}", copies(data.path()));
+
+    // A second sitting on the same day does not: today's copy is insurance enough.
+    rigger(data.path()).arg("session").arg("start").arg("here").assert().success();
+    rigger(data.path())
+        .arg("session")
+        .arg("end")
+        .arg("here")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copied the database").not());
+    assert_eq!(copies(data.path()).len(), 1, "a fresh copy must not be taken twice a day");
+
+    // Age the only copy past a day, and the next close insures again.
+    for name in copies(data.path()) {
+        std::fs::remove_file(data.path().join("profiles").join("line").join(name)).unwrap();
+    }
+    copy_aged(data.path(), 2);
+    rigger(data.path()).arg("session").arg("start").arg("here").assert().success();
+    rigger(data.path())
+        .arg("session")
+        .arg("end")
+        .arg("here")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copied the database"));
+    assert_eq!(copies(data.path()).len(), 2, "a stale copy must be joined by a fresh one");
+}
+
 /// rigger never exits 2, whatever it is asked.
 ///
 /// 2 is clap's own code for a usage error, and it is also the code an
