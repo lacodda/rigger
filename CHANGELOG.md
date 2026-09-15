@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Bug Fixes
 - Let a generated plan describe the record rather than overrule it
+- Write a document back to the file it was read from
 
 ### Features
 - Keep the last few copies of the record, and say how old the newest is
