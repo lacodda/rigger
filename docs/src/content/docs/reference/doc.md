@@ -104,6 +104,14 @@ scheda is the line's own markdown notepad, and it takes `--wait FILE`: the proce
 
 The text is edited through a file in a directory of that rigger process's own, under the temporary directory, and both are removed afterwards whether the edit succeeded or not: the file holds your prose, and leaving copies of it lying about is not something a record tool should do. Per process, because two rigger runs editing a document of the same name - two projects each with a `vision`, or two sittings at once - would otherwise share one scratch file, and whichever saved second would win.
 
+## What belongs here, and what does not
+
+The record holds **the work on a product**: its projects, versions, tasks, events and questions, and the handwritten texts about how the product is made - the vision, the rituals, the preamble of the decisions journal, the research notes. Once they are here the hub is an export, and there is nothing in it left to edit by hand.
+
+What stays outside is **the material itself**. For this line that means a notes vault keeps the songs, lyrics, artwork and channel analytics, the stories, the brand register and everything belonging to a content project - things read with the eye, linked to each other, and shaped by no schema.
+
+The test is short: a file that describes *how a product is run* belongs in the record; a file that *is the work* belongs where the work lives.
+
 ## Related
 
 - [`note`](/rigger/reference/note/) - the events a decisions journal is made of.

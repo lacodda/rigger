@@ -38,10 +38,16 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `wish` | Something to sort into the plan later |
 | `resolve` | Answers a question or sorts a wish, so it leaves the packet |
 | `close_task` | Marks a task of the current stage done |
+| `doc_show` | Reads a handwritten text - the vision, the rituals, a research note; lists them without a slug |
+| `doc_write` | Writes one into the record: a research note made on request, or a correction to the vision |
 | `set_task_status` | Gives a task a [status](/rigger/reference/task/): new, active, waiting-handoff, frozen or done |
 | `task_find` | Finds the [card](/rigger/reference/task/) a line of text means, and says whether to take it, ask, or make a new one |
 | `task_context` | Where a card stands: what it is, where it is worked, everything written against it |
 | `record_plan` | A step of the plan of edits, against a card |
+
+`doc_write` replaces the whole body of a document, so read it with `doc_show` first and send back the whole of it. What it is not told, it keeps: a rewrite without `kind` or `title` leaves both as they were, so a correction to the vision cannot silently retitle it or turn it into a research note. An empty body is refused - a document is removed with `rigger doc remove`, not by emptying it.
+
+This is what lets an assistant write a research note or fix a vision into the record rather than into a file somebody has to remember to import. See [`doc`](/rigger/reference/doc/).
 
 The recording tools - `record_decision`, `record_finding`, `record_pitfall`, `record_change`, `record_plan` and `set_next_step` - take a `task` instead of a `project`: the event is then written against that card, under the desk the cards live in.
 

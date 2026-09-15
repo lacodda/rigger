@@ -260,3 +260,56 @@ fn without_a_database_the_server_says_so_rather_than_serving_nothing() {
         .failure()
         .stderr(predicates::prelude::predicate::str::contains("run `rigger init` first"));
 }
+
+/// The assistant writes a research note or corrects the vision into the
+/// record, not into a file: the whole point of documents living there.
+#[test]
+fn an_assistant_reads_and_writes_the_handwritten_texts() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    rigger(data.path())
+        .args(["doc", "add", "proj", "Vision", "--kind", "vision", "--body", "# Vision\n\nText."])
+        .assert()
+        .success();
+    let mut server = Server::start(data.path());
+    server.request(1, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+
+    let listed = server.request(2, "tools/list", json!({}));
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"doc_show"), "{names:?}");
+    assert!(names.contains(&"doc_write"), "{names:?}");
+
+    // Without a slug it lists; with one it gives the body alone.
+    let listing = server.call(3, "doc_show", json!({ "project": "proj" }));
+    assert!(listing.contains("vision (vision)"), "{listing}");
+    let body = server.call(4, "doc_show", json!({ "project": "proj", "slug": "vision" }));
+    assert_eq!(body.trim(), "# Vision\n\nText.");
+
+    // A new research note, written by the assistant.
+    let made = server.call(
+        5,
+        "doc_write",
+        json!({ "project": "proj", "slug": "2026-09-15-note", "kind": "research", "title": "A note", "body": "# A note\n\nFound." }),
+    );
+    assert!(made.contains("Wrote 2026-09-15-note (research)"), "{made}");
+
+    // A correction to an existing one keeps what it was not told to change:
+    // an assistant must not silently retitle a vision or change its kind.
+    let fixed = server.call(6, "doc_write", json!({ "project": "proj", "slug": "vision", "body": "# Vision\n\nCorrected." }));
+    assert!(fixed.contains("Rewrote vision (vision)"), "{fixed}");
+    let body = server.call(7, "doc_show", json!({ "project": "proj", "slug": "vision" }));
+    assert_eq!(body.trim(), "# Vision\n\nCorrected.");
+
+    // Emptying a document is not how one is removed.
+    let emptied = server.request(
+        8,
+        "tools/call",
+        json!({ "name": "doc_write", "arguments": { "project": "proj", "slug": "vision", "body": "   " } }),
+    );
+    assert_eq!(emptied["result"]["isError"], true, "{emptied}");
+}

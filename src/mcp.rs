@@ -271,6 +271,30 @@ fn tools() -> Vec<Value> {
             }),
             &["project", "task"],
         ),
+        tool(
+            "doc_show",
+            "Read a handwritten text of the project: its vision, its rituals, a research note. \
+             Without a `slug`, lists what there is.",
+            json!({
+                "project": project_arg(),
+                "slug": { "type": "string", "description": "Which document; omit to list them" },
+            }),
+            &["project"],
+        ),
+        tool(
+            "doc_write",
+            "Write a handwritten text into the record: a research note you were asked to make, \
+             or a correction to the vision. Replaces the whole body of the document, so read it \
+             with `doc_show` first and send back the whole of it.",
+            json!({
+                "project": project_arg(),
+                "slug": { "type": "string", "description": "Which document; a new one is made if there is none" },
+                "kind": { "type": "string", "description": "vision, decisions, research, rituals or other; only for a new one" },
+                "title": { "type": "string", "description": "What it is called; only needed for a new one" },
+                "body": { "type": "string", "description": "The whole text of the document, in markdown" },
+            }),
+            &["project", "slug", "body"],
+        ),
     ]
 }
 
@@ -404,6 +428,60 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             Ok(match was == status {
                 true => format!("Task {task} was already {status}: {title}"),
                 false => format!("Task {task} is now {status} (was {was}): {title}"),
+            })
+        }
+        "doc_show" => {
+            let project = project(db)?;
+            let Some(slug) = args.get("slug").and_then(Value::as_str) else {
+                let docs = db.documents(project.id, None)?;
+                if docs.is_empty() {
+                    return Ok(format!("{} has no documents yet.", project.name));
+                }
+                let mut out = String::new();
+                for d in &docs {
+                    out.push_str(&format!("{} ({}) - {}\n", d.slug, d.kind, d.title));
+                }
+                return Ok(out);
+            };
+            let Some(doc) = db.document(project.id, slug)? else {
+                let known = db.documents(project.id, None)?;
+                let names = known.iter().map(|d| d.slug.as_str()).collect::<Vec<_>>().join(", ");
+                bail!("{} has no document at '{slug}'; it has {names}", project.name);
+            };
+            Ok(doc.body)
+        }
+        "doc_write" => {
+            let project = project(db)?;
+            let Some(slug) = args.get("slug").and_then(Value::as_str) else {
+                bail!("this tool needs a `slug`; `doc_show` lists them");
+            };
+            let Some(body) = args.get("body").and_then(Value::as_str) else {
+                bail!("this tool needs a `body`: the whole text of the document");
+            };
+            if body.trim().is_empty() {
+                bail!("the body is empty; a document is removed with `rigger doc remove`, not by emptying it");
+            }
+            let existing = db.document(project.id, slug)?;
+            // A rewrite keeps what it was not told to change, so an
+            // assistant correcting a vision cannot silently retitle it or
+            // turn it into a research note.
+            let kind = args
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| existing.as_ref().map(|d| d.kind.clone()))
+                .unwrap_or_else(|| "other".to_string());
+            let title = args
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| existing.as_ref().map(|d| d.title.clone()))
+                .unwrap_or_else(|| slug.to_string());
+            crate::doc::check_kind(&kind)?;
+            let written = db.write_document(project.id, &kind, slug, &title, body)?;
+            Ok(match existing {
+                Some(_) => format!("Rewrote {} ({}), {} bytes", written.slug, written.kind, written.body.len()),
+                None => format!("Wrote {} ({}), {} bytes", written.slug, written.kind, written.body.len()),
             })
         }
         "close_task" => {

@@ -30,10 +30,18 @@ use crate::hub::{DiaryEntry, Prose, Stage, StateLine};
 
 /// The files a hub is generated from, in the order an export writes them.
 ///
-/// Vision, the decision log's prose and the research notes are not here and
-/// will not be: they are argument rather than record, written by a person,
-/// and the record has no way to hold an argument that would survive being
-/// rebuilt from it.
+/// Vision, the rituals and the research notes are not here: they are a
+/// person's prose, and they live in the record as documents that
+/// `export --docs` writes back out unchanged rather than rebuilds.
+///
+/// `Решения.md` is not here either, and building it is not a matter of
+/// writing it. The owner's journal groups a sitting's decisions under one
+/// themed heading (`2026-09-11 · Сверка планов линейки`) with bold
+/// subheadings inside, and an event carries no theme: a generated file was
+/// written, measured against the real hub, and would have replaced 147
+/// lines of structured prose with 367 flat ones. It was deleted rather than
+/// kept for later. The file stays the owner's until an event can carry a
+/// theme; its preamble already lives in the record as a document.
 pub const GENERATED: [&str; 4] = ["План.md", "Изменения.md", "Дневник.md", "README.md"];
 
 /// A file the export produced.
