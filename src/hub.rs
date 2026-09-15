@@ -174,10 +174,34 @@ pub struct Hub {
     pub prose: Vec<Prose>,
     pub state: Vec<StateLine>,
     pub warnings: Vec<String>,
+    /// The handwritten files: the vision, the prose preamble of the
+    /// decisions journal, the rituals, and every research note. These are
+    /// the files a hub kept that the record could not rebuild - the reason
+    /// a hub had to exist at all.
+    pub documents: Vec<Document>,
+}
+
+/// A handwritten text read from a hub, on its way into the record.
+#[derive(Debug, Clone, Default)]
+pub struct Document {
+    pub kind: String,
+    pub slug: String,
+    pub title: String,
+    pub body: String,
 }
 
 /// The files a hub is read from.
 pub const FILES: [&str; 5] = ["План.md", "Изменения.md", "README.md", "Решения.md", "Дневник.md"];
+
+/// The handwritten files, and the kind of document each becomes.
+///
+/// `Решения.md` is not here: its prose preamble is a document but its
+/// entries are events, so it is read by the decisions parser and its
+/// preamble taken separately.
+pub const DOCUMENT_FILES: [(&str, &str); 2] = [("Видение.md", "vision"), ("Ритуалы.md", "rituals")];
+
+/// The directory a hub keeps its research notes in.
+pub const RESEARCH_DIR: &str = "Исследования";
 
 /// Whether a directory holds any of the files a hub is read from.
 ///
@@ -211,7 +235,108 @@ pub fn read(dir: &Path) -> Result<Hub> {
         hub.diary = parse_diary(text);
         hub.prose.extend(parse_prose(text, "Дневник.md"));
     })?;
+    hub.documents = read_documents(dir);
     Ok(hub)
+}
+
+/// The handwritten texts of a hub: the vision, the rituals, the preamble of
+/// the decisions journal, and every research note.
+///
+/// A missing one is not a warning the way a missing `План.md` is: most
+/// projects have no rituals file and several have no research at all.
+fn read_documents(dir: &Path) -> Vec<Document> {
+    let mut out = Vec::new();
+    for (file, kind) in DOCUMENT_FILES {
+        if let Ok(text) = std::fs::read_to_string(dir.join(file))
+            && !text.trim().is_empty()
+        {
+            out.push(document_from(kind, kind, &text));
+        }
+    }
+    // The prose above the first entry of the decisions journal: how the
+    // journal is kept, which is a document, while the entries below it are
+    // events the record already holds.
+    if let Ok(text) = std::fs::read_to_string(dir.join("Решения.md")) {
+        let preamble = decisions_preamble(&text);
+        if !preamble.trim().is_empty() {
+            out.push(document_from("decisions", "decisions", &preamble));
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(dir.join(RESEARCH_DIR)) {
+        let mut notes: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "md"))
+            .collect();
+        // By name, which for these begins with the date they were asked.
+        notes.sort();
+        // Addresses handed out so far, so two notes of one day cannot share.
+        let mut seen: Vec<String> = Vec::new();
+        for path in notes {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            // `2026-09-04 — Инструмент проектов` slugs to `2026-09-04`:
+            // slugify keeps only ASCII, and these titles are Russian after
+            // the date. Two notes from one day would then share an address
+            // and the second would overwrite the first - a research note
+            // lost without a word. The date is kept because it is what
+            // these sort by, and a number after it keeps them apart.
+            let mut slug = crate::db::slugify(&stem);
+            if slug.is_empty() {
+                slug = "research".to_string();
+            }
+            if seen.iter().any(|taken| taken == &slug) {
+                let base = slug.clone();
+                for n in 2.. {
+                    let candidate = format!("{base}-{n}");
+                    if !seen.iter().any(|taken| taken == &candidate) {
+                        slug = candidate;
+                        break;
+                    }
+                }
+            }
+            seen.push(slug.clone());
+            out.push(document_from("research", &slug, &text));
+        }
+    }
+    out
+}
+
+/// The prose above the first entry of a decisions journal.
+///
+/// Entries open with `## ` and a date; everything before the first of them
+/// is how the journal is kept, minus the file's own title.
+fn decisions_preamble(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    // A horizontal rule separating the preamble from the entries is part of
+    // the file's furniture, not of what it says.
+    out.trim().trim_end_matches('-').trim_end().to_string()
+}
+
+/// A document from a file: its first heading is the title, and the whole
+/// text is the body - a hub file is edited as a whole.
+fn document_from(kind: &str, slug: &str, text: &str) -> Document {
+    let title = text
+        .lines()
+        .find(|l| l.starts_with("# "))
+        .map(|l| l.trim_start_matches('#').trim().to_string())
+        .unwrap_or_else(|| slug.to_string());
+    Document {
+        kind: kind.to_string(),
+        slug: slug.to_string(),
+        title,
+        body: text.trim_end().to_string(),
+    }
 }
 
 fn read_file(dir: &Path, name: &str, hub: &mut Hub, parse: impl FnOnce(&str, &mut Hub)) -> Result<()> {
@@ -738,12 +863,27 @@ fn parse_questions(text: &str) -> Vec<String> {
             });
         if let Some(item) = item {
             let item = item.trim();
-            if !item.is_empty() && item != "(пусто)" {
+            if !item.is_empty() && !is_placeholder(item) {
                 questions.push(item.to_string());
             }
         }
     }
     questions
+}
+
+/// Whether a line under a heading is the template's way of saying "nothing
+/// here" rather than something waiting on the owner.
+///
+/// Matching the whole line against `(пусто)` was not enough: a hub writes
+/// `- (пусто) — модель эмбеддингов решается замером (v0.6)`, the placeholder
+/// followed by why the queue is empty. That read as a question, and two of
+/// them sat in the owner's inbox for four days saying "пусто)" - the
+/// display having eaten the opening bracket. A placeholder is a placeholder
+/// however much explanation follows it.
+fn is_placeholder(item: &str) -> bool {
+    const PLACEHOLDERS: [&str; 6] = ["(пусто)", "(нет)", "(none)", "(empty)", "—", "-"];
+    let head = item.split(['—', '–']).next().unwrap_or(item).trim();
+    PLACEHOLDERS.contains(&head) || PLACEHOLDERS.contains(&item)
 }
 
 fn parse_decisions(text: &str) -> Vec<Decision> {

@@ -974,6 +974,7 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     if report.questions_added > 0 {
         println!("  {:<10} {} added", "questions", report.questions_added);
     }
+    line("documents", report.documents_added, report.documents_updated);
     Ok(())
 }
 

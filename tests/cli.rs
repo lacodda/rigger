@@ -1289,6 +1289,155 @@ fn editor_that_prints(dir: &Path) -> String {
     editor_script(dir, "print", "cat \"$1\"", "type %1")
 }
 
+/// A hub kept five files the record could not rebuild - the vision, the
+/// rituals, the preamble of the decisions journal and the research notes.
+/// Those are the reason a hub had to exist; `import` brings them in.
+#[test]
+fn importing_a_hub_takes_in_its_handwritten_texts() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let hub = data.path().join("hub");
+    std::fs::create_dir_all(hub.join("Исследования")).unwrap();
+    std::fs::write(hub.join("Видение.md"), "# Видение demo\n\n## 1. Зачем\n\nЗатем.\n").unwrap();
+    std::fs::write(hub.join("Ритуалы.md"), "# Ритуалы demo\n\nПравила.\n").unwrap();
+    std::fs::write(
+        hub.join("Решения.md"),
+        "# Журнал решений\n\nappend-only, новые сверху.\n\n---\n\n## 2026-09-11 · Что-то\n\nТекст решения.\n",
+    )
+    .unwrap();
+    std::fs::write(hub.join("Исследования").join("2026-09-04 — Инструмент.md"), "# Инструмент\n\nЧто?\n").unwrap();
+
+    rigger(data.path())
+        .args(["import", "demo", "--hub"])
+        .arg(&hub)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("documents  4 added"));
+
+    // Each kind is there, under an address that can be typed.
+    let listed = rigger(data.path()).args(["doc", "list", "demo"]).assert().success();
+    let out = String::from_utf8(listed.get_output().stdout.clone()).unwrap();
+    for slug in ["vision", "rituals", "decisions", "2026-09-04"] {
+        assert!(out.contains(slug), "{slug} must be in the list:\n{out}");
+    }
+
+    // The decisions journal is split: its preamble is a document, while the
+    // entries below it are events the record already holds.
+    let shown = rigger(data.path()).args(["doc", "show", "demo", "decisions"]).assert().success();
+    let preamble = String::from_utf8(shown.get_output().stdout.clone()).unwrap();
+    assert!(preamble.contains("append-only"), "the preamble is the document: {preamble}");
+    assert!(
+        !preamble.contains("Текст решения"),
+        "an entry is an event, not part of the document: {preamble}"
+    );
+}
+
+/// Re-reading an unchanged hub must change nothing: a document edited with
+/// `doc edit` and not yet exported must not be silently replaced by the
+/// older file it came from.
+#[test]
+fn importing_the_same_hub_twice_changes_nothing_the_second_time() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let hub = data.path().join("hub");
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(hub.join("Видение.md"), "# Видение demo\n\nТекст.\n").unwrap();
+
+    rigger(data.path()).args(["import", "demo", "--hub"]).arg(&hub).assert().success();
+    rigger(data.path())
+        .args(["import", "demo", "--hub"])
+        .arg(&hub)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing changed"));
+
+    // A file that really changed is taken in.
+    std::fs::write(hub.join("Видение.md"), "# Видение demo\n\nДругой текст.\n").unwrap();
+    rigger(data.path())
+        .args(["import", "demo", "--hub"])
+        .arg(&hub)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("documents  0 added, 1 updated"));
+}
+
+/// `2026-09-04 — Инструмент` slugs to `2026-09-04`, because slugify keeps
+/// only ASCII and these titles are Russian after the date. Two notes from
+/// one day then shared an address and the second overwrote the first - a
+/// research note lost without a word.
+#[test]
+fn two_research_notes_from_one_day_both_survive_the_import() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let notes = data.path().join("hub").join("Исследования");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("2026-09-04 — Первое.md"), "# Первое\n\nA\n").unwrap();
+    std::fs::write(notes.join("2026-09-04 — Второе.md"), "# Второе\n\nB\n").unwrap();
+    std::fs::write(notes.join("2026-09-05 — Третье.md"), "# Третье\n\nC\n").unwrap();
+
+    rigger(data.path())
+        .args(["import", "demo", "--hub"])
+        .arg(data.path().join("hub"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("documents  3 added"));
+
+    let listed = rigger(data.path()).args(["doc", "list", "demo", "--json"]).assert().success();
+    let docs: serde_json::Value = serde_json::from_slice(&listed.get_output().stdout).unwrap();
+    let titles: Vec<&str> = docs.as_array().unwrap().iter().map(|d| d["title"].as_str().unwrap()).collect();
+    assert_eq!(titles.len(), 3, "every note must survive: {titles:?}");
+    for title in ["Первое", "Второе", "Третье"] {
+        assert!(titles.contains(&title), "{title} was lost: {titles:?}");
+    }
+}
+
+/// `- (пусто)` under an empty queue is the template saying "nothing here",
+/// and it read as a question. Two of them sat in the owner's inbox for four
+/// days - as "пусто)", the display having eaten the opening bracket.
+#[test]
+fn a_placeholder_under_an_empty_queue_is_not_a_question() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let hub = data.path().join("hub");
+    std::fs::create_dir_all(&hub).unwrap();
+    // Bare, and with the explanation a hub writes after it - which is the
+    // form that got through.
+    std::fs::write(
+        hub.join("План.md"),
+        "# План\n\n## Ждёт решения владельца\n\n- (пусто) — модель решается замером (v0.6).\n",
+    )
+    .unwrap();
+
+    rigger(data.path()).args(["import", "demo", "--hub"]).arg(&hub).assert().success();
+    rigger(data.path())
+        .args(["inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Nothing is waiting on you").or(predicate::str::contains("пусто").not()));
+}
+
+/// The subject of a question keeps an opening bracket: stripping every
+/// non-alphanumeric leader turned `(пусто) — ...` into `пусто) — ...`.
+#[test]
+fn a_question_that_opens_with_a_bracket_keeps_it() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let hub = data.path().join("hub");
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(
+        hub.join("План.md"),
+        "# План\n\n## Ждёт решения владельца\n\n- (в работе) стоит ли поднимать мажор\n",
+    )
+    .unwrap();
+
+    rigger(data.path()).args(["import", "demo", "--hub"]).arg(&hub).assert().success();
+    rigger(data.path())
+        .args(["inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(в работе)"));
+}
+
 /// The command tree is deep enough that clap's derived parser overflowed
 /// the 1 MB stack Windows gives the main thread, in debug builds only -
 /// `rigger --version` died before reaching any code of ours, and every

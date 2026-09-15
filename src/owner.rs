@@ -32,8 +32,11 @@ pub fn subject(body: &str) -> String {
 
     // Hubs mark a waiting question with a checkbox or a status glyph before
     // the heading; neither is part of what the question is about.
+    // An opening bracket is kept: stripping every non-alphanumeric leader
+    // turned `(пусто) — ...` into `пусто) — ...`, an orphaned bracket that
+    // sat in the owner's inbox looking like a corrupted record.
     let first = first
-        .trim_start_matches(|c: char| !c.is_alphanumeric() && c != '*' && c != '`')
+        .trim_start_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '*' | '`' | '(' | '«' | '"'))
         .trim_start_matches("[ ]")
         .trim_start_matches("[x]")
         .trim();

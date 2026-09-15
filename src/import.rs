@@ -28,12 +28,17 @@ pub struct Report {
     pub diary_updated: u32,
     /// Files whose between-stage prose the record took in.
     pub prose_files: u32,
+    /// Handwritten texts taken into the record: vision, rituals, research.
+    pub documents_added: u32,
+    pub documents_updated: u32,
     pub warnings: Vec<String>,
 }
 
 impl Report {
     pub fn changed(&self) -> bool {
-        self.versions_added
+        self.documents_added
+            + self.documents_updated
+            + self.versions_added
             + self.versions_updated
             + self.tasks_added
             + self.tasks_updated
@@ -151,6 +156,25 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // The README's state block: one dated line per thing worth telling.
     if db.set_state_lines(project_id, &hub.state)? != Change::Unchanged {
         report.prose_files += 1;
+    }
+
+    // The handwritten texts: the vision, the rituals, the preamble of the
+    // decisions journal, the research notes. These are what a hub kept that
+    // the record could not rebuild, and taking them in is what lets a hub
+    // become an export rather than half the truth.
+    //
+    // A text already in the record is only rewritten when the file differs,
+    // so re-importing an unchanged hub reports nothing - and a document
+    // written through `doc edit` and not yet exported is not silently
+    // replaced by the older file it came from.
+    for document in &hub.documents {
+        let existing = db.document(project_id, &document.slug)?;
+        match &existing {
+            Some(held) if held.body == document.body && held.title == document.title => continue,
+            Some(_) => report.documents_updated += 1,
+            None => report.documents_added += 1,
+        }
+        db.write_document(project_id, &document.kind, &document.slug, &document.title, &document.body)?;
     }
 
     Ok(report)

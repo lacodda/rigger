@@ -24,11 +24,29 @@ sample:
 | --- | --- |
 | `План.md` | open stages and their tasks; the questions listed under "Ждёт решения владельца" |
 | `Изменения.md` | stages that shipped, with the date in their heading |
-| `Решения.md` | one decision per dated heading, body and all |
+| `Решения.md` | one decision per dated heading, body and all; the prose above the first of them becomes the `decisions` [document](/rigger/reference/doc/) |
+| `Видение.md` | the `vision` document |
+| `Ритуалы.md` | the `rituals` document |
+| `Исследования/*.md` | one `research` document each |
 
 A stage is any heading whose first word is a version - `v0.4.0` - at whatever heading level, so both `## v0.4.0 · Title` and `### v0.4.0 · Title` are found. The title is what follows the version up to the em dash; the tail after it is bookkeeping and is not part of the title. A date anywhere in that tail marks the stage as shipped, written `2026-09-03` or `03.09.2026`, after any of the words the hubs use.
 
 A checkbox line under a stage is one of its tasks, until the next heading at the same level or above - so a backlog list that follows a stage does not become part of it.
+
+### The handwritten texts
+
+The first five files are parsed into versions, tasks and events. The last four are not parsed at all: they are taken in whole, as [documents](/rigger/reference/doc/), because they are the files a hub kept that the record could not rebuild - and the reason a hub had to exist at all.
+
+```console
+$ rigger import rigger --hub ~/vault/Projects/rigger
+rigger:
+  versions   2 added, 11 updated
+  documents  4 added, 0 updated
+```
+
+A research note is addressed by the date its filename opens with. Two notes from one day get a number after it, so neither is lost: the titles after the date are usually not typeable as an address.
+
+Re-reading an unchanged hub changes nothing, so a document edited with `doc edit` and not yet exported is not silently replaced by the older file it came from. A file that really changed is taken in and reported as updated.
 
 ## Running it twice
 
