@@ -179,6 +179,12 @@ pub struct Hub {
     /// the files a hub kept that the record could not rebuild - the reason
     /// a hub had to exist at all.
     pub documents: Vec<Document>,
+    /// Whether the plan was written by the record rather than by hand.
+    ///
+    /// A generated file says so at the top, and one that does cannot
+    /// overrule the record it came from: its boxes are a picture of the
+    /// record as it stood at the last export, not a decision about it.
+    pub plan_is_generated: bool,
 }
 
 /// A handwritten text read from a hub, on its way into the record.
@@ -215,6 +221,7 @@ pub fn looks_like_a_hub(dir: &Path) -> bool {
 pub fn read(dir: &Path) -> Result<Hub> {
     let mut hub = Hub::default();
     read_file(dir, "План.md", &mut hub, |text, hub| {
+        hub.plan_is_generated = crate::export::is_generated(text);
         hub.questions = parse_questions(text);
         hub.open_stages = parse_stages(text);
         hub.prose.extend(parse_prose(text, "План.md"));

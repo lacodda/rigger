@@ -90,7 +90,13 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         let version = db.upsert_version(project_id, stage, from_changelog)?;
         tally(version.change, &mut report.versions_added, &mut report.versions_updated);
         named.push(stage.version.as_str());
-        let may_reopen = from_changelog || !version.shipped;
+        // A plan the record wrote cannot overrule the record. Its empty
+        // boxes are a picture of how things stood at the last export, and
+        // a task closed since is closed - found when importing this
+        // project's own hub silently reopened three tasks closed minutes
+        // before, on a version that had not shipped yet so the guard for
+        // shipped ones did not cover them.
+        let may_reopen = (from_changelog || !version.shipped) && !hub.plan_is_generated;
         let mut kept = Vec::new();
         for (position, task) in stage.tasks.iter().enumerate() {
             let (id, change) = db.upsert_task(project_id, version.id, position, task, may_reopen)?;
