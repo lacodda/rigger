@@ -1138,7 +1138,7 @@ fn a_new_document_is_seeded_with_the_skeleton_of_its_kind() {
     // What the editor is handed is that skeleton, with the title in it.
     let shown = rigger(data.path())
         .args(["doc", "add", "demo", "Vision of demo", "--kind", "vision"])
-        .env("RIGGER_EDITOR", editor_that_prints())
+        .env("RIGGER_EDITOR", editor_that_prints(data.path()))
         .assert()
         .success();
     let seed = String::from_utf8(shown.get_output().stdout.clone()).unwrap();
@@ -1148,7 +1148,7 @@ fn a_new_document_is_seeded_with_the_skeleton_of_its_kind() {
     // Each kind asks its own.
     let research = rigger(data.path())
         .args(["doc", "add", "demo", "A question", "--kind", "research"])
-        .env("RIGGER_EDITOR", editor_that_prints())
+        .env("RIGGER_EDITOR", editor_that_prints(data.path()))
         .assert()
         .success();
     let seed = String::from_utf8(research.get_output().stdout.clone()).unwrap();
@@ -1188,7 +1188,7 @@ fn a_skeleton_of_your_own_replaces_the_one_that_ships() {
 
     let shown = rigger(data.path())
         .args(["doc", "add", "demo", "kilna", "--kind", "vision"])
-        .env("RIGGER_EDITOR", editor_that_prints())
+        .env("RIGGER_EDITOR", editor_that_prints(data.path()))
         .assert()
         .success();
     let seed = String::from_utf8(shown.get_output().stdout.clone()).unwrap();
@@ -1198,7 +1198,7 @@ fn a_skeleton_of_your_own_replaces_the_one_that_ships() {
     // A kind without a file of its own still gets what ships.
     let research = rigger(data.path())
         .args(["doc", "add", "demo", "A question", "--kind", "research"])
-        .env("RIGGER_EDITOR", editor_that_prints())
+        .env("RIGGER_EDITOR", editor_that_prints(data.path()))
         .assert()
         .success();
     let seed = String::from_utf8(research.get_output().stdout.clone()).unwrap();
@@ -1218,11 +1218,7 @@ fn two_processes_editing_the_same_document_name_do_not_share_a_scratch_file() {
     with_project(b.path(), "demo");
 
     // An editor that takes its time, so the two overlap for certain.
-    let slow = if cfg!(windows) {
-        "cmd /c ping -n 2 127.0.0.1 >nul & type"
-    } else {
-        "sh -c 'sleep 1; cat \"$0\"'"
-    };
+    let slow = editor_script(a.path(), "slow", "sleep 1; cat \"$1\"", "ping -n 2 127.0.0.1 >nul & type %1");
 
     let mut first = std::process::Command::new(assert_cmd::cargo::cargo_bin("rigger"));
     first
@@ -1234,11 +1230,12 @@ fn two_processes_editing_the_same_document_name_do_not_share_a_scratch_file() {
 
     // Both must go through an editor: `--body` never opens a scratch file,
     // so a test where one takes that path cannot collide at all.
-    let overwrite = if cfg!(windows) {
-        "cmd /c echo written by the other process>"
-    } else {
-        "sh -c 'echo \"written by the other process\" > \"$0\"'"
-    };
+    let overwrite = editor_script(
+        b.path(),
+        "overwrite",
+        "echo written by the other process > \"$1\"",
+        "echo written by the other process> %1",
+    );
     rigger(b.path())
         .args(["doc", "add", "demo", "Vision", "--kind", "vision"])
         .env("RIGGER_EDITOR", overwrite)
@@ -1261,10 +1258,35 @@ fn two_processes_editing_the_same_document_name_do_not_share_a_scratch_file() {
         .stdout(predicate::str::contains("## Why").and(predicate::str::contains("written by the other process").not()));
 }
 
+/// An "editor" as a script on disk, and the path that runs it.
+///
+/// Not a one-liner with quotes in it: `RIGGER_EDITOR` is split on
+/// whitespace and quoting is deliberately unsupported, so `sh -c '...'`
+/// arrives at the shell in pieces. That is the product's documented
+/// behaviour, and a test has to live with it the way a person would - by
+/// putting the script in a file. Found by CI: the quoted form passed on
+/// Windows and failed on Linux and macOS.
+fn editor_script(dir: &Path, name: &str, unix_body: &str, windows_body: &str) -> String {
+    if cfg!(windows) {
+        let script = dir.join(format!("{name}.cmd"));
+        std::fs::write(&script, format!("@echo off\r\n{windows_body}\r\n")).unwrap();
+        script.display().to_string()
+    } else {
+        let script = dir.join(format!("{name}.sh"));
+        std::fs::write(&script, format!("#!/bin/sh\n{unix_body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        script.display().to_string()
+    }
+}
+
 /// An "editor" that prints the file it is given and leaves it alone, so a
 /// test can see what a person would have been shown.
-fn editor_that_prints() -> &'static str {
-    if cfg!(windows) { "cmd /c type" } else { "cat" }
+fn editor_that_prints(dir: &Path) -> String {
+    editor_script(dir, "print", "cat \"$1\"", "type %1")
 }
 
 /// The command tree is deep enough that clap's derived parser overflowed
