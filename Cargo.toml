@@ -55,6 +55,9 @@ assert_cmd = "2"
 # The tests age a backup by writing the moment into its name, which is where
 # the product reads it from - so they need the same clock the product uses.
 jiff = "0.2"
+# The document tests read a document back as JSON to check what an edit
+# kept and what it replaced.
+serde_json = "1"
 # The integration tests open the database directly to set up a state the
 # CLI cannot make on its own - a schema an edited migration left short.
 rusqlite = { version = "0.40", features = ["bundled"] }

@@ -9,6 +9,8 @@ mod card;
 mod commit;
 mod context;
 mod db;
+#[allow(dead_code)]
+mod doc;
 mod export;
 mod hub;
 mod import;
@@ -297,6 +299,11 @@ enum Command {
         /// What you want
         text: String,
     },
+    /// The handwritten texts of a project: vision, rituals, research
+    Doc {
+        #[command(subcommand)]
+        command: DocCommand,
+    },
     /// Copy the database aside, stamped with the moment and its schema
     Backup {
         /// How many copies to keep; older ones are deleted
@@ -350,6 +357,67 @@ impl NoteKind {
             NoteKind::Plan => "plan",
         }
     }
+}
+
+#[derive(Subcommand)]
+enum DocCommand {
+    /// List the documents of a project
+    List {
+        /// Project name
+        project: String,
+        /// Only this kind: vision, decisions, research, rituals, other
+        #[arg(long)]
+        kind: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a document
+    Show {
+        /// Project name
+        project: String,
+        /// The document's address, as `list` prints it
+        slug: String,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a new document, in $EDITOR unless a body is given
+    Add {
+        /// Project name
+        project: String,
+        /// What it is called
+        title: String,
+        /// Kind: vision, decisions, research, rituals, other
+        #[arg(long, default_value = "other")]
+        kind: String,
+        /// The address to give it; made from the title when omitted
+        #[arg(long)]
+        slug: Option<String>,
+        /// The body, instead of opening an editor; `-` reads standard input
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Edit a document in $EDITOR
+    Edit {
+        /// Project name
+        project: String,
+        /// The document's address, as `list` prints it
+        slug: String,
+        /// A new title for it
+        #[arg(long)]
+        title: Option<String>,
+        /// The body, instead of opening an editor; `-` reads standard input
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Remove a document from the record
+    Remove {
+        /// Project name
+        project: String,
+        /// The document's address, as `list` prints it
+        slug: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -629,7 +697,35 @@ enum VersionCommand {
     },
 }
 
+/// The stack the work runs on.
+///
+/// Windows gives the main thread 1 MB, and clap's derived parser walks the
+/// command tree with one frame per level. Unoptimised frames are several
+/// times fatter than optimised ones, so a tree this size overflowed that
+/// megabyte in debug builds while release was fine - `rigger --version`
+/// died before reaching any code of ours. Tests run debug binaries, so
+/// this was every test, not a corner.
+///
+/// Asking for the stack rather than flattening the commands: the tree is
+/// the product's surface, and it should be free to grow.
+const STACK: usize = 16 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    // The default thread stack is what `main` gets; a spawned one takes
+    // the size it is given, on every platform rigger ships to.
+    match std::thread::Builder::new().stack_size(STACK).spawn(work).map(std::thread::JoinHandle::join) {
+        Ok(Ok(code)) => code,
+        // A panic has already printed itself; exiting with the code a
+        // panicking process uses keeps that unchanged.
+        Ok(Err(_)) => ExitCode::from(101),
+        Err(e) => {
+            eprintln!("error: cannot start the working thread: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn work() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => return usage_error(err),
@@ -798,6 +894,19 @@ fn run(cli: Cli) -> Result<()> {
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
+        Command::Doc { command } => match command {
+            DocCommand::List { project, kind, json } => doc_list(&project, kind.as_deref(), json),
+            DocCommand::Show { project, slug, json } => doc_show(&project, &slug, json),
+            DocCommand::Add {
+                project,
+                title,
+                kind,
+                slug,
+                body,
+            } => doc_add(&project, &title, &kind, slug.as_deref(), body.as_deref()),
+            DocCommand::Edit { project, slug, title, body } => doc_edit(&project, &slug, title.as_deref(), body.as_deref()),
+            DocCommand::Remove { project, slug } => doc_remove(&project, &slug),
+        },
         Command::Backup { keep, list } => backup(keep, list),
         Command::Doctor { hubs, json } => doctor(hubs, json),
     }
@@ -1464,6 +1573,223 @@ fn days_since_utc(timestamp: &str) -> Option<i64> {
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// A body given on the command line, or read from standard input when it
+/// is `-`: a document is prose, and prose arrives from a pipe as often as
+/// from a keyboard.
+fn body_argument(body: &str) -> Result<String> {
+    if body != "-" {
+        return Ok(body.to_string());
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).context("cannot read the body from standard input")?;
+    Ok(text)
+}
+
+/// Opens `seed` in the editor and gives back what was saved.
+///
+/// The scratch file is removed afterwards whatever happened: it holds the
+/// owner's prose, and leaving copies of that in the temporary directory is
+/// not something a record tool should do.
+fn body_from_editor(project: &str, slug: &str, seed: &str) -> Result<String> {
+    let path = doc::scratch_path(project, slug);
+    std::fs::write(&path, seed).with_context(|| format!("cannot write {}", path.display()))?;
+    let edited = doc::edit_file(&path).and_then(|()| std::fs::read_to_string(&path).with_context(|| format!("cannot read back {}", path.display())));
+    let _ = std::fs::remove_file(&path);
+    edited
+}
+
+/// The body for a new or edited document: what was passed, or what the
+/// editor was left with.
+fn body_for(project: &str, slug: &str, body: Option<&str>, seed: &str) -> Result<String> {
+    match body {
+        Some(body) => body_argument(body),
+        None => body_from_editor(project, slug, seed),
+    }
+}
+
+fn doc_list(project: &str, kind: Option<&str>, json: bool) -> Result<()> {
+    if let Some(kind) = kind {
+        doc::check_kind(kind)?;
+    }
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let docs = db.documents(project.id, kind)?;
+    if json {
+        // Without the bodies: a listing is for finding a document, and the
+        // vision of a mature project is longer than the rest of the screen.
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &docs
+                    .iter()
+                    .map(|d| serde_json::json!({
+                        "slug": d.slug,
+                        "kind": d.kind,
+                        "title": d.title,
+                        "updated_at": d.updated_at,
+                        "bytes": d.body.len(),
+                    }))
+                    .collect::<Vec<_>>()
+            )?
+        );
+        return Ok(());
+    }
+    if docs.is_empty() {
+        println!("{} has no documents yet.", project.name);
+        println!("Write one with: rigger doc add {} \"Vision\" --kind vision", project.name);
+        return Ok(());
+    }
+    println!("{}:", plural(docs.len(), "document", "documents"));
+    // The addresses set the column, so one long slug pushes the rest along
+    // rather than stepping out of a fixed width and bending the whole table.
+    let width = docs.iter().map(|d| d.slug.chars().count()).max().unwrap_or(0).max(12);
+    for d in &docs {
+        let when = days_since_utc(&d.updated_at)
+            .map(|days| match days {
+                0 => "today".to_string(),
+                1 => "yesterday".to_string(),
+                d => format!("{d} days ago"),
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        println!("  {:<width$} {:<10} {:<12} {}", d.slug, d.kind, when, first_line(&d.title));
+    }
+    Ok(())
+}
+
+fn doc_show(project: &str, slug: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let doc = open_document(&db, &project, slug)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+    // The body alone, so that `rigger doc show x vision > vision.md` gives
+    // back a file rather than a screen with a header glued to the top.
+    println!("{}", doc.body.trim_end());
+    Ok(())
+}
+
+fn doc_add(project: &str, title: &str, kind: &str, slug: Option<&str>, body: Option<&str>) -> Result<()> {
+    doc::check_kind(kind)?;
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+
+    // A vision written twice is a vision nobody reads, so the second one is
+    // refused by name rather than made: the fix is to edit the first.
+    if doc::is_singular(kind)
+        && let Some(existing) = db.documents(project.id, Some(kind))?.first()
+    {
+        bail!(
+            "{} already has a {kind}: '{}'; edit it with `rigger doc edit {} {}`",
+            project.name,
+            existing.slug,
+            project.name,
+            existing.slug
+        );
+    }
+
+    let slug = match slug {
+        Some(slug) => slug.to_string(),
+        // A title with no ASCII in it - the owner's hub is in Russian -
+        // slugs to nothing, and an empty address is no address: the kind
+        // plus a number is one that can at least be typed.
+        None => match db::slugify(title) {
+            slug if !slug.is_empty() => slug,
+            _ => next_slug(&db, project.id, kind)?,
+        },
+    };
+    if db.document(project.id, &slug)?.is_some() {
+        bail!(
+            "{} already has a document at '{slug}'; give another with --slug, or edit that one",
+            project.name
+        );
+    }
+
+    let text = body_for(&project.name, &slug, body, &doc::template(kind, title))?;
+    if text.trim().is_empty() {
+        println!("Nothing was written; no document was made.");
+        return Ok(());
+    }
+    let written = db.write_document(project.id, kind, &slug, title, &text)?;
+    println!(
+        "Wrote {} ({kind}, {}) to {}",
+        written.slug,
+        plural(written.body.len(), "byte", "bytes"),
+        project.name
+    );
+    Ok(())
+}
+
+fn doc_edit(project: &str, slug: &str, title: Option<&str>, body: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let doc = open_document(&db, &project, slug)?;
+
+    // A title change alone must not open an editor: it was asked for on the
+    // command line and is answered there.
+    let text = match (title, body) {
+        (Some(_), None) => doc.body.clone(),
+        _ => body_for(&project.name, &doc.slug, body, &doc.body)?,
+    };
+    let title = title.unwrap_or(&doc.title);
+    if text == doc.body && title == doc.title {
+        println!("{} is unchanged.", doc.slug);
+        return Ok(());
+    }
+    if text.trim().is_empty() {
+        bail!(
+            "the document was left empty; nothing was written. Remove it with `rigger doc remove {} {}`",
+            project.name,
+            doc.slug
+        );
+    }
+    let written = db.write_document(project.id, &doc.kind, &doc.slug, title, &text)?;
+    println!("Wrote {} ({}, {})", written.slug, written.kind, plural(written.body.len(), "byte", "bytes"));
+    Ok(())
+}
+
+fn doc_remove(project: &str, slug: &str) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let doc = open_document(&db, &project, slug)?;
+    db.delete_document(project.id, &doc.slug)?;
+    println!("Removed {} ({}) from {}", doc.slug, doc.kind, project.name);
+    Ok(())
+}
+
+/// A document by its address, with the list of what there is when it is
+/// not one: a wrong address is nearly always a typo for a right one.
+fn open_document(db: &Db, project: &db::Project, slug: &str) -> Result<db::Document> {
+    if let Some(doc) = db.document(project.id, slug)? {
+        return Ok(doc);
+    }
+    let known = db.documents(project.id, None)?;
+    if known.is_empty() {
+        bail!("{} has no document at '{slug}', and none at all yet", project.name);
+    }
+    bail!(
+        "{} has no document at '{slug}'; it has {}",
+        project.name,
+        known.iter().map(|d| d.slug.as_str()).collect::<Vec<_>>().join(", ")
+    );
+}
+
+/// An address for a document whose title gives none: the kind, then the
+/// first free number after it.
+fn next_slug(db: &Db, project_id: i64, kind: &str) -> Result<String> {
+    if db.document(project_id, kind)?.is_none() {
+        return Ok(kind.to_string());
+    }
+    for n in 2.. {
+        let candidate = format!("{kind}-{n}");
+        if db.document(project_id, &candidate)?.is_none() {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("the loop returns on the first free number")
 }
 
 /// How many copies `backup` keeps when nothing else is asked.

@@ -34,6 +34,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger skill`](/rigger/reference/skill/) | v0.15.0 | Write a thin project skill from a template and the record |
 | [`rigger profile`](/rigger/reference/profile/) | v0.17.0 | Switch, list and add profiles, each with a record of its own |
 | [`rigger task`](/rigger/reference/task/) | v0.17.0 | Task cards: find, make, open, link, write against, close; a status for any task (v0.18.0) |
+| [`rigger doc`](/rigger/reference/doc/) | v0.19.0 | The handwritten texts of a project: vision, rituals, research |
 
 ## Common to all commands
 

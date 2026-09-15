@@ -306,11 +306,48 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL
     );
     ",
+    // v19: a project's handwritten texts, which until now lived only as
+    // files in a hub: the vision, the prose of the decisions journal, the
+    // rituals only that project can state, and its research notes. The
+    // record is the truth for everything else already; a text that lives
+    // only in a file is a text the record cannot show, search or carry to
+    // another machine.
+    //
+    // A document is addressed by project and slug, so `doc show rigger
+    // vision` is stable while the title is free to change. `kind` groups
+    // them - a project has one vision and many research notes - and the
+    // unique index is on the slug rather than the kind for that reason.
+    "
+    CREATE TABLE documents (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL,
+        slug       TEXT NOT NULL,
+        title      TEXT NOT NULL,
+        body       TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (project_id, slug)
+    );
+    CREATE INDEX documents_by_kind ON documents (project_id, kind);
+    ",
 ];
 
 /// The place a desk keeps its cards: a project the record keeps for
 /// itself, made on first use.
 pub const DESK: &str = "desk";
+
+/// The kinds a document can be.
+///
+/// `vision` and `rituals` are one per project and `decisions` is the prose
+/// preamble of its journal - the entries themselves are events, not a
+/// document. `research` is many, and `other` is the escape hatch for a text
+/// that is none of these rather than a reason to invent a kind.
+pub const DOC_KINDS: [&str; 5] = ["vision", "decisions", "research", "rituals", "other"];
+
+/// The kinds a project has at most one of, so that `doc add` can say so
+/// rather than quietly making a second vision nobody reads.
+pub const SINGULAR_DOC_KINDS: [&str; 3] = ["vision", "decisions", "rituals"];
 
 /// The words a task's status can be. Everything before `done` is work
 /// still to do; `dropped` is a line struck from a hub.
@@ -341,6 +378,36 @@ pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 pub struct Db {
     conn: Connection,
     path: PathBuf,
+}
+
+/// A handwritten text of a project: its vision, its rituals, a research
+/// note. What a hub kept as a file, the record keeps as a row.
+#[derive(Debug, Clone, Serialize)]
+pub struct Document {
+    pub id: i64,
+    pub project_id: i64,
+    pub kind: String,
+    /// What addresses it: `vision`, `rituals`, `2026-09-04-the-tool`.
+    pub slug: String,
+    pub title: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Document {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            kind: row.get(2)?,
+            slug: row.get(3)?,
+            title: row.get(4)?,
+            body: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -743,6 +810,68 @@ impl Db {
             return Ok(None);
         };
         Ok(newest.file_name().and_then(|n| stamp_of(&n.to_string_lossy())))
+    }
+
+    /// Every document of a project, newest first within each kind, in the
+    /// order the kinds are declared: a vision before the research notes.
+    pub fn documents(&self, project_id: i64, kind: Option<&str>) -> Result<Vec<Document>> {
+        let mut sql = String::from("SELECT id, project_id, kind, slug, title, body, created_at, updated_at FROM documents WHERE project_id = ?1");
+        if kind.is_some() {
+            sql.push_str(" AND kind = ?2");
+        }
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = match kind {
+            Some(kind) => stmt.query_map(params![project_id, kind], Document::from_row)?.collect::<Result<Vec<_>, _>>()?,
+            None => stmt.query_map(params![project_id], Document::from_row)?.collect::<Result<Vec<_>, _>>()?,
+        };
+        let mut rows = rows;
+        // Ordered in Rust rather than SQL: "the order the kinds are
+        // declared" is a fact about DOC_KINDS, and a CASE in the query
+        // would be a second copy of it to keep in step.
+        rows.sort_by_key(|d| {
+            let kind = DOC_KINDS.iter().position(|k| *k == d.kind).unwrap_or(DOC_KINDS.len());
+            (kind, std::cmp::Reverse(d.updated_at.clone()))
+        });
+        Ok(rows)
+    }
+
+    /// One document, by the slug that addresses it.
+    pub fn document(&self, project_id: i64, slug: &str) -> Result<Option<Document>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, project_id, kind, slug, title, body, created_at, updated_at
+                 FROM documents WHERE project_id = ?1 AND slug = ?2",
+                params![project_id, slug],
+                Document::from_row,
+            )
+            .optional()?)
+    }
+
+    /// Writes a document, making it if the slug is new and replacing its
+    /// title and body if it is not. `created_at` survives a rewrite: a
+    /// document keeps the day it was started.
+    pub fn write_document(&self, project_id: i64, kind: &str, slug: &str, title: &str, body: &str) -> Result<Document> {
+        if !DOC_KINDS.contains(&kind) {
+            bail!("'{kind}' is not a kind of document; rigger knows {}", DOC_KINDS.join(", "));
+        }
+        let at = now();
+        self.conn.execute(
+            "INSERT INTO documents (project_id, kind, slug, title, body, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+             ON CONFLICT (project_id, slug) DO UPDATE SET
+                 kind = excluded.kind, title = excluded.title, body = excluded.body, updated_at = excluded.updated_at",
+            params![project_id, kind, slug, title, body, at],
+        )?;
+        self.document(project_id, slug)?
+            .with_context(|| format!("the document '{slug}' was written but cannot be read back"))
+    }
+
+    pub fn delete_document(&self, project_id: i64, slug: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM documents WHERE project_id = ?1 AND slug = ?2", params![project_id, slug])?
+            > 0)
     }
 
     pub fn schema_version(&self) -> Result<u32> {
@@ -2749,6 +2878,25 @@ fn sequence_of(name: &str) -> u32 {
     }
 }
 
+/// What addresses a document on a command line, from its title.
+///
+/// ASCII letters and digits survive, everything else becomes a hyphen, and
+/// runs of hyphens collapse. A title with no ASCII in it at all - the
+/// owner's hub is in Russian - would slug to nothing, and an empty address
+/// is no address: those keep the kind and a number instead, chosen by the
+/// caller, so this returns empty rather than inventing one.
+pub fn slugify(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.extend(ch.to_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
 /// Timestamps are stored as UTC in RFC 3339, which sorts as text.
 pub fn now() -> String {
     jiff::Timestamp::now()
@@ -2764,7 +2912,7 @@ pub fn today() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{stamp_of, version_order};
+    use super::{slugify, stamp_of, version_order};
 
     #[test]
     fn ten_sorts_above_nine() {
@@ -2790,6 +2938,18 @@ mod tests {
     #[test]
     fn an_unparseable_name_sorts_lowest_rather_than_panicking() {
         assert_eq!(version_order("draft"), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_title_becomes_an_address_that_can_be_typed() {
+        assert_eq!(slugify("Vision"), "vision");
+        assert_eq!(slugify("2026-09-04 - The tool for projects"), "2026-09-04-the-tool-for-projects");
+        // Runs of punctuation collapse rather than leaving a row of hyphens.
+        assert_eq!(slugify("What   now?!"), "what-now");
+        // A title with no ASCII gives nothing rather than a row of hyphens
+        // pretending to be an address.
+        assert_eq!(slugify("Видение"), "");
+        assert_eq!(slugify("2026-09-04 — Инструмент"), "2026-09-04");
     }
 
     #[test]

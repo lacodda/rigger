@@ -937,6 +937,203 @@ fn ending_a_session_insures_the_record_when_the_newest_copy_is_a_day_old() {
     assert_eq!(copies(data.path()).len(), 2, "a stale copy must be joined by a fresh one");
 }
 
+/// A data directory with one project in it, for the document tests.
+fn with_project(data: &Path, name: &str) {
+    let root = data.join(name);
+    repo(&root);
+    rigger(data).arg("init").assert().success();
+    rigger(data).arg("project").arg("add").arg(&root).arg("--name").arg(name).assert().success();
+}
+
+#[test]
+fn a_document_is_written_read_back_and_listed() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+
+    rigger(data.path())
+        .arg("doc")
+        .arg("list")
+        .arg("demo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no documents yet"));
+
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Vision", "--kind", "vision", "--body", "# Vision\n\nBecause."])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote vision"));
+
+    // `show` prints the body and nothing else, so it can be redirected into
+    // a file without a header glued to the top.
+    let shown = rigger(data.path()).args(["doc", "show", "demo", "vision"]).assert().success();
+    let out = String::from_utf8(shown.get_output().stdout.clone()).unwrap();
+    assert_eq!(out.trim(), "# Vision\n\nBecause.", "show prints the body alone, got: {out:?}");
+
+    rigger(data.path())
+        .args(["doc", "list", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("vision").and(predicate::str::contains("today")));
+}
+
+/// A project has one vision. A second one is refused by name rather than
+/// made, because two visions means nobody reads either.
+#[test]
+fn a_second_document_of_a_singular_kind_is_refused() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Vision", "--kind", "vision", "--body", "one"])
+        .assert()
+        .success();
+
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Another", "--kind", "vision", "--body", "two"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already has a vision").and(predicate::str::contains("doc edit demo vision")));
+
+    // Research notes are many, and must not be caught by the same rule.
+    rigger(data.path())
+        .args(["doc", "add", "demo", "First", "--kind", "research", "--body", "a"])
+        .assert()
+        .success();
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Second", "--kind", "research", "--body", "b"])
+        .assert()
+        .success();
+}
+
+/// The owner's hub is in Russian, and a title with no ASCII in it slugs to
+/// nothing. An empty address is no address, so one is made from the kind.
+#[test]
+fn a_title_with_no_ascii_still_gets_an_address_that_can_be_typed() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Исследование", "--kind", "research", "--body", "текст"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote research"));
+
+    // A second one cannot take the same address, and is numbered.
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Ещё одно", "--kind", "research", "--body", "ещё"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote research-2"));
+
+    rigger(data.path())
+        .args(["doc", "show", "demo", "research"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("текст"));
+}
+
+#[test]
+fn editing_replaces_the_body_and_keeps_the_day_it_was_started() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Vision", "--kind", "vision", "--body", "first"])
+        .assert()
+        .success();
+
+    let before = rigger(data.path()).args(["doc", "show", "demo", "vision", "--json"]).assert().success();
+    let before: serde_json::Value = serde_json::from_slice(&before.get_output().stdout).unwrap();
+
+    rigger(data.path())
+        .args(["doc", "edit", "demo", "vision", "--body", "second"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote vision"));
+
+    let after = rigger(data.path()).args(["doc", "show", "demo", "vision", "--json"]).assert().success();
+    let after: serde_json::Value = serde_json::from_slice(&after.get_output().stdout).unwrap();
+
+    assert_eq!(after["body"], "second");
+    assert_eq!(after["created_at"], before["created_at"], "a rewrite must not restart the document's life");
+    // The kind survives an edit that did not mention it.
+    assert_eq!(after["kind"], "vision");
+
+    // A title given alone changes the title and leaves the body be, without
+    // opening an editor there is no terminal for.
+    rigger(data.path())
+        .args(["doc", "edit", "demo", "vision", "--title", "The vision"])
+        .assert()
+        .success();
+    let renamed = rigger(data.path()).args(["doc", "show", "demo", "vision", "--json"]).assert().success();
+    let renamed: serde_json::Value = serde_json::from_slice(&renamed.get_output().stdout).unwrap();
+    assert_eq!(renamed["title"], "The vision");
+    assert_eq!(renamed["body"], "second", "a rename must not touch the body");
+}
+
+#[test]
+fn a_wrong_address_is_answered_with_the_addresses_there_are() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+
+    rigger(data.path())
+        .args(["doc", "show", "demo", "vision"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("none at all yet"));
+
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Vision", "--kind", "vision", "--body", "x"])
+        .assert()
+        .success();
+    rigger(data.path())
+        .args(["doc", "show", "demo", "visoin"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("it has vision"));
+}
+
+/// A kind outside the vocabulary is refused with the list, rather than
+/// quietly making a document nothing will ever look for.
+#[test]
+fn a_kind_rigger_does_not_know_is_refused_with_the_list() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    rigger(data.path())
+        .args(["doc", "add", "demo", "Plan", "--kind", "plan", "--body", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("vision").and(predicate::str::contains("research")));
+}
+
+#[test]
+fn a_document_can_be_removed() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    rigger(data.path()).args(["doc", "add", "demo", "Notes", "--body", "x"]).assert().success();
+    rigger(data.path())
+        .args(["doc", "remove", "demo", "notes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed notes"));
+    rigger(data.path())
+        .args(["doc", "list", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no documents yet"));
+}
+
+/// The command tree is deep enough that clap's derived parser overflowed
+/// the 1 MB stack Windows gives the main thread, in debug builds only -
+/// `rigger --version` died before reaching any code of ours, and every
+/// test runs a debug binary. The work runs on a thread with room now.
+#[test]
+fn the_command_tree_is_walked_without_overflowing_the_stack() {
+    Command::cargo_bin("rigger").unwrap().arg("--version").assert().success();
+    Command::cargo_bin("rigger").unwrap().arg("--help").assert().success();
+    // The deepest branch of the tree, which is what actually walks it.
+    Command::cargo_bin("rigger").unwrap().args(["doc", "add", "--help"]).assert().success();
+}
+
 /// rigger never exits 2, whatever it is asked.
 ///
 /// 2 is clap's own code for a usage error, and it is also the code an

@@ -126,7 +126,7 @@ fn an_open_task_from_before_reads_as_new() {
          DROP TABLE task_projects; DROP TABLE settings; DROP INDEX tasks_by_key; \
          ALTER TABLE tasks DROP COLUMN key; ALTER TABLE tasks DROP COLUMN aliases; \
          ALTER TABLE tasks DROP COLUMN summary; ALTER TABLE tasks DROP COLUMN updated_at; \
-         PRAGMA user_version = 16;",
+         DROP TABLE documents; \n         PRAGMA user_version = 16;",
     )
     .unwrap();
     drop(db);

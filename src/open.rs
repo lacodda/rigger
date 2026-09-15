@@ -92,7 +92,7 @@ fn takes_message_on_stdin(_program: &std::ffi::OsStr) -> bool {
 /// cannot start the assistant at all; found on the owner's machine straight
 /// after the resolution fix above, by running it.
 #[cfg(windows)]
-fn launcher(program: &std::ffi::OsStr) -> Command {
+pub fn launcher(program: &std::ffi::OsStr) -> Command {
     if !is_batch(program) {
         return Command::new(program);
     }
@@ -103,7 +103,7 @@ fn launcher(program: &std::ffi::OsStr) -> Command {
 }
 
 #[cfg(not(windows))]
-fn launcher(program: &std::ffi::OsStr) -> Command {
+pub fn launcher(program: &std::ffi::OsStr) -> Command {
     Command::new(program)
 }
 
@@ -123,7 +123,7 @@ fn is_batch(program: &std::ffi::OsStr) -> bool {
 /// A shell applies PATHEXT for you; a spawned process does not, so the
 /// extensions are tried here, in the order Windows itself would.
 #[cfg(windows)]
-fn resolve(program: &str) -> std::ffi::OsString {
+pub fn resolve(program: &str) -> std::ffi::OsString {
     use std::ffi::OsString;
 
     // An explicit extension, or a path the caller spelled out, is taken as is.
@@ -145,7 +145,7 @@ fn resolve(program: &str) -> std::ffi::OsString {
 }
 
 #[cfg(not(windows))]
-fn resolve(program: &str) -> std::ffi::OsString {
+pub fn resolve(program: &str) -> std::ffi::OsString {
     std::ffi::OsString::from(program)
 }
 
