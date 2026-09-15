@@ -4,7 +4,7 @@ description: Write a hub back out of the record.
 ---
 
 ```
-rigger export <PROJECT> --hub <DIR> [--check] [--adopt] [--json]
+rigger export <PROJECT> --hub <DIR> [--check] [--adopt] [--docs] [--json]
 ```
 
 Generates a project's hub from the record. The plan, the changelog and the diary are views of what the database holds, so this is the other half of [`import`](/rigger/reference/import/): the record is read once, written by hand no more, and the notes follow it.
@@ -54,6 +54,39 @@ $ rigger export sample --hub C:\dev\sample\hub --check
 ```
 
 `--adopt` hands the files over, once and on purpose. After that the record owns them and a plain `export` keeps them current.
+
+## The handwritten texts
+
+`--docs` also writes the [documents](/rigger/reference/doc/) back out: `Видение.md`, `Ритуалы.md`, and one file per research note under `Исследования/`, named with the date the note is addressed by so that `import` reads it back to the same place.
+
+They are off by default because they are a cache and nothing reads them back: the record is where they live now, and writing four more files into every hub on every export would put them in every diff for no one's benefit. They carry no generated mark either - they are your prose, and a mark saying "edits here are overwritten" would be a lie, since `import` takes an edit back in.
+
+`doctor --hubs` compares them to the record and says when a file has drifted:
+
+```console
+$ rigger doctor --hubs
+hubs the record cannot vouch for (1):
+  rigger       Видение.md     the file differs; `rigger import` takes the edit in
+```
+
+## Seeing what would change
+
+`--check` writes nothing and shows the lines that differ, `-` for what the file has and `+` for what would replace it:
+
+```console
+$ rigger export demo --check --hub ./hub
+  План.md        would change 102 bytes
+  Изменения.md   unchanged    57 bytes
+
+План.md:
+      - [ ] first
+    -
+    - Рукописная строка, которую экспорт снесёт.
+
+1 of 4 files differ from the record.
+```
+
+Naming the file alone was no use when the question is whether something written by hand is about to be thrown away. The answer is in the `-` lines: those are what the file has and the record does not.
 
 ## Running it twice
 

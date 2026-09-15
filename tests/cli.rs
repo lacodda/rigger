@@ -1503,6 +1503,86 @@ fn a_question_that_opens_with_a_bracket_keeps_it() {
         .stdout(predicate::str::contains("(в работе)"));
 }
 
+/// `--check` named the files that would change and left the person to
+/// guess what was in them - no use at all when the question is "have I
+/// written something here the record would throw away".
+#[test]
+fn checking_an_export_shows_what_would_be_lost() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let hub = data.path().join("hub");
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(hub.join("План.md"), "# План\n\n## v0.9.0 · Stage\n\n- [ ] first\n").unwrap();
+    rigger(data.path()).args(["import", "demo", "--hub"]).arg(&hub).assert().success();
+    rigger(data.path()).args(["export", "demo", "--adopt", "--hub"]).arg(&hub).assert().success();
+
+    let mut plan = std::fs::read_to_string(hub.join("План.md")).unwrap();
+    plan.push_str("\nРукописная строка.\n");
+    std::fs::write(hub.join("План.md"), plan).unwrap();
+
+    rigger(data.path())
+        .args(["export", "demo", "--check", "--hub"])
+        .arg(&hub)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would change").and(predicate::str::contains("- Рукописная строка.")));
+
+    // A check writes nothing.
+    assert!(
+        std::fs::read_to_string(hub.join("План.md")).unwrap().contains("Рукописная строка."),
+        "--check must not write"
+    );
+}
+
+/// The handwritten texts go back out as files when asked, and come back in
+/// unchanged: a research note keeps the date its filename is addressed by.
+#[test]
+fn exporting_documents_writes_files_that_import_reads_back_unchanged() {
+    let data = tempfile::tempdir().unwrap();
+    with_project(data.path(), "demo");
+    let hub = data.path().join("hub");
+    std::fs::create_dir_all(hub.join("Исследования")).unwrap();
+    std::fs::write(hub.join("Видение.md"), "# Видение demo\n\nТекст.\n").unwrap();
+    std::fs::write(hub.join("Ритуалы.md"), "# Ритуалы demo\n\nПравила.\n").unwrap();
+    std::fs::write(hub.join("Исследования").join("2026-09-04 — Заметка.md"), "# Заметка\n\nТело.\n").unwrap();
+    rigger(data.path()).args(["import", "demo", "--hub"]).arg(&hub).assert().success();
+
+    let out = data.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    rigger(data.path())
+        .args(["export", "demo", "--adopt", "--docs", "--hub"])
+        .arg(&out)
+        .assert()
+        .success();
+
+    assert!(out.join("Видение.md").is_file(), "the vision must be written");
+    assert!(out.join("Ритуалы.md").is_file(), "the rituals must be written");
+    assert!(
+        out.join("Исследования").join("2026-09-04 — Заметка.md").is_file(),
+        "a research note keeps the date it is addressed by: {:?}",
+        std::fs::read_dir(out.join("Исследования"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect::<Vec<_>>()
+    );
+
+    // Read back, they say the same thing: nothing changed.
+    rigger(data.path())
+        .args(["import", "demo", "--hub"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing changed"));
+
+    // Without --docs they are not written at all: they are a cache, and
+    // four more files in every diff serve nobody.
+    let bare = data.path().join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    rigger(data.path()).args(["export", "demo", "--adopt", "--hub"]).arg(&bare).assert().success();
+    assert!(!bare.join("Видение.md").exists(), "documents are written only when asked for");
+}
+
 /// The command tree is deep enough that clap's derived parser overflowed
 /// the 1 MB stack Windows gives the main thread, in debug builds only -
 /// `rigger --version` died before reaching any code of ours, and every

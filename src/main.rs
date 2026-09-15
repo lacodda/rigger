@@ -277,6 +277,9 @@ enum Command {
         /// Take over files written by hand, so the record owns them from now on
         #[arg(long)]
         adopt: bool,
+        /// Also write the handwritten texts back out: vision, rituals, research
+        #[arg(long)]
+        docs: bool,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -897,8 +900,9 @@ fn run(cli: Cli) -> Result<()> {
             hub,
             check,
             adopt,
+            docs,
             json,
-        } => export_hub(&project, &hub, check, adopt, json),
+        } => export_hub(&project, &hub, check, adopt, docs, json),
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -3540,7 +3544,7 @@ fn first_line(text: &str) -> &str {
 /// files the record can rebuild are touched: Vision, the decision log's
 /// prose and the research notes are argument rather than record, and the
 /// record has no way to hold an argument that would survive being rebuilt.
-fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, json: bool) -> Result<()> {
+fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, docs: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     if !hub_dir.is_dir() {
@@ -3549,17 +3553,35 @@ fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, json: boo
     // Spelt the way the platform spells it, the way import records it.
     let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
 
-    let mut files = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
     for name in export::GENERATED {
-        files.push((name, generate(&db, &project, name)?));
+        files.push((name.to_string(), generate(&db, &project, name)?));
+    }
+    // The handwritten texts, when asked for. Off by default because they
+    // are a cache and nothing reads them back: the record is where they
+    // live now, and writing them every time would put four more files in
+    // every diff of every hub for no one's benefit.
+    if docs {
+        for document in db.documents(project.id, None)? {
+            let Some(name) = hub_file_for(&document) else { continue };
+            // Without the generated mark: these are the owner's prose, and
+            // a mark saying "edits here are overwritten" would be a lie -
+            // `import` reads an edit back in.
+            files.push((name, format!("{}\n", document.body.trim_end())));
+        }
     }
     if !check {
         db.set_hub_path(project.id, hub_dir)?;
     }
 
     let mut written = Vec::new();
+    let mut diffs: Vec<(String, Vec<String>)> = Vec::new();
     for (name, text) in &files {
         let path = hub_dir.join(name);
+        // A document is the owner's prose written back out, not a file the
+        // record owns: it carries no mark, so the gate below would refuse
+        // it for ever.
+        let is_document = !export::GENERATED.contains(&name.as_str());
         let before = std::fs::read_to_string(&path).unwrap_or_default();
         // Written in the ending the file already used. Every hub of this
         // line is CRLF, and a generated file in LF would differ from its
@@ -3573,7 +3595,7 @@ fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, json: boo
         // A file a person has been writing in is not overwritten without
         // being asked. The mark is what says the record owns it, and only
         // an explicit `--adopt` puts the mark there the first time.
-        if !unchanged && !before.is_empty() && !export::is_generated(&before) && !adopt && !check {
+        if !unchanged && !is_document && !before.is_empty() && !export::is_generated(&before) && !adopt && !check {
             bail!(
                 "{} was written by hand and the record does not own it yet.
 Check what would change with `--check`, then hand it over with `--adopt`.",
@@ -3581,7 +3603,15 @@ Check what would change with `--check`, then hand it over with `--adopt`.",
             );
         }
         if !check && !unchanged {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
+            }
             std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+        }
+        // What would change, not just which file: the question `--check`
+        // answers is whether a hand-written line is about to be lost.
+        if check && !unchanged {
+            diffs.push((name.clone(), export::diff(&before, text, 2)));
         }
         written.push(export::Written {
             file: name.to_string(),
@@ -3607,12 +3637,53 @@ Check what would change with `--check`, then hand it over with `--adopt`.",
         };
         println!("  {:<14} {state:<12} {} bytes", file.file, file.bytes);
     }
+    for (file, lines) in &diffs {
+        if lines.is_empty() {
+            continue;
+        }
+        println!("\n{file}:");
+        for line in lines {
+            println!("  {line}");
+        }
+    }
     match (changed, check) {
         (0, _) => println!("\n{} is already what the record says.", hub_dir.display()),
         (n, true) => println!("\n{} of {} files differ from the record.", n, written.len()),
         (n, false) => println!("\n{} wrote {} of {} files.", project.name, n, written.len()),
     }
     Ok(())
+}
+
+/// The file a document is written back out to, mirroring what `import`
+/// reads. A kind with no place in a hub is not exported.
+fn hub_file_for(document: &db::Document) -> Option<String> {
+    match document.kind.as_str() {
+        "vision" => Some("Видение.md".to_string()),
+        "rituals" => Some("Ритуалы.md".to_string()),
+        // The decisions preamble is the head of a file the record also
+        // writes the entries of, so it is not a file of its own.
+        "decisions" | "other" => None,
+        // The date the slug opens with is put back in front of the title,
+        // because that is what the filename is sorted and addressed by:
+        // writing out `Заметка.md` where `2026-09-04 — Заметка.md` came in
+        // would give the note a different address on the next import.
+        "research" => {
+            let title = sanitise(&document.title);
+            let date = document.slug.split('-').take(3).collect::<Vec<_>>().join("-");
+            let named = match date.len() == 10 && date.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+                true if !title.starts_with(&date) => format!("{date} — {title}"),
+                _ => title,
+            };
+            Some(format!("{}/{}.md", hub::RESEARCH_DIR, named))
+        }
+        _ => None,
+    }
+}
+
+/// A title as a filename: what a filesystem refuses, turned into spaces.
+fn sanitise(title: &str) -> String {
+    let cleaned: String = title.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { ' ' } else { c }).collect();
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// One generated file of a hub, from the record.
@@ -3678,6 +3749,29 @@ fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
         // line is rather than staying silent about the files it skipped.
         if !by_hand.is_empty() {
             out.push((project.name.clone(), by_hand.join(", "), "kept by hand; `rigger export --adopt` hands it over"));
+        }
+
+        // The documents a hub also holds. These carry no generated mark -
+        // they are the owner's prose - so the question is not "was this
+        // edited" but "has the file drifted from what the record holds".
+        // An edit here is not a mistake to undo; it is something `import`
+        // should be told about before the next `export --docs` writes over
+        // it.
+        for document in db.documents(project.id, None)? {
+            let Some(name) = hub_file_for(&document) else { continue };
+            let path = dir.join(&name);
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let want = export::with_line_ending(
+                &format!(
+                    "{}
+",
+                    document.body.trim_end()
+                ),
+                export::line_ending(&text),
+            );
+            if want != text {
+                out.push((project.name.clone(), name, "the file differs; `rigger import` takes the edit in"));
+            }
         }
     }
     Ok(out)
