@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 
 fn rigger(data: &Path) -> Command {
     let mut cmd = Command::cargo_bin("rigger").unwrap();
@@ -334,4 +335,46 @@ fn a_generated_hub_read_back_strikes_nothing() {
 
     assert_eq!(count("versions"), 0, "a generated plan describes the record; it does not strike from it");
     assert_eq!(count("tasks"), 0, "and neither does it strike the tasks of a stage it no longer lists");
+}
+
+/// A hub that cannot be read is not an empty hub.
+///
+/// An empty reading names no stage, and what no reading names is struck -
+/// so a mistyped path arrives as an instruction to strike every version of
+/// the project. A loop whose shell variable stayed literal read sixteen
+/// directories that did not exist, and every import of it reported striking
+/// dozens of versions and exited zero.
+#[test]
+fn a_hub_that_is_not_there_is_refused_rather_than_read_as_empty() {
+    let data = tempfile::tempdir().unwrap();
+    let hub = project(data.path());
+    std::fs::write(hub.join("План.md"), "# План\n\n## v0.1.0 · Первый\n\n- [ ] сделать одно\n").unwrap();
+    rigger(data.path()).args(["import", "sample", "--hub"]).arg(&hub).assert().success();
+
+    let dropped = || -> i64 {
+        let db = rusqlite::Connection::open(data.path().join("profiles").join("line").join("rigger.db")).unwrap();
+        db.query_row("SELECT COUNT(*) FROM versions WHERE status = 'dropped'", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(dropped(), 0);
+
+    rigger(data.path())
+        .args(["import", "sample", "--hub"])
+        .arg(data.path().join("no-such-hub"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not there"));
+    assert_eq!(dropped(), 0, "a path that is not there strikes nothing");
+
+    // A directory that exists but holds none of a hub's files is the same
+    // mistake wearing a different hat.
+    let empty = data.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    rigger(data.path())
+        .args(["import", "sample", "--hub"])
+        .arg(&empty)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a hub"));
+    assert_eq!(dropped(), 0, "an empty directory strikes nothing either");
 }

@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// A stage: one version, its tasks, and whether the hub says it shipped.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -218,9 +218,33 @@ pub const RESEARCH_DIR: &str = "Исследования";
 /// never meant to have them.
 pub fn looks_like_a_hub(dir: &Path) -> bool {
     FILES.iter().any(|name| dir.join(name).is_file())
+        // A hub whose generated files have not been written yet is still a
+        // hub: the handwritten texts are what a hub exists for, and one
+        // holding only a vision and its research must not be refused as if
+        // it were a mistyped path.
+        || DOCUMENT_FILES.iter().any(|(name, _)| dir.join(name).is_file())
+        || dir.join(RESEARCH_DIR).is_dir()
 }
 
 pub fn read(dir: &Path) -> Result<Hub> {
+    // A directory that is not there, or holds none of the files a hub is
+    // read from, is refused rather than read as an empty one.
+    //
+    // An empty reading says "no stage is named here", and what no reading
+    // names is struck - so a mistyped path or a shell that did not expand a
+    // variable arrived as an instruction to strike every version of the
+    // project. That is exactly what happened: a loop whose `$p` stayed
+    // literal read sixteen directories that did not exist, and each import
+    // reported striking dozens of versions and succeeded.
+    if !dir.is_dir() {
+        bail!("{} is not there; a hub that cannot be read is not an empty hub", dir.display());
+    }
+    if !looks_like_a_hub(dir) {
+        bail!(
+            "{} holds nothing a hub is read from - it is not a hub, and reading it as an empty one would strike every stage of the project",
+            dir.display()
+        );
+    }
     let mut hub = Hub::default();
     read_file(dir, "План.md", &mut hub, |text, hub| {
         hub.plan_is_generated = crate::export::is_generated(text);

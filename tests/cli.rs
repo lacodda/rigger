@@ -345,8 +345,15 @@ fn the_newest_release_is_the_highest_number_not_the_last_row() {
         .stdout(predicate::str::contains("Last shipped: v0.10.0"));
 }
 
+/// A hub that is not there is refused, not read as an empty one.
+///
+/// It used to report the files it had wanted and succeed, having changed
+/// nothing - which was true only because the project was empty. With
+/// versions in the record an empty reading names no stage, and what no
+/// reading names is struck: a mistyped path arrived as an instruction to
+/// strike every version of the project, and said so while exiting zero.
 #[test]
-fn import_of_a_missing_hub_reports_the_files_it_wanted() {
+fn import_of_a_missing_hub_is_refused() {
     let data = tempfile::tempdir().unwrap();
     let root = imported_project(data.path());
 
@@ -354,8 +361,8 @@ fn import_of_a_missing_hub_reports_the_files_it_wanted() {
         .args(["import", "proj", "--hub"])
         .arg(root.join("no-such-hub"))
         .assert()
-        .success()
-        .stdout(predicate::str::contains("План.md is missing").and(predicate::str::contains("nothing changed")));
+        .failure()
+        .stderr(predicate::str::contains("is not there"));
 }
 
 #[test]

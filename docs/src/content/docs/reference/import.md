@@ -61,7 +61,7 @@ A stage is identified by its version, a task by its text within its stage, a dec
 
 ## What the hub struck
 
-A hub kept by hand is the owner's pen, and a line struck from it is struck. A task the plan no longer lists is marked `dropped`: the export does not write it, the packet does not count it, and it comes back as open the moment the plan lists it again. A planned stage that neither file names any more - renumbered when the queue moved, or given up - is dropped the same way, with its open tasks. Done tasks and shipped stages stay: they are history, and a tag outranks a plan that has not been told.
+A hub **kept by hand** is the owner's pen, and a line struck from it is struck. A hub rigger wrote is not: it carries a mark saying so, it lists the open stages and nothing else, and reading it back describes the record rather than editing it. Neither its tasks nor its versions are struck by what it no longer lists. A task the plan no longer lists is marked `dropped`: the export does not write it, the packet does not count it, and it comes back as open the moment the plan lists it again. A planned stage that neither file names any more - renumbered when the queue moved, or given up - is dropped the same way, with its open tasks. Done tasks and shipped stages stay: they are history, and a tag outranks a plan that has not been told.
 
 ```console
 $ rigger import sample --hub C:\dev\sample\hub
@@ -82,7 +82,7 @@ A plan that has not been told a stage shipped is behind, not a decision. Its emp
 
 ## When a file is missing
 
-A hub without one of the three files is not an error - the other two are still read, and the missing ones are named:
+A hub without one of its files is not an error - the others are still read, and the missing ones are named:
 
 ```console
 $ rigger import sample --hub C:\dev\sample
@@ -90,6 +90,17 @@ note: План.md is missing from C:\dev\sample
 note: Изменения.md is missing from C:\dev\sample
 sample: nothing changed
 ```
+
+## When the hub itself is missing
+
+A directory that is not there, or that holds nothing a hub is read from, is **refused**:
+
+```console
+$ rigger import sample --hub C:\dev	ypo
+error: C:\dev	ypo is not there; a hub that cannot be read is not an empty hub
+```
+
+An empty reading names no stage, and what no reading names is struck - so a mistyped path, or a shell that left a variable unexpanded, would arrive as an instruction to strike every version of the project. A hub that holds only its handwritten texts is still a hub and is read as usual.
 
 ## Related
 
