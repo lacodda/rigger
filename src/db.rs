@@ -337,6 +337,13 @@ const MIGRATIONS: &[&str] = &[
     // as a second file beside the first - found on this project's own hub,
     // where one note became two on the first `export --docs`.
     "ALTER TABLE documents ADD COLUMN source_file TEXT;",
+    // v21: the command that says a project is fit to commit. Until now it
+    // lived in seventeen skill files, one copy each, and drifted from the
+    // workflow it was supposed to mirror. A project states it once, the
+    // packet prints it, and `rigger gate` runs it - so "the gate is green"
+    // stops being something an assistant reports and becomes something the
+    // record witnessed.
+    "ALTER TABLE projects ADD COLUMN gate TEXT;",
 ];
 
 /// The place a desk keeps its cards: a project the record keeps for
@@ -441,6 +448,9 @@ pub struct Project {
     /// guessed: the hubs of this line live in a notes vault, nowhere near
     /// the repositories they describe.
     pub hub_path: Option<String>,
+    /// The command that says this project is fit to commit, as the project
+    /// states it: what CI runs, spelt for a shell.
+    pub gate: Option<String>,
 }
 
 /// What a project is, as far as the parts of rigger that read git care.
@@ -932,23 +942,15 @@ impl Db {
             "INSERT INTO projects (name, path, remote, created_at, kind) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![name, path, remote, created_at, kind.as_str()],
         )?;
-        Ok(Project {
-            id: self.conn.last_insert_rowid(),
-            name: name.to_string(),
-            path: path.to_string(),
-            remote: remote.map(str::to_string),
-            created_at,
-            tier: None,
-            rhythm_weeks: None,
-            hub_path: None,
-            kind,
-        })
+        // Read back rather than assembled here: a hand-built row is a second
+        // place the shape of a project is spelt, and it goes stale the next
+        // time a column is added.
+        self.project_by_name(name)?
+            .with_context(|| format!("the project '{name}' was recorded but cannot be read back"))
     }
 
     pub fn projects(&self) -> Result<Vec<Project>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects ORDER BY name")?;
+        let mut stmt = self.conn.prepare(&format!("SELECT {PROJECT_COLUMNS} FROM projects ORDER BY name"))?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -956,11 +958,7 @@ impl Db {
     pub fn project_by_name(&self, name: &str) -> Result<Option<Project>> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects WHERE name = ?1",
-                [name],
-                row_to_project,
-            )
+            .query_row(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE name = ?1"), [name], row_to_project)
             .optional()?)
     }
 
@@ -1341,11 +1339,7 @@ impl Db {
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects WHERE path = ?1",
-                [path],
-                row_to_project,
-            )
+            .query_row(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE path = ?1"), [path], row_to_project)
             .optional()?)
     }
 
@@ -1694,6 +1688,17 @@ impl Db {
     /// on every run - so the text alone identifies it, and re-importing a hub
     /// does not pile up copies of the same open question.
     pub fn record_event(&self, project_id: i64, kind: &str, body: &str, created_at: &str, author: &str) -> Result<Change> {
+        // A gate run is a measurement, not a statement: two runs of the
+        // same command with the same result are two facts, and collapsing
+        // them would lose the one that says the gate is still green today.
+        if kind == "gate" {
+            let session = self.open_session(project_id)?.map(|s| s.id);
+            self.conn.execute(
+                "INSERT INTO events (project_id, session_id, kind, body, author, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![project_id, session, kind, body, author, created_at],
+            )?;
+            return Ok(Change::Added);
+        }
         let dated = !matches!(kind, "question" | "wish");
         let seen: Option<i64> = if dated {
             self.conn
@@ -2225,6 +2230,44 @@ impl Db {
             params![project_id, tier, rhythm_weeks],
         )?;
         Ok(())
+    }
+
+    /// Sets the command that says a project is fit to commit, or clears it
+    /// when given `None`.
+    pub fn set_gate(&self, project_id: i64, gate: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE projects SET gate = ?2 WHERE id = ?1", params![project_id, gate])?;
+        Ok(())
+    }
+
+    /// The last gate run recorded inside a sitting, if there was one.
+    ///
+    /// By session rather than by time. Timestamps here are stamped to the
+    /// second, and a gate run and the next `session start` land in the same
+    /// second often enough that "after this session began" answered yes to
+    /// a run from the sitting before - which is how a reminder that should
+    /// have been spent became one that fires for ever. The session id is
+    /// exact where a second is not.
+    ///
+    /// Ordered by id as well as time for the same reason: two runs within
+    /// one second would otherwise come back in whatever order the table
+    /// felt like.
+    pub fn last_gate_in_session(&self, session_id: i64) -> Result<Option<RecentEvent>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT kind, created_at, body, commit_hash IS NOT NULL FROM events
+                 WHERE session_id = ?1 AND kind = 'gate' ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![session_id],
+                |r| {
+                    Ok(RecentEvent {
+                        kind: r.get(0)?,
+                        date: r.get(1)?,
+                        body: r.get(2)?,
+                        from_git: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     /// Aims a version at a week, or clears the aim when given `None`.
@@ -2861,6 +2904,13 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
     })
 }
 
+/// The columns `row_to_project` reads, in the order it reads them.
+///
+/// One constant rather than the same list spelt at each query: the column
+/// added in migration 21 had to reach four places, and a list spelt four
+/// times is a list that reaches three.
+const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate";
+
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project {
         id: row.get(0)?,
@@ -2872,6 +2922,7 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         rhythm_weeks: row.get(6)?,
         kind: row.get::<_, String>(7)?.into(),
         hub_path: row.get(8)?,
+        gate: row.get(9)?,
     })
 }
 

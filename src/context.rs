@@ -58,6 +58,10 @@ pub struct State {
     pub days_since_commit: Option<i64>,
     /// What has happened since the last session ended, if there was one.
     pub since_last_session: Option<SinceLastSession>,
+    /// The command that says this project is fit to commit, as the project
+    /// states it. One line, so that a session knows what green means here
+    /// without being told in a skill file.
+    pub gate: Option<String>,
 }
 
 /// The difference between now and where the last sitting stopped.
@@ -126,6 +130,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
         days_since_commit: activity.as_ref().and_then(|a| a.last_commit_at.as_deref()).and_then(days_since_day),
         since_last_session: since_last_session(db, project)?,
+        gate: project.gate.clone(),
     };
 
     let current = db.current_stage(project.id)?.map(|s| Stage {
@@ -396,6 +401,12 @@ fn render_state(p: &Packet) -> String {
     }
     // Where the last sitting stopped, so that the events below can be read
     // as "since then" rather than as undated history.
+    if let Some(gate) = &p.state.gate {
+        out.push_str(&format!(
+            "Gate: {gate}
+"
+        ));
+    }
     if let Some(since) = &p.state.since_last_session {
         out.push_str(&render_since(since));
     }

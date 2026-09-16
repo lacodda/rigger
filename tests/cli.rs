@@ -838,7 +838,17 @@ fn doctor_reports_the_age_of_the_newest_copy() {
         .assert()
         .success()
         .stdout(predicate::str::contains("3 days ago"));
-    std::fs::remove_file(data.path().join("profiles").join("line").join(&newer)).unwrap();
+    // Every copy of that day, not the one name just made. A stamp has
+    // second resolution, so the two `copy_aged(3)` calls above are the same
+    // file only when they land in the same second - and when they do not,
+    // removing one name leaves a three-day copy behind, the week-old one is
+    // never the newest, and the test passes or fails on how busy the
+    // machine is. Caught by a full run under a gate, not by running this
+    // file alone.
+    let day = newer.split('-').nth(1).expect("a copy's name carries the day it was taken").to_string();
+    for name in copies(data.path()).into_iter().filter(|n| n.contains(&day)) {
+        std::fs::remove_file(data.path().join("profiles").join("line").join(&name)).unwrap();
+    }
     rigger(data.path())
         .arg("doctor")
         .assert()

@@ -17,6 +17,7 @@ C:\dev\sample
 https://github.com/acme/sample.git
 Last shipped: v0.2.0 on 2026-09-03
 1 versions planned, 2 tasks open
+Gate: cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 ## Current stage: v0.3.0 · Search
 - full-text index
@@ -83,3 +84,4 @@ The question a returning assistant has is not "what has been going on" but "what
 
 - [`note`](/rigger/reference/note/) - record what this session found, decided or is leaving for the next one.
 - [`import`](/rigger/reference/import/) - fill the record from a hub before the first packet.
+- [`gate`](/rigger/reference/gate/) - running the command the packet prints on the `Gate:` line.

@@ -67,16 +67,16 @@ impl Summary {
     /// These are the two things the written ritual asks for by name and the
     /// two most often missing, because they are the last steps of a session
     /// and a session ends when attention has run out.
-    pub fn missing(&self) -> Vec<&'static str> {
+    pub fn missing(&self) -> Vec<String> {
         let mut out = Vec::new();
         if self.next_step.is_none() {
-            out.push("no next step - the next session will open without a first line");
+            out.push("no next step - the next session will open without a first line".to_string());
         }
         // Work with nothing written down about why is work the record cannot
         // explain later. A session that shipped or changed something and
         // recorded no reasoning is the shape this is looking for.
         if !self.changes.is_empty() && self.decisions.is_empty() && self.findings.is_empty() && self.pitfalls.is_empty() {
-            out.push("changes but no decision, finding or pitfall - nothing says why");
+            out.push("changes but no decision, finding or pitfall - nothing says why".to_string());
         }
         out
     }

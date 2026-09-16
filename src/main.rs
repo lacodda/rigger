@@ -12,6 +12,7 @@ mod db;
 #[allow(dead_code)]
 mod doc;
 mod export;
+mod gate;
 mod hub;
 mod import;
 mod mcp;
@@ -306,6 +307,17 @@ enum Command {
     Doc {
         #[command(subcommand)]
         command: DocCommand,
+    },
+    /// Run the command that says a project is fit to commit, and record how it went
+    Gate {
+        /// Project name; the one the working directory sits in when omitted
+        project: Option<String>,
+        /// Print what would be run, and run nothing
+        #[arg(long)]
+        check: bool,
+        /// Print the result as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// How the work is done: the rituals of the line, and of one project
     Rules {
@@ -658,6 +670,17 @@ enum ProjectCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Set what the record keeps about a project
+    Set {
+        /// Project name
+        name: String,
+        /// The command that says the project is fit to commit, as a shell would run it
+        #[arg(long, value_name = "COMMAND")]
+        gate: Option<String>,
+        /// Forget the gate
+        #[arg(long, conflicts_with = "gate")]
+        no_gate: bool,
+    },
     /// Set the tier a project sits in, and how often it should release
     Tier {
         /// Project name
@@ -787,6 +810,7 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Service { name } => project_service(&name),
             ProjectCommand::List { json } => project_list(json),
             ProjectCommand::Show { name, json } => project_show(&name, json),
+            ProjectCommand::Set { name, gate, no_gate } => project_set(&name, gate.as_deref(), no_gate),
             ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
         },
         Command::Import { project, hub, json } => import_hub(&project, &hub, json),
@@ -928,6 +952,7 @@ fn run(cli: Cli) -> Result<()> {
             DocCommand::Remove { project, slug } => doc_remove(&project, &slug),
             DocCommand::Template { kind, write } => doc_template(&kind, write),
         },
+        Command::Gate { project, check, json } => gate(project.as_deref(), check, json),
         Command::Rules { project, json } => rules(project.as_deref(), json),
         Command::Backup { keep, list } => backup(keep, list),
         Command::Doctor { hubs, json } => doctor(hubs, json),
@@ -2557,6 +2582,102 @@ fn project_show(name: &str, json: bool) -> Result<()> {
         db::Kind::Service => println!("  kind:    a place the record keeps for itself; no repository"),
     }
     println!("  since:   {}", project.created_at);
+    if let Some(gate) = &project.gate {
+        println!("  gate:    {gate}");
+    }
+    Ok(())
+}
+
+/// Sets what the record keeps about a project, beyond what git can tell it.
+///
+/// The gate is the first of these: the command CI runs, so that "green
+/// before a commit" has one spelling per project instead of a copy in the
+/// skill file, the README and whatever an assistant remembers.
+fn project_set(name: &str, gate: Option<&str>, no_gate: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, name)?;
+
+    if !no_gate && gate.is_none() {
+        // Nothing asked for is a question, not a no-op: a command that
+        // silently did nothing would look like it had worked.
+        match &project.gate {
+            Some(gate) => println!("{}: gate is `{gate}`", project.name),
+            None => println!("{} has no gate; set one with --gate \"<command>\"", project.name),
+        }
+        return Ok(());
+    }
+
+    if no_gate {
+        db.set_gate(project.id, None)?;
+        println!("{} has no gate now.", project.name);
+        return Ok(());
+    }
+
+    let gate = gate.unwrap_or_default().trim();
+    if gate.is_empty() {
+        bail!("an empty gate is not a gate; use --no-gate to take it off");
+    }
+    db.set_gate(project.id, Some(gate))?;
+    println!("{}: gate is `{gate}`", project.name);
+    println!("Run it with: rigger gate {}", project.name);
+    Ok(())
+}
+
+/// Runs a project's gate and records how it went.
+///
+/// Exits non-zero when the gate is red, so that it composes: a hook, a
+/// script, or a shell can act on it without reading the text. The output of
+/// the gate goes straight to the terminal, because a gate is watched while
+/// it runs; what the record keeps is the verdict and how long it took.
+fn gate(project: Option<&str>, check: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = project_here(&db, project)?;
+    let Some(command) = project.gate.clone() else {
+        bail!(
+            "{} has no gate. Set it to what CI runs:
+  rigger project set {} --gate \"cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test\"",
+            project.name,
+            project.name
+        );
+    };
+
+    let dir = Path::new(&project.path);
+    if !dir.is_dir() {
+        bail!("{} is recorded at {}, which is not there", project.name, project.path);
+    }
+
+    if check {
+        println!("{} would run, in {}:", project.name, project.path);
+        println!("  {command}");
+        return Ok(());
+    }
+
+    let run = gate::run(&command, dir).with_context(|| format!("cannot run the gate of {}", project.name))?;
+    let body = run.event_body(&command);
+    db.record_event(project.id, "gate", &body, &db::now(), "assistant")?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "project": project.name,
+                "command": command,
+                "passed": run.passed(),
+                "exit_code": run.code,
+                "seconds": run.seconds,
+            }))?
+        );
+    } else {
+        println!();
+        println!("{}: {body}", project.name);
+    }
+
+    if !run.passed() {
+        // Said by the exit code rather than by an error, because the gate has
+        // already printed why it is red and an anyhow message on top would
+        // bury it under a second account of the same failure.
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -3381,6 +3502,30 @@ Make one with: rigger project service line"
     Ok(())
 }
 
+/// The reminder a red gate leaves, if the last run of one was red.
+///
+/// Read from the last gate event rather than from a flag on the project: a
+/// flag would have to be cleared by whoever fixed the gate, and the thing
+/// nobody does is clear a flag. The record already holds every run, so the
+/// last one is the answer.
+///
+/// Only this sitting's own runs count, and "this sitting" is the session
+/// id, not a moment in time. A gate that went red a week ago and was never
+/// run again says nothing about this sitting, and a reminder that fires for
+/// ever is a reminder that gets ignored.
+fn red_gate_reminder(db: &Db, project: &db::Project, session: i64) -> Result<Option<String>> {
+    let Some(last) = db.last_gate_in_session(session)? else {
+        return Ok(None);
+    };
+    if gate::body_is_green(&last.body) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "the gate was last {} - `rigger gate {}` to run it again",
+        last.body, project.name
+    )))
+}
+
 /// Opens a sitting. Everything recorded until `end` belongs to it.
 fn session_start(project: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
@@ -3486,12 +3631,17 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
         None => None,
     };
 
+    let mut missing = summary.missing();
+    if let Some(red) = red_gate_reminder(&db, &project, open.id)? {
+        missing.push(red);
+    }
+
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "session": summary,
-                "missing": summary.missing(),
+                "missing": missing,
                 "diary": written,
                 "backup": insured,
             }))?
@@ -3502,7 +3652,6 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     // A hook speaks only when there is something to say. A reminder that
     // fires on every stop is a reminder nobody reads.
     if remind {
-        let missing = summary.missing();
         if missing.is_empty() {
             return Ok(());
         }
@@ -3544,7 +3693,6 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
         println!("copied the database to {}", target.display());
     }
 
-    let missing = summary.missing();
     if !missing.is_empty() {
         println!();
         println!("The ritual asks for:");

@@ -81,6 +81,35 @@ Each tier carries a rhythm of its own - two weeks for A, four for B, six for C -
 
 A project with no tier at all is out by omission, and is equally left alone: rigger does not invent a schedule that nobody asked for.
 
+## `project set`
+
+```
+rigger project set <NAME> [--gate <COMMAND>] [--no-gate]
+```
+
+Sets what the record keeps about a project beyond what git can tell it.
+
+### `--gate`
+
+The command that says a project is fit to commit: what CI runs, spelt for a shell.
+
+```console
+$ rigger project set sample --gate "cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test"
+sample: gate is `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test`
+Run it with: rigger gate sample
+```
+
+It lived in seventeen skill files before, one copy each, and drifted from the workflow it was supposed to mirror. Stated once, it is printed by the [context packet](/rigger/reference/context/) and run by [`rigger gate`](/rigger/reference/gate/).
+
+With neither flag, `set` says what the gate is rather than doing nothing quietly:
+
+```console
+$ rigger project set sample
+sample: gate is `cargo test`
+```
+
+`--no-gate` takes it off. An empty `--gate` is refused: an empty gate is not a gate.
+
 ## `rigger project service <name>`
 
 Records a place the record keeps for itself: a project with no repository, and none coming.
@@ -103,3 +132,4 @@ Everything else works on it as usual: events, questions, wishes, [`digest`](/rig
 - [`doctor`](/rigger/reference/doctor/) - how many projects are recorded.
 - [`calendar`](/rigger/reference/calendar/) - where a tier and its rhythm are read.
 - [`retro`](/rigger/reference/retro/) - what a service project is made for.
+- [`gate`](/rigger/reference/gate/) - running the command `project set --gate` records.

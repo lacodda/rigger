@@ -1,6 +1,6 @@
 ---
 title: rules
-description: How the work is done: the rituals of the line, and of one project.
+description: The rituals of the line, and of one project.
 ---
 
 ```

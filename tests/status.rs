@@ -121,12 +121,20 @@ fn an_open_task_from_before_reads_as_new() {
     let db = rusqlite::Connection::open(&db_path).unwrap();
     // What an older rigger wrote, and the version it wrote it at - with
     // what later schemas added taken away, so the migrations run again.
+    //
+    // Every later migration that adds to a table this database already has
+    // must be undone here too, or it runs a second time against a column
+    // that is already there and fails on the duplicate. That is the price
+    // of making an old database by subtraction, and it is paid on purpose:
+    // the alternative is a binary fixture nobody can read or amend.
     db.execute_batch(
-        "UPDATE tasks SET status = 'open'; \
-         DROP TABLE task_projects; DROP TABLE settings; DROP INDEX tasks_by_key; \
-         ALTER TABLE tasks DROP COLUMN key; ALTER TABLE tasks DROP COLUMN aliases; \
-         ALTER TABLE tasks DROP COLUMN summary; ALTER TABLE tasks DROP COLUMN updated_at; \
-         DROP TABLE documents; \n         PRAGMA user_version = 16;",
+        "UPDATE tasks SET status = 'open';
+         DROP TABLE task_projects; DROP TABLE settings; DROP INDEX tasks_by_key;
+         ALTER TABLE tasks DROP COLUMN key; ALTER TABLE tasks DROP COLUMN aliases;
+         ALTER TABLE tasks DROP COLUMN summary; ALTER TABLE tasks DROP COLUMN updated_at;
+         ALTER TABLE projects DROP COLUMN gate;
+         DROP TABLE documents;
+         PRAGMA user_version = 16;",
     )
     .unwrap();
     drop(db);
