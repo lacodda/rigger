@@ -35,6 +35,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger profile`](/rigger/reference/profile/) | v0.17.0 | Switch, list and add profiles, each with a record of its own |
 | [`rigger task`](/rigger/reference/task/) | v0.17.0 | Task cards: find, make, open, link, write against, close; a status for any task (v0.18.0) |
 | [`rigger doc`](/rigger/reference/doc/) | v0.19.0 | The handwritten texts of a project: vision, rituals, research; skeletons by kind |
+| [`rigger rules`](/rigger/reference/rules/) | v0.20.0 | How the work is done: the rituals of the line, and of one project |
 
 ## Common to all commands
 

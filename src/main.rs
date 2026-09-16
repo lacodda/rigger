@@ -307,6 +307,14 @@ enum Command {
         #[command(subcommand)]
         command: DocCommand,
     },
+    /// How the work is done: the rituals of the line, and of one project
+    Rules {
+        /// Project name; the line's own rituals alone when omitted
+        project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Copy the database aside, stamped with the moment and its schema
     Backup {
         /// How many copies to keep; older ones are deleted
@@ -920,6 +928,7 @@ fn run(cli: Cli) -> Result<()> {
             DocCommand::Remove { project, slug } => doc_remove(&project, &slug),
             DocCommand::Template { kind, write } => doc_template(&kind, write),
         },
+        Command::Rules { project, json } => rules(project.as_deref(), json),
         Command::Backup { keep, list } => backup(keep, list),
         Command::Doctor { hubs, json } => doctor(hubs, json),
     }
@@ -1132,10 +1141,17 @@ Move what it says that only this project can say into the hub, then run again wi
 }
 
 fn open_project(db: &Db, name: &str) -> Result<db::Project> {
-    match db.project_by_name(name)? {
-        Some(project) => Ok(project),
-        None => bail!("no project named '{name}'; see `rigger project list`"),
+    if let Some(project) = db.project_by_name(name)? {
+        return Ok(project);
     }
+    // The profile's own name is a place, not a typo: it is where facts
+    // about every project go - the rituals of the line, a retro across all
+    // of them. Made on demand rather than by a setup step nobody would know
+    // to run, the way a desk makes itself the first time a card needs one.
+    if name == profile::Config::load()?.current_name() {
+        return db.profile_project();
+    }
+    bail!("no project named '{name}'; see `rigger project list`")
 }
 
 /// A project named outright, or the one the working directory sits in.
@@ -1811,6 +1827,74 @@ fn doc_template(kind: &str, write: bool) -> Result<()> {
     std::fs::write(&path, doc::template(kind, doc::TITLE_PLACEHOLDER)).with_context(|| format!("cannot write {}", path.display()))?;
     println!("Wrote {}", path.display());
     println!("Edit it; `{}` in it becomes the document's title.", doc::TITLE_PLACEHOLDER);
+    Ok(())
+}
+
+/// Prints how the work is done: the rituals of the line, then those of one
+/// project.
+///
+/// Both are documents, and the split is the point. What every project does
+/// the same way (a stage ends in a tag, English is what ships, the gate is
+/// green before a commit) is written once, against the profile; what only
+/// this project can say about itself is written against the project.
+/// Before this, the two were glued together into every skill file, so a
+/// change to the line's rituals was seventeen edits, and the copies
+/// drifted.
+///
+/// Read by an assistant at the start of a sitting, which is why it prints
+/// a document and nothing around it: no counts, no timestamps, no advice.
+fn rules(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let line = db.service_project()?;
+    let line_rules = match &line {
+        Some(p) => db.singular_document(p.id, db::RULES_KIND)?,
+        None => None,
+    };
+    let project = project.map(|name| open_project(&db, name)).transpose()?;
+    let project_rules = match &project {
+        Some(p) => db.singular_document(p.id, db::RULES_KIND)?,
+        None => None,
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "line": line_rules.as_ref().map(|d| &d.body),
+                "project": project.as_ref().map(|p| &p.name),
+                "project_rules": project_rules.as_ref().map(|d| &d.body),
+            }))?
+        );
+        return Ok(());
+    }
+
+    let mut printed = false;
+    if let Some(doc) = &line_rules {
+        println!("{}", doc.body.trim_end());
+        printed = true;
+    }
+    if let Some(doc) = &project_rules {
+        if printed {
+            println!();
+        }
+        println!("{}", doc.body.trim_end());
+        printed = true;
+    }
+    if printed {
+        return Ok(());
+    }
+
+    // Nothing written yet is a state to get out of, so the way out is the
+    // whole message.
+    let profile = profile::Config::load()?.current_name();
+    match &project {
+        Some(p) => println!("Neither the line nor {} has written down how the work is done.", p.name),
+        None => println!("The line has not written down how the work is done."),
+    }
+    println!("Write the line's with:    rigger doc add {profile} \"Rituals\" --kind rituals");
+    if let Some(p) = &project {
+        println!("And what only {} says:   rigger doc add {} \"Rituals\" --kind rituals", p.name, p.name);
+    }
     Ok(())
 }
 

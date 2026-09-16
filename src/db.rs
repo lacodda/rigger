@@ -355,6 +355,9 @@ pub const DOC_KINDS: [&str; 5] = ["vision", "decisions", "research", "rituals", 
 /// rather than quietly making a second vision nobody reads.
 pub const SINGULAR_DOC_KINDS: [&str; 3] = ["vision", "decisions", "rituals"];
 
+/// The kind of document `rules` reads.
+pub const RULES_KIND: &str = "rituals";
+
 /// The words a task's status can be. Everything before `done` is work
 /// still to do; `dropped` is a line struck from a hub.
 pub const TASK_STATUSES: [&str; 6] = ["new", "active", "waiting-handoff", "frozen", "done", "dropped"];
@@ -858,6 +861,17 @@ impl Db {
             .optional()?)
     }
 
+    /// The one document of a kind a project has at most one of.
+    ///
+    /// By kind rather than by slug: the slug comes from the title, and a
+    /// title with no ASCII in it - every hub of this line is in Russian -
+    /// slugs to nothing and gets a made-up address instead. The kind is the
+    /// stable handle, and `SINGULAR_DOC_KINDS` is what makes "the one" true.
+    pub fn singular_document(&self, project_id: i64, kind: &str) -> Result<Option<Document>> {
+        debug_assert!(SINGULAR_DOC_KINDS.contains(&kind), "{kind} is not a kind a project has one of");
+        Ok(self.documents(project_id, Some(kind))?.into_iter().next())
+    }
+
     /// Writes a document, making it if the slug is new and replacing its
     /// title and body if it is not. `created_at` survives a rewrite: a
     /// document keeps the day it was started.
@@ -1288,20 +1302,40 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The place the record keeps for itself, if one has been made.
+    /// The place the record keeps for itself: the project named after the
+    /// profile, if one has been made.
     ///
-    /// There is at most one in practice and the code does not enforce it:
-    /// a second would be a decision the owner made, and refusing it here
-    /// would be the record arguing with them about their own filing.
+    /// Named rather than "the first service project there is". A desk keeps
+    /// its cards under a service project too, so `kind = 'service' LIMIT 1`
+    /// was a coin toss the moment a record held both - and the loser was a
+    /// retro about the whole line filed silently under the ticket desk.
+    /// The profile's name is what a line-wide fact belongs to, so that is
+    /// what is asked for.
     pub fn service_project(&self) -> Result<Option<Project>> {
         Ok(self
-            .conn
-            .query_row(
-                "SELECT id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path FROM projects                  WHERE kind = 'service' ORDER BY id LIMIT 1",
-                [],
-                row_to_project,
-            )
-            .optional()?)
+            .project_by_name(&crate::profile::Config::load()?.current_name())?
+            .filter(|p| p.kind == Kind::Service))
+    }
+
+    /// The same place, made if it is not there yet.
+    ///
+    /// The rituals of a line are not the rituals of any one project, and a
+    /// document has to hang off a project, so the profile has one of its
+    /// own. Made on demand the way a desk is: nobody should have to know
+    /// about it before writing down how the line works.
+    pub fn profile_project(&self) -> Result<Project> {
+        let name = crate::profile::Config::load()?.current_name();
+        match self.project_by_name(&name)? {
+            Some(existing) if existing.kind == Kind::Service => Ok(existing),
+            // A repository of the same name as the profile: the line-wide
+            // texts would land in a product's record, where nobody would
+            // look for them. Said rather than guessed around.
+            Some(other) => bail!(
+                "'{name}' is the profile's name and also a repository at {};                  rename one of them, or the rituals of the line would be filed under a product",
+                other.path
+            ),
+            None => self.add_project(&name, &format!("service:{name}"), None, Kind::Service),
+        }
     }
 
     pub fn project_by_path(&self, path: &str) -> Result<Option<Project>> {
