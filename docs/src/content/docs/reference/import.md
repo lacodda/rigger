@@ -69,6 +69,43 @@ Bold alone would not do: the same wish ends in a bold line of its own, and split
 
 The template is not a wish, and neither is what is left when the file is emptied - the placeholder, or a line saying where the wishes went (`*Разобрано 11.09.2026: ...*`). Taking those in would put settled things back into a packet to be sorted a second time.
 
+## A questionnaire the owner answered
+
+```
+rigger import <project> --answers <FILE> [--check] [--json]
+```
+
+Before a plan is reworked the owner is handed a page: a few forks with the options laid out, and a list of ideas to tick. The answers steer the next months of a project - and then the page is the only place any of it is written down. The plan that comes out says what was decided; it does not say what it was decided **against**, and that is the half that answers "why this and not that" a year later.
+
+```json
+{
+  "questionnaire": "plan review 03ab557f",
+  "answered": "2026-09-11",
+  "forks": [{
+    "question": "Where knowledge of the code comes from",
+    "chosen": "nooma as a library",
+    "against": ["a tree-sitter index of its own", "asking an assistant each time"],
+    "why": "One index for the line, not one per product."
+  }],
+  "ideas": [
+    { "idea": "A registry of the line as public JSON", "taken": true },
+    { "idea": "A second binary for the alias", "taken": false, "why": "An alias is a link." }
+  ]
+}
+```
+
+| In the file | In the record | Why |
+| --- | --- | --- |
+| a fork | a **decision**, naming the option taken and the ones it beat | a decision that records only the winner cannot be revisited |
+| an idea with `"taken": true` | a **wish** | work the owner took but has not placed yet; it gets sorted into the plan like any other |
+| an idea with `"taken": false` | a **decision** - "not taking this" | an idea nobody records is an idea that comes back every quarter |
+
+Only `idea` and, for a fork, `question` and `chosen` are required. `taken` defaults to **false**, which is the safe way round: a tick the page forgot to write becomes a visible decision not to take it, rather than a wish nobody asked for.
+
+Events are dated by `answered`, so the reasoning sits among the other events of that day rather than at the moment of the import. Reading the same page twice records nothing twice - which is how a correction to it is applied.
+
+`--check` says what would be taken and writes nothing. `--answers` and `--hub` are two sources, not two halves of one, so asking for both is refused.
+
 ## Running it twice
 
 Importing an unchanged hub again changes nothing and says so:

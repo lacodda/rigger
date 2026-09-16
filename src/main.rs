@@ -4,6 +4,7 @@
 //! database, projects and `doctor`.
 
 mod adopt;
+mod answers;
 mod calendar;
 mod card;
 mod commit;
@@ -57,8 +58,14 @@ enum Command {
         /// Project name
         project: String,
         /// Directory of the hub to read
+        #[arg(long, required_unless_present = "answers", conflicts_with = "answers")]
+        hub: Option<PathBuf>,
+        /// A questionnaire the owner answered, as JSON: its choices become decisions and wishes
+        #[arg(long, value_name = "FILE")]
+        answers: Option<PathBuf>,
+        /// Say what would be recorded, and write nothing
         #[arg(long)]
-        hub: PathBuf,
+        check: bool,
         /// Print the report as JSON
         #[arg(long)]
         json: bool,
@@ -813,7 +820,16 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Set { name, gate, no_gate } => project_set(&name, gate.as_deref(), no_gate),
             ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
         },
-        Command::Import { project, hub, json } => import_hub(&project, &hub, json),
+        Command::Import {
+            project,
+            hub,
+            answers,
+            check,
+            json,
+        } => match answers {
+            Some(answers) => import_answers(&project, &answers, check, json),
+            None => import_hub(&project, &hub.expect("clap requires --hub without --answers"), json),
+        },
         Command::Profile { command } => match command {
             ProfileCommand::List { json } => profile_list(json),
             ProfileCommand::Show { name, json } => profile_show(name.as_deref(), json),
@@ -957,6 +973,62 @@ fn run(cli: Cli) -> Result<()> {
         Command::Backup { keep, list } => backup(keep, list),
         Command::Doctor { hubs, json } => doctor(hubs, json),
     }
+}
+
+/// Reads a questionnaire the owner answered into the record.
+///
+/// The page that produced it is where these answers otherwise stay, and a
+/// plan made from them says what was decided without saying what it was
+/// decided against - which is the half that answers "why this and not that"
+/// a year later.
+fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let answers = answers::read(path)?;
+    let entries = answers.entries();
+    let at = answers.at().unwrap_or_else(db::now);
+
+    if check {
+        println!(
+            "{} would take {} from {}:",
+            project.name,
+            plural(entries.len(), "event", "events"),
+            path.display()
+        );
+        for entry in &entries {
+            println!("  {:<9} {}", entry.kind, first_line(&entry.body));
+        }
+        return Ok(());
+    }
+
+    let mut added = 0usize;
+    let mut already = 0usize;
+    for entry in &entries {
+        match db.record_event(project.id, entry.kind, &entry.body, &at, "owner")? {
+            db::Change::Unchanged => already += 1,
+            _ => added += 1,
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "project": project.name,
+                "added": added,
+                "already_recorded": already,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("{}:", project.name);
+    println!("  {:<10} {added} added", "answers");
+    if already > 0 {
+        // Reading the same page twice is ordinary - it is how a correction
+        // to it is applied - and saying so is how that stays ordinary.
+        println!("  {:<10} {already} already recorded", "");
+    }
+    Ok(())
 }
 
 fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
