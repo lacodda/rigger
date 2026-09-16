@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.20.0] - 2026-09-16
+
+### Bug Fixes
+- Let a generated hub describe the record's versions, not strike them
+- Refuse a hub that cannot be read instead of reading it as empty
+
+### Features
+- Keep the rituals in the record and print them with one command
+- Let a project state its gate, and run it into the record
+- Take the wishes file into the record and watch it afterwards
+- Read a questionnaire's answers into the record
 ## [0.19.0] - 2026-09-15
 
 ### Bug Fixes
