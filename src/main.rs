@@ -1012,6 +1012,9 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     if report.questions_added > 0 {
         println!("  {:<10} {} added", "questions", report.questions_added);
     }
+    if report.wishes_added > 0 {
+        println!("  {:<10} {} taken out of {}", "wishes", report.wishes_added, hub::WISHES_FILE);
+    }
     line("documents", report.documents_added, report.documents_updated);
     Ok(())
 }
@@ -4018,6 +4021,29 @@ fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
     Ok(out)
 }
 
+/// Hubs whose wishes file still holds something.
+///
+/// The file stopped being read at every session in v0.20.0: a wish now
+/// arrives through `rigger wish` or the assistant's tool, and lives in the
+/// record like everything else. Which means a wish written into the file
+/// after that is a wish nobody will ever read - so the one thing the record
+/// owes the file is to say when it is not empty.
+///
+/// Cheap enough to run unasked: one small file per project with a hub.
+fn hubs_with_wishes(db: &Db) -> Result<Vec<(String, usize)>> {
+    let mut out = Vec::new();
+    for project in db.projects()? {
+        let Some(hub) = &project.hub_path else { continue };
+        let path = Path::new(hub).join(hub::WISHES_FILE);
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let wishes = hub::parse_wishes(&text);
+        if !wishes.is_empty() {
+            out.push((project.name, wishes.len()));
+        }
+    }
+    Ok(out)
+}
+
 fn doctor(hubs: bool, json: bool) -> Result<()> {
     let config = profile::Config::load()?;
     let (profile_name, _) = config.current()?;
@@ -4094,6 +4120,10 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                     .map(|(project, version)| serde_json::json!({ "project": project, "version": version }))
                     .collect::<Vec<_>>(),
                 "never_synced": unsynced,
+                "wishes_left_in_the_hub": hubs_with_wishes(&db)?
+                    .iter()
+                    .map(|(project, count)| serde_json::json!({ "project": project, "wishes": count }))
+                    .collect::<Vec<_>>(),
             }))?
         );
         return Ok(());
@@ -4142,6 +4172,16 @@ closed in the plan, no tag in git ({}):",
             println!("  {project:<12} {version}");
         }
         println!("  a tag would settle it; rigger does not change what you wrote");
+    }
+
+    let waiting = hubs_with_wishes(&db)?;
+    if !waiting.is_empty() {
+        println!();
+        println!("wishes left in {} ({}):", hub::WISHES_FILE, waiting.len());
+        for (project, count) in &waiting {
+            println!("  {project:<12} {}", plural(*count, "wish", "wishes"));
+        }
+        println!("  the file is no longer read at every session: `rigger import <project> --hub <dir>` takes them in");
     }
 
     // A generated file edited by hand has stopped being a view of the

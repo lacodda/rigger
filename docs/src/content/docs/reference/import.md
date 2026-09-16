@@ -48,6 +48,27 @@ A research note is addressed by the date its filename opens with. Two notes from
 
 Re-reading an unchanged hub changes nothing, so a document edited with `doc edit` and not yet exported is not silently replaced by the older file it came from. A file that really changed is taken in and reported as updated.
 
+### The wishes file
+
+`Хотелки.md` is read into wishes, once, so that the file can stop being a place the record has to be told about. From then on a wish arrives through [`rigger wish`](/rigger/reference/note/) or the assistant's tool, and [`doctor`](/rigger/reference/doctor/) says so if the file fills up again.
+
+A wish there is not a line the way a task is: the ones actually written run to several paragraphs - what it is, where, and how to fix it. So what opens a wish is a **bold dated line**, and everything up to the next one belongs to it:
+
+```markdown
+**03.09.2026 · The mark on the web is not built by the size rule**
+
+The rule: S ≤27px, M 28–63px, L ≥64px. Two places:
+
+- `favicon.ico` - flat fill at 32 and 48
+- `icon-32.png` - flat fill
+
+**How to fix:** `export-assets.mjs` is the model.
+```
+
+Bold alone would not do: the same wish ends in a bold line of its own, and splitting on every one of them tore one wish into six.
+
+The template is not a wish, and neither is what is left when the file is emptied - the placeholder, or a line saying where the wishes went (`*Разобрано 11.09.2026: ...*`). Taking those in would put settled things back into a packet to be sorted a second time.
+
 ## Running it twice
 
 Importing an unchanged hub again changes nothing and says so:

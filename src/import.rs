@@ -24,6 +24,8 @@ pub struct Report {
     pub questions_withdrawn: u32,
     pub decisions_added: u32,
     pub questions_added: u32,
+    /// Wishes taken out of the wishes file and into the record.
+    pub wishes_added: u32,
     pub diary_added: u32,
     pub diary_updated: u32,
     /// Files whose between-stage prose the record took in.
@@ -47,6 +49,7 @@ impl Report {
             + self.questions_withdrawn
             + self.decisions_added
             + self.questions_added
+            + self.wishes_added
             + self.diary_added
             + self.diary_updated
             + self.prose_files
@@ -147,6 +150,17 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // One the owner struck from the hub by hand is withdrawn; one an
     // assistant asked was never in the file and stays.
     report.questions_withdrawn += db.withdraw_questions_not_in(project_id, &hub.questions)?;
+
+    // The wishes file, read into the record so that it can stop being a
+    // place the record has to be told about. Not struck the way questions
+    // are: a wish is sorted into the plan, and the file is emptied by the
+    // person doing the sorting - nothing in the file says a wish was
+    // withdrawn rather than dealt with.
+    for wish in &hub.wishes {
+        if db.record_event(project_id, "wish", wish, &crate::db::now(), "owner")? == Change::Added {
+            report.wishes_added += 1;
+        }
+    }
 
     // The diary becomes sessions that already ended: an entry is one
     // sitting, written before rigger knew what a sitting was, and it has

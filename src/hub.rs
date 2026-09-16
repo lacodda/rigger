@@ -179,6 +179,13 @@ pub struct Hub {
     /// the files a hub kept that the record could not rebuild - the reason
     /// a hub had to exist at all.
     pub documents: Vec<Document>,
+    /// What the owner dropped into the wishes file, one per block.
+    ///
+    /// Read once, so that the file can stop being a place the record has to
+    /// be told about: from here on a wish arrives through `rigger wish` or
+    /// the assistant's tool, and `doctor` says so if the file fills up
+    /// again.
+    pub wishes: Vec<String>,
     /// Whether the plan was written by the record rather than by hand.
     ///
     /// A generated file says so at the top, and one that does cannot
@@ -210,6 +217,9 @@ pub const DOCUMENT_FILES: [(&str, &str); 2] = [("Видение.md", "vision"), 
 
 /// The directory a hub keeps its research notes in.
 pub const RESEARCH_DIR: &str = "Исследования";
+
+/// The file the owner used to drop wishes into.
+pub const WISHES_FILE: &str = "Хотелки.md";
 
 /// Whether a directory holds any of the files a hub is read from.
 ///
@@ -268,6 +278,9 @@ pub fn read(dir: &Path) -> Result<Hub> {
         hub.diary = parse_diary(text);
         hub.prose.extend(parse_prose(text, "Дневник.md"));
     })?;
+    if let Ok(text) = std::fs::read_to_string(dir.join(WISHES_FILE)) {
+        hub.wishes = parse_wishes(&text);
+    }
     hub.documents = read_documents(dir);
     Ok(hub)
 }
@@ -875,6 +888,85 @@ fn parse_task(line: &str) -> Option<Task> {
 
 /// Questions waiting for the owner: the list under that heading, until the
 /// next heading. Numbered or bulleted; the placeholder line is not a question.
+/// The wishes an owner dropped into the wishes file.
+///
+/// A wish here is not a line the way a task is. The ones actually written
+/// run to several paragraphs - a bold opening that dates and names it, then
+/// where the problem is, then how to fix it - so a blank line is no
+/// boundary at all. Split on one, the single wish in this line's only
+/// non-empty file came back as six, each fragment landing in the packet as
+/// its own thing to sort.
+///
+/// What does open a wish is a **bold first line**, which is how every one of
+/// them starts. Everything up to the next bold opening belongs to it.
+///
+/// Above the template's rule (`---`) or its first sub-heading is the
+/// template talking to the reader - a title and a line saying what the file
+/// is for - and neither is a wish. Nor is the `(пусто)` placeholder
+/// underneath, nor a note saying the wishes were already sorted: emptying
+/// this file, these hubs leave "Разобрано 11.09.2026: ..." behind, and
+/// taking that in would put settled things back into eight packets.
+pub fn parse_wishes(text: &str) -> Vec<String> {
+    let mut wishes: Vec<String> = Vec::new();
+    let mut block: Vec<&str> = Vec::new();
+    let mut started = false;
+
+    fn flush(block: &mut Vec<&str>, wishes: &mut Vec<String>) {
+        let joined = block.join(
+            "
+",
+        );
+        let trimmed = joined.trim();
+        // The placeholder wears whatever the template gave it - a bullet,
+        // an emphasis, or nothing - and `is_placeholder` judges the text,
+        // so the decoration comes off first.
+        let bare = trimmed
+            .trim_start_matches(["- ", "* "].iter().find(|l| trimmed.starts_with(**l)).copied().unwrap_or(""))
+            .trim_matches(['_', '*'])
+            .trim();
+        if !trimmed.is_empty() && !is_placeholder(bare) && !is_settled(bare) {
+            wishes.push(trimmed.to_string());
+        }
+        block.clear();
+    }
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // The title is not an opening: `# Хотелки` is followed by the line
+        // saying what the file is for, and counting it made that line a
+        // wish in every empty file of the line.
+        if let Some((level, _)) = heading(line) {
+            flush(&mut block, &mut wishes);
+            started |= level > 1;
+            continue;
+        }
+        if trimmed == "---" {
+            flush(&mut block, &mut wishes);
+            started = true;
+            continue;
+        }
+        if !started {
+            continue;
+        }
+        // A bold **dated** opening starts the next wish; a blank line
+        // inside one is just a paragraph break.
+        //
+        // Dated, because bold alone is not an opening: the same wish ends
+        // with `**Как чинить:** ...`, and splitting on every bold line tore
+        // the one real wish of this line in two - the fix arriving in the
+        // packet as a separate thing to sort from the problem it fixes.
+        if opens_a_wish(trimmed) && !block.is_empty() {
+            flush(&mut block, &mut wishes);
+        }
+        if trimmed.is_empty() && block.is_empty() {
+            continue;
+        }
+        block.push(line);
+    }
+    flush(&mut block, &mut wishes);
+    wishes
+}
+
 fn parse_questions(text: &str) -> Vec<String> {
     let mut questions = Vec::new();
     let mut inside = false;
@@ -918,6 +1010,33 @@ fn parse_questions(text: &str) -> Vec<String> {
 /// them sat in the owner's inbox for four days saying "пусто)" - the
 /// display having eaten the opening bracket. A placeholder is a placeholder
 /// however much explanation follows it.
+/// Whether a line opens a wish: bold, and dated inside the bold.
+///
+/// `**03.09.2026 · Знак в вебе собран не по правилу уровней**` opens one.
+/// `**Как чинить:** образец - ...` does not: it is bold text inside a wish,
+/// and the date is what tells them apart.
+fn opens_a_wish(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("**") else { return false };
+    let Some((bold, _)) = rest.split_once("**") else { return false };
+    bold.split_whitespace().next().is_some_and(|word| {
+        let digits = word.chars().filter(char::is_ascii_digit).count();
+        digits >= 4 && word.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '/')
+    })
+}
+
+/// Whether a block says a wish was already dealt with rather than asking
+/// for something.
+///
+/// Emptying the wishes file, the hubs of this line leave a line behind
+/// saying where the wishes went: "Разобрано 11.09.2026: знак по уровням -
+/// в v0.11.0". That is a note about the past, and taking it into the record
+/// as a wish would put a settled thing back into eight projects' packets,
+/// where somebody would sort it a second time.
+fn is_settled(block: &str) -> bool {
+    let head = block.trim_start_matches(['*', '_', ' ']);
+    head.starts_with("Разобрано") || head.starts_with("Пусто")
+}
+
 fn is_placeholder(item: &str) -> bool {
     const PLACEHOLDERS: [&str; 6] = ["(пусто)", "(нет)", "(none)", "(empty)", "—", "-"];
     let head = item.split(['—', '–']).next().unwrap_or(item).trim();

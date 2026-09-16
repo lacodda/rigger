@@ -75,6 +75,18 @@ Reported, never corrected. A missing tag is not proof a release did not happen -
 
 A project that has never been synced is named rather than judged: without a sync there is no way to tell a claim from a fact, and `doctor` says which projects it cannot speak for.
 
+## Wishes left in the hub
+
+`Хотелки.md` stopped being read at every session in v0.20.0: a wish now arrives through [`rigger wish`](/rigger/reference/note/) or the assistant's tool and lives in the record. Which means a wish written into the file after that is a wish nobody would ever read - so `doctor` says when one is waiting:
+
+```console
+wishes left in Хотелки.md (1):
+  atlas        1 wish
+  the file is no longer read at every session: `rigger import <project> --hub <dir>` takes them in
+```
+
+Checked without being asked: it is one small file per project that has a hub. The template, its placeholder and a note saying the wishes were already sorted do not count.
+
 ## Hubs (`--hubs`)
 
 A generated file that somebody has edited has stopped being a view of the record, and the next [`export`](/rigger/reference/export/) would overwrite the edit without saying so. `--hubs` names those files. It is off by default because it reads every hub from disk.
