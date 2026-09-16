@@ -111,7 +111,18 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     }
     // A stage neither file names any more was renumbered or struck by
     // hand; a tag would have shipped it, and a shipped stage is kept.
-    report.versions_dropped += db.drop_versions_not_in(project_id, &named)?;
+    //
+    // Only when the plan is a person's writing. A generated plan lists the
+    // open stages and nothing else - it says so in its own first lines -
+    // so "neither file names it" means "it shipped and scrolled out of the
+    // export", not "somebody struck it". Importing sixteen generated hubs
+    // once struck 367 versions and 976 tasks across the line on exactly
+    // this reasoning. The task half of this guard was already here; the
+    // version half was not, which is how a class of defect gets fixed in
+    // one of the two places it lives.
+    if !hub.plan_is_generated {
+        report.versions_dropped += db.drop_versions_not_in(project_id, &named)?;
+    }
 
     for decision in &hub.decisions {
         // Decisions are dated by day in the hub; the record keeps timestamps.
