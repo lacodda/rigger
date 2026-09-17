@@ -183,4 +183,4 @@ https://lacodda.github.io/rigger/ - getting started, concepts, and a reference p
 
 ## License
 
-MIT - see https://github.com/lacodda/rigger/blob/main/LICENSE.
+MIT (c) [Kirill Lakhtachev](https://lacodda.com)
