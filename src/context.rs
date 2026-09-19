@@ -13,7 +13,7 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::db::{Db, Project, Task};
+use crate::db::{Db, DocLine, Project, Task};
 
 /// Tokens are approximated from characters. A tokeniser would be exact for
 /// one model and wrong for the next, and this number decides only how much
@@ -34,9 +34,48 @@ pub struct Packet {
     pub questions: Vec<Item>,
     pub wishes: Vec<Item>,
     pub events: Vec<Event>,
+    /// One line per handwritten text the project has: what exists to be
+    /// read, not the reading of it.
+    ///
+    /// A vision runs to thousands of characters and would eat the packet
+    /// whole. But a session that does not know a vision exists cannot ask
+    /// for it, and the commonest way to contradict one is not to have
+    /// heard of it. So the packet names them and says how to open one.
+    pub documents: Vec<DocLine>,
     pub next_step: Option<String>,
     /// How many recent events the budget left out.
     pub events_omitted: usize,
+    /// How many events are older than the window the packet looks at.
+    ///
+    /// Counted apart from what the budget refused, because they are a
+    /// different fact about a different thing. The packet used to add the
+    /// two and call the total "left out by the budget", which on this
+    /// record made a project with four hundred events of history look as
+    /// though a session had been denied four hundred of them - when the
+    /// budget had refused none and the window simply does not reach that
+    /// far back. A number that overstates what is missing is as useless
+    /// as one that hides it.
+    pub events_beyond_window: usize,
+    /// What the budget refused, line by line, with the reason.
+    ///
+    /// The packet has always said how many events it dropped, which tells
+    /// an assistant that it is missing something but not what - and
+    /// "there is a decision you have not seen" is only useful if you can
+    /// find out which one. Filled only for `--explain`: carrying it in
+    /// every packet would spend the budget on an account of the budget.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<Dropped>,
+}
+
+/// A line the budget would not pay for.
+#[derive(Debug, Serialize)]
+pub struct Dropped {
+    pub kind: String,
+    pub date: String,
+    /// The first line of what was left out, so it can be asked for by name.
+    pub head: String,
+    pub tokens: usize,
+    pub why: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,8 +192,11 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         questions,
         wishes,
         events: Vec::new(),
+        documents: db.document_lines(project.id)?,
         next_step,
         events_omitted: 0,
+        events_beyond_window: 0,
+        dropped: Vec::new(),
     };
 
     // Everything above is what a session cannot start without, so it is never
@@ -173,9 +215,9 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     // The line that says what was dropped costs tokens of its own, and so
     // does the heading above the events. Both are reserved before anything is
     // added, so that a packet never ends up over the budget it reports.
-    let reserve = estimate_tokens("\n## Recent\n(999 older events left out by the budget)\n");
+    let reserve = estimate_tokens("\n## Recent\n(999 left out by the budget; 999 older than the window)\n");
     let mut spent = estimate_tokens(&render(&packet)) + reserve;
-    packet.events_omitted = beyond_window;
+    packet.events_beyond_window = beyond_window;
 
     // Changes read from commits get a share of what is left; everything
     // written by a person competes for the rest.
@@ -195,8 +237,22 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
             body: summarise(&recent.body),
         };
         let cost = estimate_tokens(&render_event(&event));
-        if spent + cost > budget || (from_git && cost > git_left) {
+        let refused = if spent + cost > budget {
+            Some("over the budget")
+        } else if from_git && cost > git_left {
+            Some("the chronicle's share of the budget is spent")
+        } else {
+            None
+        };
+        if let Some(why) = refused {
             packet.events_omitted += 1;
+            packet.dropped.push(Dropped {
+                kind: event.kind,
+                date: event.date,
+                head: head_of(&event.body),
+                tokens: cost,
+                why,
+            });
             continue;
         }
         if from_git {
@@ -235,6 +291,16 @@ fn summarise(text: &str) -> String {
         out.push_str(&format!(" (+{} chars)", full - kept));
     }
     out
+}
+
+/// The first line of a body, short enough to name it by.
+///
+/// Enough to recognise which decision this was and go and read it with
+/// `find` or `why`; not so much that the account of what was dropped
+/// costs what keeping it would have.
+fn head_of(body: &str) -> String {
+    let first = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    shorten(first, 80)
 }
 
 /// The first sentence, or the whole text when it has none within reach.
@@ -312,6 +378,10 @@ pub fn costs(packet: &Packet) -> Vec<Cost> {
         Cost {
             section: "events",
             tokens: packet.events.iter().map(|e| estimate_tokens(&render_event(e))).sum(),
+        },
+        Cost {
+            section: "documents",
+            tokens: estimate_tokens(&render_documents(packet)),
         },
         Cost {
             section: "next step",
@@ -459,12 +529,52 @@ pub fn render(packet: &Packet) -> String {
         }
         // Said even when nothing fit at all: a section that is simply absent
         // reads as "nothing happened", which is the opposite of the truth.
-        if packet.events_omitted > 0 {
-            out.push_str(&format!("({} older events left out by the budget)\n", packet.events_omitted));
+        match (packet.events_omitted, packet.events_beyond_window) {
+            (0, 0) => {}
+            (0, beyond) => out.push_str(&format!(
+                "({beyond} older events are beyond the window the packet looks at; `rigger find` reaches them)\n"
+            )),
+            (dropped, 0) => out.push_str(&format!("({dropped} events left out by the budget; `--explain` names them)\n")),
+            (dropped, beyond) => out.push_str(&format!(
+                "({dropped} events left out by the budget - `--explain` names them - and {beyond} more are beyond the window)\n"
+            )),
         }
     }
+    out.push_str(&render_documents(packet));
     if let Some(next) = &packet.next_step {
         out.push_str(&format!("\n## Next step\n{next}\n"));
+    }
+    out
+}
+
+/// The documents section: what this project has written down.
+fn render_documents(packet: &Packet) -> String {
+    if packet.documents.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Written down\n");
+    for doc in &packet.documents {
+        let day = doc.updated_at.split('T').next().unwrap_or(&doc.updated_at);
+        out.push_str(&format!(
+            "- {} · {} · {day} — `rigger doc show {} {}`\n",
+            doc.kind, doc.title, packet.project, doc.slug
+        ));
+    }
+    out
+}
+
+/// What the budget refused, for `--explain`.
+///
+/// Printed after the packet rather than inside it: it is an account of
+/// the packet, and an assistant reading the packet should not have to
+/// step over it.
+pub fn render_dropped(packet: &Packet) -> String {
+    if packet.dropped.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Left out\n");
+    for d in &packet.dropped {
+        out.push_str(&format!("{}  {:<9} {:>4}t  {} — {}\n", d.date, d.kind, d.tokens, d.head, d.why));
     }
     out
 }

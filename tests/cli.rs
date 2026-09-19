@@ -460,10 +460,19 @@ fn the_packet_holds_the_budget_and_reports_what_it_dropped() {
     // out - the silent truncation this command exists to avoid.
     let (total, text) = packet_cost(data.path(), &["--budget", "600"]);
     assert!(total <= 600, "packet is {total} tokens, over the 600 asked for:\n{text}");
+    assert!(text.contains("left out by the budget"), "the packet did not say what it dropped:\n{text}");
+
+    // And `--explain` names them, one line each with the reason. A count
+    // tells a session that something is missing; only the names let it go
+    // and get the one it needs.
+    let out = rigger(data.path()).args(["context", "proj", "--budget", "600", "--explain"]).assert().success();
+    let explained = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(explained.contains("## Left out"), "--explain did not name what was dropped:\n{explained}");
     assert!(
-        text.contains("older events left out by the budget"),
-        "the packet did not say what it dropped:\n{text}"
+        explained.contains("A decision that took a paragraph"),
+        "the dropped lines must be recognisable:\n{explained}"
     );
+    assert!(explained.contains("over the budget"), "each dropped line says why:\n{explained}");
 }
 
 /// A budget too small even for the fixed sections still produces a usable

@@ -35,13 +35,15 @@ Ship the importer next.
 
 ## The budget
 
-The packet has a token budget - 3000 by default, `--budget` to change it - and holds it. Everything a session cannot start without comes first and is never dropped: the state line, the current stage with its open tasks, the questions waiting for you, the wishes not yet sorted, and the next step. Recent events fill what is left, newest first, and the packet says how many older ones it left out:
+The packet has a token budget - 3000 by default, `--budget` to change it - and holds it. Everything a session cannot start without comes first and is never dropped: the state line, the current stage with its open tasks, the questions waiting for you, the wishes not yet sorted, what the project has written down, and the next step. Recent events fill what is left, newest first, and the packet says what it left out:
 
 ```
-(14 older events left out by the budget)
+(14 events left out by the budget; `--explain` names them - and 226 more are beyond the window)
 ```
 
 That line is the point of the budget. A packet that quietly ended its list would look like a project where nothing else ever happened.
+
+The two numbers are different facts and are counted apart. The first is what the budget refused. The second is what is older than the window the packet looks at - two hundred events - which no budget would have reached anyway and which [`find`](/rigger/reference/find/) is for. Adding them made a project with four hundred events of history look as though a session had been denied four hundred of them.
 
 Long events are summarised rather than truncated at a fixed width: the packet keeps the heading and the first sentence of the reasoning, then says how many characters remain. A decision in a real hub runs to fifteen hundred characters, and three of them at full length would crowd out a dozen others.
 
@@ -57,15 +59,34 @@ state             32 tokens
 current stage     18 tokens
 questions          7 tokens
 events            21 tokens
+documents          9 tokens
 next step          6 tokens
 total             96 tokens of 3000
+
+## Left out
+2026-09-17  decision   244t  The address of the action is in the shortcut, not the button… — over the budget
+2026-09-16  pitfall    197t  Backticks in an argument are run by the shell and spoil the record.… — over the budget
 ```
+
+It also names what the budget refused, one line each with the reason. A count tells a session that something is missing; only the names let it go and get the one it needs - with [`find`](/rigger/reference/find/) or [`why`](/rigger/reference/why/). The list is not carried in an ordinary packet: an account of the budget would be spent out of the budget.
 
 Token counts are estimated from characters, not measured with a tokeniser: the number decides how much history to include, and an estimate that errs high is the safe direction.
 
+## What the project has written down
+
+One line per [document](/rigger/reference/doc/) - its kind, its title, when it last changed, and the command that opens it:
+
+```
+## Written down
+- vision · Vision of sample · 2026-09-12 — `rigger doc show sample vision`
+- rituals · Rituals of sample · 2026-09-15 — `rigger doc show sample rituals`
+```
+
+The documents themselves are not in the packet: a vision runs to thousands of characters and would eat it whole. But a session that does not know a vision exists cannot ask for it, and the commonest way to contradict one is not to have heard of it.
+
 ## `--json`
 
-The same packet as data, for a tool that renders it or an editor that feeds it to a model. Every field of the text form is there, plus `events_omitted`.
+The same packet as data, for a tool that renders it or an editor that feeds it to a model. Every field of the text form is there, plus `events_omitted`, `events_beyond_window`, and `dropped` when `--explain` filled it.
 
 ## Since the last sitting
 
