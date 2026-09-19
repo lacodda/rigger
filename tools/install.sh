@@ -76,4 +76,65 @@ case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "Note: add $BIN_DIR to your PATH." ;;
 esac
+
+# Register the record with the assistant, so that a session can ask it
+# rather than being told about it: the MCP server, which is how an assistant
+# reads the packet and writes decisions back, and the Stop hook, which
+# closes the sitting when the assistant stops.
+#
+# The end-of-session ritual has always been a list an assistant had to
+# remember at exactly the moment it was running out of context, which is
+# when it is least likely to remember anything. A hook does not forget.
+#
+# Never fatal, and skipped when the assistant is not installed: an install
+# that works is worth more than a registration that is tidy.
+# RIGGER_NO_REGISTER=1 opts out.
+if [ -z "${RIGGER_NO_REGISTER:-}" ] && command -v claude >/dev/null 2>&1; then
+    # MSYS_NO_PATHCONV stops Git Bash rewriting the bare `--` separator and
+    # anything that looks like a path into a Windows one, which turns the
+    # registration into a server named after a directory. Harmless where
+    # the variable means nothing.
+    if MSYS_NO_PATHCONV=1 claude mcp add rigger -- "$BIN_DIR/rigger" mcp >/dev/null 2>&1; then
+        echo "Registered the rigger MCP server with claude."
+    else
+        echo "Note: could not register the MCP server; run: claude mcp add rigger -- rigger mcp"
+    fi
+
+    # The Stop hook. `--remind` is the form for a hook: it says nothing
+    # unless a sitting was open and something is missing from it, so an
+    # assistant stopping in an unrelated directory prints nothing.
+    #
+    # Never exit code 2: an assistant reads 2 from a Stop hook as "refusing
+    # to stop" and carries on, so a hook that will not let a session end is
+    # worse than no hook.
+    SETTINGS="$HOME/.claude/settings.json"
+    if command -v python3 >/dev/null 2>&1; then
+        if python3 - "$SETTINGS" <<'PYTHON'
+import json, os, sys
+
+path = sys.argv[1]
+command = "rigger session end --remind"
+try:
+    with open(path, encoding="utf-8") as f:
+        config = json.load(f)
+except (OSError, ValueError):
+    config = {}
+hooks = config.setdefault("hooks", {})
+stop = hooks.setdefault("Stop", [])
+if any("rigger session end" in json.dumps(entry) for entry in stop):
+    sys.exit(1)
+stop.append({"hooks": [{"type": "command", "command": command}]})
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2)
+PYTHON
+        then
+            echo "Added the Stop hook: a sitting now closes itself."
+        fi
+    else
+        echo "Note: python3 was not found, so the Stop hook was not added."
+        echo "  Add 'rigger session end --remind' to hooks.Stop in $SETTINGS yourself."
+    fi
+fi
+
 echo "Next: run 'rigger init'"

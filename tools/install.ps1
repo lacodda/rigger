@@ -101,4 +101,65 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint M
     Write-Host "Note: could not update the user PATH ($($_.Exception.Message)); add $dir to it yourself."
 }
 Write-Host "Installed rigger $tag to $dir\rigger.exe"
+
+# Register the record with the assistant, so that a session can ask it
+# rather than being told about it. Two steps, both of which the owner would
+# otherwise do by hand and one of which nobody remembers to do at all:
+#
+#   - the MCP server, which is how an assistant reads the packet and writes
+#     decisions back;
+#   - the Stop hook, which closes the sitting when the assistant stops. The
+#     end-of-session ritual has always been a list an assistant had to
+#     remember at exactly the moment it was running out of context, which is
+#     when it is least likely to remember anything.
+#
+# Skipped entirely when the assistant is not installed, and never fatal: an
+# install that works is worth more than a registration that is tidy.
+# $env:RIGGER_NO_REGISTER=1 opts out.
+if (-not $env:RIGGER_NO_REGISTER) {
+    $claude = Get-Command claude -ErrorAction SilentlyContinue
+    if ($claude) {
+        try {
+            # The output is kept back; only a failure is worth a line.
+            $out = & claude mcp add rigger -- (Join-Path $dir "rigger.exe") mcp 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Registered the rigger MCP server with claude."
+            } else {
+                Write-Host "Note: could not register the MCP server ($out); run: claude mcp add rigger -- rigger mcp"
+            }
+        } catch {
+            Write-Host "Note: could not register the MCP server ($($_.Exception.Message)); run: claude mcp add rigger -- rigger mcp"
+        }
+    } else {
+        Write-Host "Note: claude was not found in PATH, so the MCP server was not registered."
+        Write-Host "  Register it later with: claude mcp add rigger -- rigger mcp"
+    }
+
+    # The Stop hook, written into the user's settings. `--remind` is the
+    # form for a hook: it says nothing unless a sitting was open and
+    # something is missing from it, so an assistant stopping in an
+    # unrelated directory prints nothing at all.
+    #
+    # Never exit code 2. An assistant reads 2 from a Stop hook as "refusing
+    # to stop" and carries on, and a hook that will not let a session end is
+    # worse than no hook (decision of 2026-09-05).
+    $settings = Join-Path $env:USERPROFILE ".claude\settings.json"
+    $command = "rigger session end --remind"
+    try {
+        $config = if (Test-Path $settings) { Get-Content $settings -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+        if (-not $config.PSObject.Properties["hooks"]) { $config | Add-Member hooks ([pscustomobject]@{}) }
+        if (-not $config.hooks.PSObject.Properties["Stop"]) { $config.hooks | Add-Member Stop @() }
+        $already = @($config.hooks.Stop) | Where-Object { ($_ | ConvertTo-Json -Depth 9) -like "*rigger session end*" }
+        if (-not $already) {
+            $entry = [pscustomobject]@{ hooks = @([pscustomobject]@{ type = "command"; command = $command }) }
+            $config.hooks.Stop = @($config.hooks.Stop) + $entry
+            New-Item -ItemType Directory -Force (Split-Path $settings) | Out-Null
+            $config | ConvertTo-Json -Depth 9 | Out-File $settings -Encoding utf8
+            Write-Host "Added the Stop hook: a sitting now closes itself."
+        }
+    } catch {
+        Write-Host "Note: could not add the Stop hook ($($_.Exception.Message)); add '$command' to hooks.Stop in $settings yourself."
+    }
+}
+
 Write-Host "Next: run 'rigger init'"

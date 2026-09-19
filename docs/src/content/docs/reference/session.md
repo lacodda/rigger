@@ -124,6 +124,8 @@ Claude Code fires a `Stop` hook when a session ends. Pointing it at `session end
 
 in `~/.claude/settings.json`. `Stop` takes no `matcher` - it fires every time.
 
+The installer writes this entry itself, along with registering the [MCP server](/rigger/reference/mcp/), so a fresh install has a record that closes its own sittings. It is skipped when the assistant is not installed, never fails the install, and adds nothing when an entry naming `rigger session end` is already there. `RIGGER_NO_REGISTER=1` opts out.
+
 No project is named, because the hook has none to give: it is handed a working directory and nothing else. It runs **in** the project, and the record already knows every project by its path, so the directory is the name. Directories above are searched too, since a session ends wherever the last command left the shell rather than at the checkout's root.
 
 The hook is a binary, not a script. Corporate Windows machines forbid PowerShell scripts through the execution policy, and a hook calling a `.ps1` stops working without a clear error.
@@ -161,9 +163,23 @@ A second sitting on the same day does not take another: today's copy is insuranc
 
 A copy that cannot be written is reported on stderr but does not fail the close: the session has already ended, and an error there would invite a second `end` on a record that has none open.
 
+## What a project does when a sitting ends
+
+Some projects end a session by doing something: publishing what was written, running a linter over it, pushing a stand. [`project set --on-session-end`](/rigger/reference/project/) states it once, and `session end` runs it after the sitting is written down, records the outcome as a change, and says how it went:
+
+```console
+$ rigger session end rhapsod
+Session on rhapsod closed, open since 2026-09-19T08:12:04Z.
+...
+pnpm publish:novellas: green in 6 seconds
+```
+
+A red result does not fail the close - the session is already over and already recorded - but it is listed among what the ritual still asks for, so it is not something the next sitting discovers for itself.
+
 ## Related
 
 - [`context`](/rigger/reference/context/) - the packet a session starts from.
+- [`project`](/rigger/reference/project/) - `--on-session-end` sets what a closing sitting runs.
 - [`note`](/rigger/reference/note/) - what a session fills with.
 - [`digest`](/rigger/reference/digest/) - the same question over days rather than sittings.
 - [`open`](/rigger/reference/open/) - starting an assistant with the packet in hand.

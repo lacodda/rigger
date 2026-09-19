@@ -379,6 +379,61 @@ mod tests {
         }
     }
 
+    /// Registering the record with the assistant is part of installing it:
+    /// a step the owner would otherwise do by hand, and one - the hook -
+    /// that nobody remembers to do at all. A step that lives only in a
+    /// shell script is a step that rots silently, so both scripts are held
+    /// to it here.
+    #[test]
+    fn every_installer_registers_the_server_and_the_hook() {
+        for (file, wanted) in [
+            (
+                "tools/install.ps1",
+                vec!["claude mcp add rigger", "rigger session end --remind", "hooks", "Stop", "RIGGER_NO_REGISTER"],
+            ),
+            (
+                "tools/install.sh",
+                vec!["claude mcp add rigger", "rigger session end --remind", "hooks", "Stop", "RIGGER_NO_REGISTER"],
+            ),
+        ] {
+            let script = read(file);
+            for needle in wanted {
+                assert!(
+                    script.contains(needle),
+                    "{file} does not mention `{needle}`; a fresh install would not be registered"
+                );
+            }
+        }
+
+        // Git Bash rewrites the bare `--` separator and anything shaped
+        // like a path into a Windows one, which registers the server under
+        // the name of a directory. Only the shell installer can meet this.
+        let sh = read("tools/install.sh");
+        assert!(
+            sh.contains("MSYS_NO_PATHCONV=1"),
+            "install.sh registers the server without MSYS_NO_PATHCONV; in Git Bash that registers a directory"
+        );
+
+        // A hook that speaks on every stop is a hook nobody reads, and one
+        // that exits 2 refuses the stop and holds the assistant's turn
+        // open. `--remind` is the form that does neither. What matters is
+        // the command the installer *writes*, so that is what is read -
+        // the script also mentions the bare command when it looks for an
+        // entry already there, and matching on that would be a check that
+        // passes on the wrong line.
+        for file in ["tools/install.ps1", "tools/install.sh"] {
+            let script = read(file);
+            let written = script
+                .lines()
+                .find(|l| l.contains("command") && l.contains("rigger session end"))
+                .unwrap_or_else(|| panic!("{file} never assigns the hook's command"));
+            assert!(
+                written.contains("--remind"),
+                "{file} installs a hook without `--remind`; it would speak on every stop: {written}"
+            );
+        }
+    }
+
     /// An installer must not take a name that already belongs to something
     /// else - `rgr` is free today, but PATH is not ours to overwrite.
     #[test]
