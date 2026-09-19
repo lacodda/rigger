@@ -344,6 +344,60 @@ const MIGRATIONS: &[&str] = &[
     // stops being something an assistant reports and becomes something the
     // record witnessed.
     "ALTER TABLE projects ADD COLUMN gate TEXT;",
+    // v22: documents are searchable, and a project can name a command to
+    // run when a sitting closes.
+    //
+    // The search index is the same arrangement events have had since v5 -
+    // an external-content FTS5 table kept by triggers - because `find`
+    // should not have to know which of the two it is reading. A document
+    // carries its title into the index as well as its body: a vision is
+    // found by its name as often as by a sentence inside it.
+    //
+    // The hook is a column on the project rather than a setting of the
+    // profile: what has to happen when a sitting on rhapsod ends (publish
+    // the novellas) has nothing to do with what has to happen on kasl.
+    "
+    ALTER TABLE projects ADD COLUMN on_session_end TEXT;
+    CREATE VIRTUAL TABLE documents_fts USING fts5(
+        title,
+        body,
+        content = 'documents',
+        content_rowid = 'id'
+    );
+    INSERT INTO documents_fts(rowid, title, body) SELECT id, title, body FROM documents;
+    CREATE TRIGGER documents_fts_insert AFTER INSERT ON documents BEGIN
+        INSERT INTO documents_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    CREATE TRIGGER documents_fts_delete AFTER DELETE ON documents BEGIN
+        INSERT INTO documents_fts(documents_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+    END;
+    CREATE TRIGGER documents_fts_update AFTER UPDATE OF title, body ON documents BEGIN
+        INSERT INTO documents_fts(documents_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+        INSERT INTO documents_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    ",
+    // v23: what a product looks like from outside - its mark, its colours,
+    // what shape of thing it is, and where its shopfronts are.
+    //
+    // This existed in three places and agreed in none: a table in a notes
+    // vault, a constant in lyrn that `lyrn new` reads, and whatever a
+    // README happened to say. lyrn's copy was five products behind on the
+    // day this was written, and nothing could have told anyone - a
+    // hardcoded list does not know it is stale. The record holds it once
+    // and `export --line` publishes it, so the list a generator reads is
+    // the list a session updates.
+    //
+    // A column apiece rather than a blob: `code` is unique across the line
+    // by the rule of the mark, and a rule the schema can hold is a rule
+    // that cannot be broken by a careless write.
+    "
+    ALTER TABLE projects ADD COLUMN mark_code TEXT;
+    ALTER TABLE projects ADD COLUMN accent TEXT;
+    ALTER TABLE projects ADD COLUMN accent2 TEXT;
+    ALTER TABLE projects ADD COLUMN form TEXT;
+    ALTER TABLE projects ADD COLUMN docs_url TEXT;
+    CREATE UNIQUE INDEX projects_by_mark ON projects (mark_code) WHERE mark_code IS NOT NULL;
+    ",
 ];
 
 /// The place a desk keeps its cards: a project the record keeps for
@@ -451,6 +505,24 @@ pub struct Project {
     /// The command that says this project is fit to commit, as the project
     /// states it: what CI runs, spelt for a shell.
     pub gate: Option<String>,
+    /// The two-letter code of its mark, unique across the line.
+    pub mark_code: Option<String>,
+    /// The colour the product owns, as `#RRGGBB`.
+    pub accent: Option<String>,
+    /// The second colour, for a mark drawn as a pair.
+    pub accent2: Option<String>,
+    /// What shape of thing this is: `cli`, `desktop`, `web`, `library`.
+    pub form: Option<String>,
+    /// Where its documentation lives, when it has a site.
+    pub docs_url: Option<String>,
+    /// What to run when a sitting on this project closes, if anything.
+    ///
+    /// Ordered by rhapsod, whose sessions end by publishing the novellas
+    /// through a linter. The record cannot know such a thing, and a ritual
+    /// that depends on an assistant remembering it at the end of a session
+    /// is a ritual that stops happening - which is the argument `session`
+    /// was built on in the first place.
+    pub on_session_end: Option<String>,
 }
 
 /// What a project is, as far as the parts of rigger that read git care.
@@ -550,6 +622,37 @@ pub struct Found {
     pub body: String,
     pub from_git: bool,
     pub commit_hash: Option<String>,
+}
+
+/// A document a search matched.
+#[derive(Debug, Clone, Serialize)]
+pub struct FoundDoc {
+    pub project: String,
+    pub kind: String,
+    pub slug: String,
+    pub title: String,
+    pub updated_at: String,
+    /// The text around the match, so a result says why it is one.
+    pub snippet: String,
+}
+
+/// How a product looks from outside: its mark, its colours, its shape.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Mark {
+    pub code: Option<String>,
+    pub accent: Option<String>,
+    pub accent2: Option<String>,
+    pub form: Option<String>,
+    pub docs_url: Option<String>,
+}
+
+/// A document as the packet names it: kind, title, when it last changed.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocLine {
+    pub kind: String,
+    pub slug: String,
+    pub title: String,
+    pub updated_at: String,
 }
 
 /// What the record knows about one version.
@@ -2239,6 +2342,86 @@ impl Db {
         Ok(())
     }
 
+    /// Records how a product looks from outside.
+    ///
+    /// Every field is replaced by what is given, `None` clearing it, so
+    /// that one command states the whole mark rather than leaving half of
+    /// a previous one behind.
+    pub fn set_mark(&self, project_id: i64, mark: &Mark) -> Result<()> {
+        self.conn.execute(
+            "UPDATE projects SET mark_code = ?2, accent = ?3, accent2 = ?4, form = ?5, docs_url = ?6 WHERE id = ?1",
+            params![project_id, mark.code, mark.accent, mark.accent2, mark.form, mark.docs_url],
+        )?;
+        Ok(())
+    }
+
+    /// Sets the command a closing sitting runs, or clears it.
+    pub fn set_on_session_end(&self, project_id: i64, command: Option<&str>) -> Result<()> {
+        self.conn
+            .execute("UPDATE projects SET on_session_end = ?2 WHERE id = ?1", params![project_id, command])?;
+        Ok(())
+    }
+
+    /// Documents matching a query, best first.
+    ///
+    /// The same shape as `find_events`, so that `find` can put the two
+    /// together without knowing which table an answer came from. A title
+    /// match outranks a body match of equal relevance: someone searching
+    /// for `vision` means the document called that, not the sentence in
+    /// the middle of a research note that uses the word.
+    pub fn find_documents(&self, query: &str, project: Option<&str>, limit: u32) -> Result<Vec<FoundDoc>> {
+        let mut sql = String::from(
+            "SELECT p.name, d.kind, d.slug, d.title, d.updated_at,
+                    snippet(documents_fts, 1, '', '', '…', 12)
+             FROM documents_fts f
+             JOIN documents d ON d.id = f.rowid
+             JOIN projects p ON p.id = d.project_id
+             WHERE documents_fts MATCH ?1",
+        );
+        if project.is_some() {
+            sql.push_str(" AND p.name = ?2");
+        }
+        sql.push_str(" ORDER BY bm25(documents_fts, 2.0, 1.0) LIMIT ");
+        sql.push_str(&limit.to_string());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let map = |row: &rusqlite::Row| {
+            Ok(FoundDoc {
+                project: row.get(0)?,
+                kind: row.get(1)?,
+                slug: row.get(2)?,
+                title: row.get(3)?,
+                updated_at: row.get(4)?,
+                snippet: row.get(5)?,
+            })
+        };
+        let rows = match project {
+            Some(p) => stmt.query_map(params![query, p], map)?.collect::<rusqlite::Result<Vec<_>>>()?,
+            None => stmt.query_map(params![query], map)?.collect::<rusqlite::Result<Vec<_>>>()?,
+        };
+        Ok(rows)
+    }
+
+    /// One line per document, for the packet: what a project has written
+    /// down that a session can go and read.
+    pub fn document_lines(&self, project_id: i64) -> Result<Vec<DocLine>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, slug, title, updated_at FROM documents
+             WHERE project_id = ?1 ORDER BY kind, updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |row| {
+                Ok(DocLine {
+                    kind: row.get(0)?,
+                    slug: row.get(1)?,
+                    title: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// The last gate run recorded inside a sitting, if there was one.
     ///
     /// By session rather than by time. Timestamps here are stamped to the
@@ -2909,7 +3092,8 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
 /// One constant rather than the same list spelt at each query: the column
 /// added in migration 21 had to reach four places, and a list spelt four
 /// times is a list that reaches three.
-const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate";
+const PROJECT_COLUMNS: &str =
+    "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end";
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -2923,6 +3107,12 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         kind: row.get::<_, String>(7)?.into(),
         hub_path: row.get(8)?,
         gate: row.get(9)?,
+        mark_code: row.get(10)?,
+        accent: row.get(11)?,
+        accent2: row.get(12)?,
+        form: row.get(13)?,
+        docs_url: row.get(14)?,
+        on_session_end: row.get(15)?,
     })
 }
 

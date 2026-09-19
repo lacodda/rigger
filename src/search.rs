@@ -13,7 +13,94 @@
 use anyhow::{Result, bail};
 use serde::Serialize;
 
-use crate::db::{Db, Found, VersionFacts};
+use crate::db::{Db, Found, FoundDoc, VersionFacts};
+
+/// Where a search gets its answers.
+///
+/// FTS5 matches words. The question a person actually asks the record,
+/// "where did we settle this?", is about meaning: the decision that answers
+/// it may not contain the word that was typed. nooma, the line's own
+/// semantic index, is the answer to that, and it is built as a crate for
+/// exactly this kind of consumer.
+///
+/// It is not written yet, so this is the seam and not the feature. The
+/// same arrangement scheda uses: name the trait now, implement the one
+/// provider that exists, and the second one drops in without every caller
+/// learning about it. FTS5 stays whatever else arrives - it is exact where
+/// meaning is fuzzy, and a search for an error message or a version number
+/// wants exactly that.
+pub trait Provider {
+    /// What the provider is called, for saying which one answered.
+    fn name(&self) -> &'static str;
+    fn events(&self, query: &str, project: Option<&str>, kind: Option<&str>, limit: u32) -> Result<Vec<Found>>;
+    fn documents(&self, query: &str, project: Option<&str>, limit: u32) -> Result<Vec<FoundDoc>>;
+}
+
+/// The provider that ships: SQLite's own full-text index.
+pub struct Fts<'a>(pub &'a Db);
+
+impl Provider for Fts<'_> {
+    fn name(&self) -> &'static str {
+        "fts5"
+    }
+
+    fn events(&self, query: &str, project: Option<&str>, kind: Option<&str>, limit: u32) -> Result<Vec<Found>> {
+        self.0.find_events(&as_fts_query(query), project, kind, limit)
+    }
+
+    fn documents(&self, query: &str, project: Option<&str>, limit: u32) -> Result<Vec<FoundDoc>> {
+        self.0.find_documents(&as_fts_query(query), project, limit)
+    }
+}
+
+/// Everything one search turned up.
+#[derive(Debug, Serialize)]
+pub struct Hits {
+    pub events: Vec<Found>,
+    pub documents: Vec<FoundDoc>,
+}
+
+impl Hits {
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty() && self.documents.is_empty()
+    }
+}
+
+/// Asks a provider both questions.
+///
+/// Documents are asked for only when no kind was named: `--kind pitfall`
+/// is a question about events, and a vision matching the word would be an
+/// answer to a question nobody asked.
+pub fn look(provider: &dyn Provider, query: &str, project: Option<&str>, kind: Option<&str>, limit: u32) -> Result<Hits> {
+    let events = provider.events(query, project, kind, limit)?;
+    let documents = match kind {
+        Some(_) => Vec::new(),
+        None => provider.documents(query, project, limit)?,
+    };
+    Ok(Hits { events, documents })
+}
+
+/// One document, as `find` prints it.
+///
+/// The slug rather than the title in the left column, because it is what
+/// the command to open it takes, and a title of these hubs is Russian
+/// prose while a slug is a word.
+pub fn render_document(doc: &FoundDoc, show_project: bool) -> String {
+    let mut out = String::new();
+    if show_project {
+        out.push_str(&format!("{:<12} ", truncate(&doc.project, 12)));
+    }
+    let day = doc.updated_at.split('T').next().unwrap_or(&doc.updated_at);
+    out.push_str(&format!("{day}  {:<9} ", truncate(&doc.kind, 9)));
+    out.push_str(&one_line(&doc.snippet));
+    out.push('\n');
+    out
+}
+
+/// The command that opens a document a search found.
+pub fn open_command(doc: &FoundDoc) -> String {
+    format!("rigger doc show {} {}", doc.project, doc.slug)
+}
 
 /// A version, the release it followed, and the work between them.
 #[derive(Debug, Serialize)]

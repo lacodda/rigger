@@ -7,7 +7,7 @@ description: Search the record across every project at once.
 rigger find <QUERY> [--project <NAME>] [--kind <KIND>] [--limit <N>] [--json]
 ```
 
-Searches every event of every project: decisions, findings, pitfalls, and the changes read out of commit messages. It exists because a record that has been accumulating for a year is past the point where anyone remembers where a thing was settled - and re-deciding something already argued through is the expensive kind of forgetting.
+Searches every event of every project - decisions, findings, pitfalls, and the changes read out of commit messages - and every [document](/rigger/reference/doc/): the visions, the rituals, the research notes. It exists because a record that has been accumulating for a year is past the point where anyone remembers where a thing was settled, and re-deciding something already argued through is the expensive kind of forgetting.
 
 ```console
 $ rigger find budget
@@ -56,8 +56,32 @@ Nothing matches "zzz".
 A bare word is searched as a prefix: try a shorter one, or FTS5 syntax - "exact phrase", `one OR two`.
 ```
 
+## Documents
+
+A search answers over two kinds of thing, and says which is which. Documents come under the events, each with the command that opens it:
+
+```console
+$ rigger find "the record is the truth"
+sample       2026-09-04  decision  The record is the database, and a hub is a view of it.
+
+Documents
+sample       2026-09-15  rituals   …the record is the truth for everything a hub shows…
+             rigger doc show sample rituals
+```
+
+A decision and a vision are different kinds of answer, and one that has to be opened with a second command should say so rather than look like another line of the list above it. A title match outranks a body match of equal relevance: someone searching for `vision` means the document called that, not the sentence in the middle of a research note that uses the word.
+
+`--kind` is a question about events, so it leaves documents out - a vision matching the word would be an answer to a question nobody asked.
+
+## Where the answers come from
+
+FTS5 matches words. The question a person actually asks the record - "where did we settle this?" - is about meaning, and the decision that answers it may not contain the word that was typed.
+
+So the search is written against a provider rather than against SQLite, and the semantic index the line is building will drop in behind the same commands. FTS5 stays whatever else arrives: it is exact where meaning is fuzzy, and a search for an error message or a version number wants exactly that.
+
 ## Related
 
 - [`why`](/rigger/reference/why/) - the events behind one version, rather than one word.
 - [`context`](/rigger/reference/context/) - the recent events, without searching.
 - [`note`](/rigger/reference/note/) - how the searchable events get there.
+- [`doc`](/rigger/reference/doc/) - the documents a search now reaches.
