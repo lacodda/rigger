@@ -133,6 +133,15 @@ pub struct Stage {
 pub struct Item {
     pub id: i64,
     pub text: String,
+    /// The neighbour who asked for it, when a wish came from one.
+    ///
+    /// On the line rather than in a list of its own: an order from a
+    /// neighbour is a wish like any other - it is sorted into the plan by
+    /// the same `resolve` and competes with the rest for the same stages -
+    /// and a second list would invite it to be read as a second queue.
+    /// What changes is only that somebody is waiting for the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked_by: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,9 +189,22 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     let questions = db
         .open_events(project.id, "question")?
         .into_iter()
-        .map(|(id, text)| Item { id, text })
+        .map(|(id, text)| Item { id, text, asked_by: None })
         .collect();
-    let wishes = db.open_events(project.id, "wish")?.into_iter().map(|(id, text)| Item { id, text }).collect();
+    // Who asked is read once and matched by id: the wishes are already in
+    // hand, and asking the record a second question per wish would be a
+    // query per row on the one screen that is read at the start of every
+    // session.
+    let asked = db.asked_wishes(project.id)?;
+    let wishes = db
+        .open_events(project.id, "wish")?
+        .into_iter()
+        .map(|(id, text)| Item {
+            id,
+            text,
+            asked_by: asked.iter().find(|a| a.id == id).map(|a| a.asked_by.clone()),
+        })
+        .collect();
     let next_step = db.latest_event_body(project.id, "next")?;
 
     let mut packet = Packet {
@@ -505,7 +527,10 @@ fn render_items(heading: &str, items: &[Item]) -> String {
     }
     let mut out = if heading.is_empty() { String::new() } else { format!("\n## {heading}\n") };
     for item in items {
-        out.push_str(&format!("- [{}] {}\n", item.id, item.text));
+        match &item.asked_by {
+            Some(who) => out.push_str(&format!("- [{}] ({who} asks) {}\n", item.id, item.text)),
+            None => out.push_str(&format!("- [{}] {}\n", item.id, item.text)),
+        }
     }
     out
 }

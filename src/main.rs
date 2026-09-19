@@ -17,6 +17,7 @@ mod gate;
 mod hub;
 mod import;
 mod line;
+mod link;
 mod mcp;
 mod open;
 mod owner;
@@ -151,6 +152,9 @@ enum Command {
         /// Kind of event
         #[arg(long, value_name = "KIND", default_value = "finding")]
         kind: NoteKind,
+        /// The principle this decision stands on
+        #[arg(long, value_name = "NAME")]
+        principle: Option<String>,
     },
     /// Start an assistant session in the project, with the packet in hand
     Open {
@@ -210,10 +214,16 @@ enum Command {
     },
     /// The events that led to a version: what was decided, found and hit
     Why {
-        /// Project name
-        project: String,
+        /// Project name; omitted when reading a principle across the line
+        project: Option<String>,
         /// Version, as the record spells it
-        version: String,
+        version: Option<String>,
+        /// Read one principle across every project instead of one version
+        #[arg(long, value_name = "NAME")]
+        principle: Option<String>,
+        /// List the principles the record has used
+        #[arg(long)]
+        principles: bool,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -329,6 +339,14 @@ enum Command {
         project: String,
         /// What you want
         text: String,
+        /// The neighbour asking for it, when a wish comes from one
+        #[arg(long = "from", value_name = "PROJECT")]
+        from_project: Option<String>,
+    },
+    /// Tie two projects together: a pair, what one draws on, what draws on it
+    Link {
+        #[command(subcommand)]
+        command: LinkCommand,
     },
     /// The handwritten texts of a project: vision, rituals, research
     Doc {
@@ -407,6 +425,73 @@ impl NoteKind {
             NoteKind::Plan => "plan",
         }
     }
+}
+
+/// What a link between two projects says.
+///
+/// Mirrors `link::Kind` rather than being it: `clap` wants an enum it can
+/// derive a value parser on, and the domain type should not have to know
+/// what a command line is.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum LinkKind {
+    /// Two halves of one capability; neither ships alone
+    Pair,
+    /// This project draws on the other
+    Consumer,
+    /// The other project draws on this one
+    Donor,
+}
+
+impl LinkKind {
+    fn to_domain(self) -> link::Kind {
+        match self {
+            LinkKind::Pair => link::Kind::Pair,
+            LinkKind::Consumer => link::Kind::Consumer,
+            LinkKind::Donor => link::Kind::Donor,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum LinkCommand {
+    /// Record a tie between two projects, or two of their versions
+    ///
+    /// Each side is a project, or a project and a version written
+    /// `kasl@v1.13.0`. The version is part of one argument rather than a
+    /// positional of its own: with two optional versions between two
+    /// projects, `rigger link kasl v1.13.0 kasl-server` has two readings
+    /// and a command line that guesses would anchor the wrong half.
+    Add {
+        /// Project on this side, optionally `project@version`
+        from: String,
+        /// Project on the other side, optionally `project@version`
+        to: String,
+        /// What the tie is
+        #[arg(long, value_name = "KIND", default_value = "pair")]
+        kind: LinkKind,
+        /// A sentence saying what the two share
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// The ties one project has, read from its side
+    List {
+        /// Project name; every link of the record when omitted
+        project: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Forget a tie, by the id `link list` prints
+    Remove {
+        /// Id of the link
+        id: i64,
+    },
+    /// The pairs whose halves have parted company
+    Drift {
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -981,7 +1066,12 @@ fn run(cli: Cli) -> Result<()> {
             budget,
         } => show_context(&project, json, explain, budget),
         Command::Open { project, print, budget } => open_session(&project, print, budget),
-        Command::Note { project, text, kind } => note(&project, kind.as_str(), &text),
+        Command::Note {
+            project,
+            text,
+            kind,
+            principle,
+        } => note(&project, kind.as_str(), &text, principle.as_deref(), None),
         Command::Sync { project, json } => sync_projects(project.as_deref(), json),
         Command::Inbox { project, json } => inbox(project.as_deref(), json),
         Command::Digest { project, since, json } => digest(project.as_deref(), &since, json),
@@ -992,7 +1082,13 @@ fn run(cli: Cli) -> Result<()> {
             limit,
             json,
         } => find(&query, project.as_deref(), kind.as_deref(), limit, json),
-        Command::Why { project, version, json } => why(&project, &version, json),
+        Command::Why {
+            project,
+            version,
+            principle,
+            principles,
+            json,
+        } => why(project.as_deref(), version.as_deref(), principle.as_deref(), principles, json),
         Command::Version { command } => match command {
             VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear),
         },
@@ -1039,7 +1135,13 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
-        Command::Wish { project, text } => note(&project, "wish", &text),
+        Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref()),
+        Command::Link { command } => match command {
+            LinkCommand::Add { from, to, kind, note } => link_add(&from, &to, kind, note.as_deref()),
+            LinkCommand::List { project, json } => link_list(project.as_deref(), json),
+            LinkCommand::Remove { id } => link_remove(id),
+            LinkCommand::Drift { json } => link_drift(json),
+        },
         Command::Doc { command } => match command {
             DocCommand::List { project, kind, json } => doc_list(&project, kind.as_deref(), json),
             DocCommand::Show { project, slug, json } => doc_show(&project, &slug, json),
@@ -1596,7 +1698,7 @@ fn note_on_card(task: &str, kind: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn note(project: &str, kind: &str, text: &str) -> Result<()> {
+fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     // A state line is not an event: it is the top of the README's state
@@ -1606,8 +1708,43 @@ fn note(project: &str, kind: &str, text: &str) -> Result<()> {
         println!("Added a state line for {}; `rigger export` writes it into the README", project.name);
         return Ok(());
     }
-    db.record_event(project.id, kind, text, &db::now(), "assistant")?;
-    println!("Recorded a {kind} for {}", project.name);
+    // A principle names what a decision stands on, and only a decision
+    // stands on one: a change or a gate run is something that happened, not
+    // something believed. Said rather than ignored, because a principle
+    // silently dropped is a principle the owner thinks is recorded.
+    if principle.is_some() && kind != "decision" {
+        bail!("a principle belongs to a decision; this is a {kind}");
+    }
+    // The neighbour has to exist before the wish is written, so that a
+    // typo in the name is a refusal rather than a wish nobody asked for.
+    let asker = match asked_by {
+        Some(name) => Some(open_project(&db, name)?),
+        None => None,
+    };
+    if let Some(asker) = &asker
+        && asker.id == project.id
+    {
+        bail!("{} cannot be the neighbour asking {} for something", asker.name, project.name);
+    }
+    let change = db.record_event(project.id, kind, text, &db::now(), "assistant")?;
+    if let Some(id) = db.latest_event_id(project.id, kind)? {
+        if let Some(principle) = principle {
+            db.name_principle(id, principle)?;
+        }
+        if let Some(asker) = &asker {
+            db.name_asker(id, asker.id)?;
+        }
+    }
+    match (kind, &asker) {
+        ("wish", Some(asker)) => println!("Recorded a wish for {} from {}", project.name, asker.name),
+        _ => println!("Recorded a {kind} for {}", project.name),
+    }
+    if let Some(principle) = principle {
+        println!("  on the principle {principle:?}");
+    }
+    if change == db::Change::Unchanged {
+        println!("  the record already held it");
+    }
     Ok(())
 }
 
@@ -1672,7 +1809,16 @@ fn find(query: &str, project: Option<&str>, kind: Option<&str>, limit: u32, json
 }
 
 /// The work that went into one version.
-fn why(project: &str, version: &str, json: bool) -> Result<()> {
+fn why(project: Option<&str>, version: Option<&str>, principle: Option<&str>, principles: bool, json: bool) -> Result<()> {
+    if principles {
+        return list_principles(json);
+    }
+    if let Some(principle) = principle {
+        return why_principle(principle, project, json);
+    }
+    let (Some(project), Some(version)) = (project, version) else {
+        bail!("`why` wants a project and a version, or `--principle <name>`; `rigger why --principles` lists the names")
+    };
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     let why = search::why(&db, &project, version)?;
@@ -1718,6 +1864,228 @@ fn why(project: &str, version: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// The names the record has used for principles, and how often.
+///
+/// A vocabulary, not a list to maintain: what makes a name a principle of
+/// this profile is that a decision was recorded on it. A list kept beside
+/// the decisions would be a second truth, and the one that went stale.
+fn list_principles(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let principles = db.principles()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&principles)?);
+        return Ok(());
+    }
+    if principles.is_empty() {
+        println!("No decision names a principle yet.");
+        println!("`rigger note <project> <text> --kind decision --principle <name>` starts one.");
+        return Ok(());
+    }
+    for (name, count) in &principles {
+        println!("{name}  —  {}", plural(*count as usize, "decision", "decisions"));
+    }
+    Ok(())
+}
+
+/// One principle read across the whole line.
+///
+/// A principle is believed because of what happened, and what happened is
+/// spread over eighteen projects: "no users, no compatibility" was arrived
+/// at in one product and applied in six. Read one project at a time it
+/// looks like six opinions; read as one thread it is something the line
+/// learnt, and the thread is what makes it arguable.
+fn why_principle(principle: &str, project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    if let Some(name) = project {
+        open_project(&db, name)?;
+    }
+    let mut events = db.on_principle(principle)?;
+    if let Some(name) = project {
+        events.retain(|e| e.project == name);
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&events)?);
+        return Ok(());
+    }
+    if events.is_empty() {
+        println!("Nothing stands on {principle:?} in the record.");
+        // A principle nobody has used is far likelier a misspelling than a
+        // new one: the names are written by hand, twice, months apart.
+        let known = db.principles()?;
+        if !known.is_empty() {
+            println!();
+            println!("The record knows these:");
+            for (name, count) in known.iter().take(12) {
+                println!("  {name} ({count})");
+            }
+        }
+        return Ok(());
+    }
+    let projects: std::collections::BTreeSet<&str> = events.iter().map(|e| e.project.as_str()).collect();
+    println!("{principle}");
+    println!(
+        "{} across {}",
+        plural(events.len(), "decision", "decisions"),
+        plural(projects.len(), "project", "projects")
+    );
+    println!();
+    for event in &events {
+        let day = event.at.split('T').next().unwrap_or(&event.at);
+        let version = event.version.as_deref().map(|v| format!(" · {v}")).unwrap_or_default();
+        println!("{day} · {}{version}", event.project);
+        for line in event.body.lines() {
+            println!("  {line}");
+        }
+        println!();
+    }
+    Ok(())
+}
+
+/// One side of a link as it is written on a command line: `kasl@v1.13.0`,
+/// or just `kasl`.
+fn link_side(text: &str) -> (&str, Option<&str>) {
+    match text.split_once('@') {
+        Some((project, version)) if !version.is_empty() => (project, Some(version)),
+        _ => (text, None),
+    }
+}
+
+fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let (from_name, from_version) = link_side(from);
+    let (to_name, to_version) = link_side(to);
+    let from_project = open_project(&db, from_name)?;
+    let to_project = open_project(&db, to_name)?;
+    if from_project.id == to_project.id {
+        bail!("a link joins two projects; {} is one", from_project.name);
+    }
+    let kind = kind.to_domain();
+    let (id, change, anchored) = db.add_link(&db::NewLink {
+        kind,
+        from_project: from_project.id,
+        from_version,
+        to_project: to_project.id,
+        to_version,
+        note,
+    })?;
+    let side = |name: &str, version: Option<&String>| match version {
+        Some(v) => format!("{name} {v}"),
+        None => name.to_string(),
+    };
+    let arrow = if kind.symmetric() { "<->" } else { "->" };
+    let both = format!(
+        "{} {arrow} {} ({kind})",
+        side(&from_project.name, anchored.from.as_ref()),
+        side(&to_project.name, anchored.to.as_ref())
+    );
+    match change {
+        db::Change::Added => println!("[{id}] {both}"),
+        _ => println!("[{id}] already recorded: {both}"),
+    }
+    Ok(())
+}
+
+fn link_list(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let links = match project {
+        Some(name) => {
+            let project = open_project(&db, name)?;
+            db.links_of(project.id)?
+        }
+        None => {
+            let mut all: Vec<link::Link> = Vec::new();
+            for project in db.projects()? {
+                for found in db.links_of(project.id)? {
+                    // Each link is found from both of its ends; keep the
+                    // first sighting so the list is of links, not of ends.
+                    if !all.iter().any(|seen| seen.id == found.id) {
+                        all.push(found);
+                    }
+                }
+            }
+            all.sort_by(|a, b| a.near.project.cmp(&b.near.project).then_with(|| a.id.cmp(&b.id)));
+            all
+        }
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&links)?);
+        return Ok(());
+    }
+    if links.is_empty() {
+        match project {
+            Some(name) => println!("{name} is tied to nothing in the record."),
+            None => println!("The record holds no links yet."),
+        }
+        println!("`rigger link add <project>[@version] <project>[@version]` records one.");
+        return Ok(());
+    }
+    for found in &links {
+        println!("{}", render_link(found));
+    }
+    Ok(())
+}
+
+/// One link on one line, read from the near end.
+fn render_link(found: &link::Link) -> String {
+    let side = |end: &link::End| match &end.version {
+        Some(version) => format!("{} {version}", end.project),
+        None => end.project.clone(),
+    };
+    let arrow = if found.kind.symmetric() { "<->" } else { "->" };
+    let note = found.note.as_deref().map(|n| format!("  {n}")).unwrap_or_default();
+    format!("[{}] {:<9} {} {arrow} {}{note}", found.id, found.kind, side(&found.near), side(&found.far))
+}
+
+fn link_remove(id: i64) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    match db.remove_link(id)? {
+        true => println!("Forgot link [{id}]"),
+        false => bail!("the record has no link [{id}]; `rigger link list` prints the ids"),
+    }
+    Ok(())
+}
+
+fn link_drift(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let parted = link::parted(&db.pairs()?);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&parted)?);
+        return Ok(());
+    }
+    if parted.is_empty() {
+        println!("Every pair in the record has both halves in step.");
+        return Ok(());
+    }
+    for item in &parted {
+        println!("{}", drift_line(item));
+    }
+    Ok(())
+}
+
+/// What a parted pair says, in one line.
+fn drift_line(item: &link::Parted) -> String {
+    fn version(end: &link::End) -> &str {
+        end.version.as_deref().unwrap_or("its half")
+    }
+    let note = item.note.as_deref().map(|n| format!(" — {n}")).unwrap_or_default();
+    match item.drift {
+        link::Drift::ShippedAlone => format!(
+            "{} {} shipped without {} {}{note}",
+            item.ahead.project,
+            version(&item.ahead),
+            item.behind.project,
+            version(&item.behind),
+        ),
+        link::Drift::RunAhead => format!(
+            "{} is {} ahead of {}, which is still at {}{note}",
+            item.ahead.project,
+            plural(item.versions.unwrap_or(0) as usize, "version", "versions"),
+            item.behind.project,
+            version(&item.behind),
+        ),
+    }
+}
+
 /// The questions waiting for the owner, gathered from every project.
 fn inbox(project: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
@@ -1728,6 +2096,16 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
     if let Some(name) = project {
         waiting.retain(|q| q.project == name);
     }
+    // A neighbour's order is not a question for the owner - nobody is being
+    // asked to decide anything - but it is the other thing that sits in a
+    // project waiting on someone else, and the inbox is where the owner
+    // looks for what is waiting. Kept as its own group rather than mixed in
+    // with the questions, because answering one and doing the other are not
+    // the same job.
+    let mut asked = db.all_asked_wishes()?;
+    if let Some(name) = project {
+        asked.retain(|a| a.project == name);
+    }
 
     if json {
         println!(
@@ -1735,12 +2113,13 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "waiting": waiting,
                 "shared": owner::shared_subjects(&waiting),
+                "asked_by_neighbours": asked,
             }))?
         );
         return Ok(());
     }
 
-    if waiting.is_empty() {
+    if waiting.is_empty() && asked.is_empty() {
         match project {
             Some(name) => println!("{name} is waiting on nothing."),
             None => println!("Nothing is waiting on you."),
@@ -1749,6 +2128,10 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
     }
 
     let projects: std::collections::BTreeSet<&str> = waiting.iter().map(|q| q.project.as_str()).collect();
+    if waiting.is_empty() {
+        print_asked(&asked, project.is_some());
+        return Ok(());
+    }
     match project {
         Some(_) => println!(
             "{}
@@ -1788,11 +2171,41 @@ Asked by several projects - one answer settles each group:"
             println!("  {} — {}", group.subject, group.projects.join(", "));
         }
     }
+    print_asked(&asked, project.is_some());
     println!(
         "
 Answer one with: rigger resolve <project> <id> \"<answer>\""
     );
     Ok(())
+}
+
+/// The orders neighbours have placed, as their own group.
+///
+/// These are not questions and the owner is not being asked to decide
+/// anything: they are work one product is waiting on another to do. They
+/// belong on this screen because it is where the owner looks for what is
+/// waiting - and apart from the questions because the two are answered in
+/// entirely different ways.
+fn print_asked(asked: &[db::AskedOf], one_project: bool) {
+    if asked.is_empty() {
+        return;
+    }
+    println!();
+    println!("Neighbours are asking for:");
+    let mut last: Option<&str> = None;
+    for wish in asked {
+        // Grouped by the project being asked, like the questions above, so
+        // that one product's orders read as one list.
+        let name = match (one_project, last == Some(wish.project.as_str())) {
+            (true, _) | (_, true) => String::new(),
+            _ => wish.project.clone(),
+        };
+        last = Some(&wish.project);
+        let first = wish.body.lines().next().unwrap_or("").trim();
+        println!("{name:<12} [{:>3}] {}  {} — {}", wish.id, wish.date, owner::subject(first), wish.asked_by);
+    }
+    println!();
+    println!("Sort one with: rigger resolve <project> <id>");
 }
 
 /// What moved lately, per project.
@@ -3347,6 +3760,10 @@ struct WeekFacts {
     overdue: Vec<calendar::Focus>,
     lapsed: Vec<calendar::Overdue>,
     signals: Vec<week::Raised>,
+    /// Pairs whose halves have parted company. Read here rather than on
+    /// demand because a pair belongs to no single project, and every screen
+    /// that asks one project at a time is the reason the drift went unseen.
+    parted: Vec<link::Parted>,
     release_day: week::ReleaseDay,
 }
 
@@ -3427,6 +3844,7 @@ fn week_facts(db: &Db, now: calendar::Week) -> Result<WeekFacts> {
         overdue,
         lapsed: calendar::lapsed(&rhythms, now),
         signals: week::signals(&standings, now),
+        parted: link::parted(&db.pairs()?),
         release_day: week::release_day(now, &all_versions),
     })
 }
@@ -3449,6 +3867,7 @@ fn show_next(week_arg: Option<&str>, json: bool) -> Result<()> {
         overdue,
         lapsed,
         signals,
+        parted,
         ..
     } = week_facts(&db, now)?;
 
@@ -3462,6 +3881,7 @@ fn show_next(week_arg: Option<&str>, json: bool) -> Result<()> {
                 "overdue": overdue,
                 "lapsed": lapsed,
                 "signals": signals,
+                "parted": parted,
             }))?
         );
         return Ok(());
@@ -3516,6 +3936,7 @@ fn show_next(week_arg: Option<&str>, json: bool) -> Result<()> {
     }
 
     print_signals(&signals);
+    print_parted(&parted);
     Ok(())
 }
 
@@ -3534,6 +3955,23 @@ fn signal_line(item: &week::Raised) -> String {
             Some(first) => format!("tier {} asks for more: started before {first} shipped anything", item.tier),
             None => format!("tier {} asks for more: started out of turn", item.tier),
         },
+    }
+}
+
+/// The pairs that have parted, under a heading of their own.
+///
+/// Not folded into the tier signals, though both are warnings: a tier
+/// signal is about one project going too slowly, and this is about two
+/// projects that stopped agreeing. The answer to one is a week of work;
+/// the answer to the other is usually a release of the half left behind.
+fn print_parted(parted: &[link::Parted]) {
+    if parted.is_empty() {
+        return;
+    }
+    println!();
+    println!("Pairs out of step");
+    for item in parted {
+        println!("  {}", drift_line(item));
     }
 }
 
@@ -3582,6 +4020,7 @@ fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
                 "shared": shared,
                 "lapsed": facts.lapsed,
                 "signals": facts.signals,
+                "parted": facts.parted,
             }))?
         );
         return Ok(());
@@ -3654,6 +4093,7 @@ fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
     }
 
     print_signals(&facts.signals);
+    print_parted(&facts.parted);
     Ok(())
 }
 
@@ -3759,6 +4199,11 @@ fn show_retro(cycle: bool, weeks: Option<u32>, to: Option<&str>, record: bool, j
     }
     let looked = retro::look_back(from, to, &versions, &projects);
     let summary = retro::summary(&looked);
+    // Read as the window's state, not as something that happened inside
+    // it: a pair parts by one half being released, and the release is
+    // already in the list above. What a look back adds is the question the
+    // list cannot ask - are they still parted now.
+    let parted = link::parted(&db.pairs()?);
 
     if json {
         println!(
@@ -3774,6 +4219,7 @@ fn show_retro(cycle: bool, weeks: Option<u32>, to: Option<&str>, record: bool, j
                 "slipped": looked.slipped(),
                 "unplanned": looked.unplanned(),
                 "planned_share": looked.planned_share(),
+                "parted": parted,
                 "summary": summary,
             }))?
         );
@@ -3845,6 +4291,8 @@ fn show_retro(cycle: bool, weeks: Option<u32>, to: Option<&str>, record: bool, j
             println!("  ... and {} more", slipped.len() - 10);
         }
     }
+
+    print_parted(&parted);
 
     if !looked.standings.is_empty() {
         println!();

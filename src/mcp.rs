@@ -226,9 +226,16 @@ fn tools() -> Vec<Value> {
             json!({ "project": project_arg() }),
             &["project"],
         ),
-        record(
-            "decision",
-            "Record a decision and the reason behind it. Reasons outlive the decision, so write why, not only what.",
+        tool(
+            "record_decision",
+            "Record a decision and the reason behind it. Reasons outlive the decision, so write why, not only what. Name the `principle` when the decision is one more instance of something this line already believes - `why_principle` then reads the whole thread.",
+            json!({
+                "project": project_arg(),
+                "task": task_arg(),
+                "text": text_arg("What happened, in full sentences"),
+                "principle": { "type": "string", "description": "The principle this stands on, in the words the record already uses; `principles` lists them" },
+            }),
+            &["text"],
         ),
         record(
             "finding",
@@ -277,9 +284,42 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "wish",
-            "Record something to sort into the plan later.",
-            json!({ "project": project_arg(), "text": text_arg("What you want, and why it would help") }),
+            "Record something to sort into the plan later. Give `from` when one project is asking another for something: the order then shows on the neighbour's packet and in the owner's inbox as theirs.",
+            json!({
+                "project": project_arg(),
+                "text": text_arg("What you want, and why it would help"),
+                "from": { "type": "string", "description": "The project asking, when a neighbour is placing the order" },
+            }),
             &["project", "text"],
+        ),
+        tool(
+            "principles",
+            "The principles the record stands on, with how often each has been invoked. Read this before naming one, so a decision joins a thread rather than starting a synonym of it.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "why_principle",
+            "Every decision across the line that stands on one principle, oldest first: how the line came to believe it, and what it has cost.",
+            json!({ "principle": { "type": "string", "description": "The name, as `principles` spells it" } }),
+            &["principle"],
+        ),
+        tool(
+            "link",
+            "Tie two projects together so the record can see the line as a graph. `pair` is two halves of one capability and neither ships alone; `consumer` is this project drawing on the other; `donor` is the other drawing on this one. Anchor a version on a side by writing it as `kasl@v1.13.0`. Only pairs are checked for drift - `week` and `retro` say when one half shipped without the other.",
+            json!({
+                "from": { "type": "string", "description": "Project on this side, or `project@version`" },
+                "to": { "type": "string", "description": "Project on the other side, or `project@version`" },
+                "kind": { "type": "string", "description": "pair, consumer or donor; pair when omitted" },
+                "note": { "type": "string", "description": "A sentence saying what the two share" },
+            }),
+            &["from", "to"],
+        ),
+        tool(
+            "links",
+            "What a project is tied to, read from its side: its pairs, what it draws on, what draws on it, and the orders its neighbours have placed.",
+            json!({ "project": project_arg() }),
+            &["project"],
         ),
         tool(
             "resolve",
@@ -534,6 +574,100 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 _ => format!("Closed task {task}: {title}"),
             })
         }
+        "principles" => {
+            let principles = db.principles()?;
+            if principles.is_empty() {
+                return Ok(
+                    "No decision names a principle yet. Name one on the next decision that is an instance of something this line already believes.".to_string(),
+                );
+            }
+            let mut out = String::new();
+            for (principle, count) in &principles {
+                out.push_str(&format!("{principle} ({count})\n"));
+            }
+            Ok(out)
+        }
+        "why_principle" => {
+            let Some(principle) = args.get("principle").and_then(Value::as_str) else {
+                bail!("this tool needs a `principle`; `principles` lists them");
+            };
+            let events = db.on_principle(principle)?;
+            if events.is_empty() {
+                let known = db.principles()?.into_iter().map(|(n, _)| n).collect::<Vec<_>>().join(", ");
+                // Far likelier a synonym than a new principle: the names
+                // are typed by hand, months apart, in two languages.
+                bail!("nothing stands on '{principle}'; the record knows {known}");
+            }
+            let mut out = format!("{principle}\n\n");
+            for event in &events {
+                let day = event.at.split('T').next().unwrap_or(&event.at);
+                out.push_str(&format!("{day} · {} · {}\n{}\n\n", event.project, event.kind, event.body));
+            }
+            Ok(out)
+        }
+        "link" => {
+            let side = |key: &str| -> Result<(String, Option<String>)> {
+                let Some(text) = args.get(key).and_then(Value::as_str) else {
+                    bail!("this tool needs `{key}`: a project, or `project@version`");
+                };
+                let (project, version) = crate::link_side(text);
+                Ok((project.to_string(), version.map(str::to_string)))
+            };
+            let (from_name, from_version) = side("from")?;
+            let (to_name, to_version) = side("to")?;
+            let kind = match args.get("kind").and_then(Value::as_str) {
+                Some(text) => {
+                    crate::link::Kind::parse(text).ok_or_else(|| anyhow::anyhow!("a link is a pair, a consumer or a donor; '{text}' is none of them"))?
+                }
+                None => crate::link::Kind::Pair,
+            };
+            let from = named_project(db, &from_name)?;
+            let to = named_project(db, &to_name)?;
+            if from.id == to.id {
+                bail!("a link joins two projects; {} is one", from.name);
+            }
+            let note = args.get("note").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+            let (id, change, anchored) = db.add_link(&crate::db::NewLink {
+                kind,
+                from_project: from.id,
+                from_version: from_version.as_deref(),
+                to_project: to.id,
+                to_version: to_version.as_deref(),
+                note,
+            })?;
+            let arrow = if kind.symmetric() { "<->" } else { "->" };
+            let side = |name: &str, version: Option<&String>| match version {
+                Some(v) => format!("{name} {v}"),
+                None => name.to_string(),
+            };
+            let both = format!(
+                "{} {arrow} {} ({kind})",
+                side(&from_name, anchored.from.as_ref()),
+                side(&to_name, anchored.to.as_ref())
+            );
+            Ok(match change {
+                crate::db::Change::Added => format!("[{id}] {both}"),
+                _ => format!("[{id}] already recorded: {both}"),
+            })
+        }
+        "links" => {
+            let project = project(db)?;
+            let links = db.links_of(project.id)?;
+            let asked = db.asked_wishes(project.id)?;
+            if links.is_empty() && asked.is_empty() {
+                return Ok(format!("{} is tied to nothing in the record.", project.name));
+            }
+            let mut out = String::new();
+            for found in &links {
+                out.push_str(&crate::render_link(found));
+                out.push('\n');
+            }
+            for wish in &asked {
+                let first = wish.body.lines().next().unwrap_or("").trim();
+                out.push_str(&format!("[{}] asks     {} — {}\n", wish.id, wish.asked_by, first));
+            }
+            Ok(out)
+        }
         _ => {
             let kind = match name {
                 "record_decision" => "decision",
@@ -560,14 +694,59 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                     _ => format!("Recorded a {kind} on {}.", card.key),
                 });
             }
+            // A principle belongs to a decision and an asker to a wish;
+            // both are read before the event is written so that a name
+            // that does not resolve refuses the whole call rather than
+            // leaving the event recorded and the tie silently missing.
+            let principle = match kind {
+                "decision" => args.get("principle").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()),
+                _ => None,
+            };
+            let asker = match kind {
+                "wish" => match args.get("from").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()) {
+                    Some(name) => Some(named_project(db, name)?),
+                    None => None,
+                },
+                _ => None,
+            };
+            if let Some(asker) = &asker
+                && asker.id == project.id
+            {
+                bail!("{} cannot be the neighbour asking itself for something", asker.name);
+            }
             db.record_event(project.id, kind, text, &crate::db::now(), "assistant")?;
-            Ok(match kind {
-                "next" => format!("The next session for {} starts from this line.", project.name),
-                "question" => format!("Asked the owner; it waits in {}'s packet until they answer.", project.name),
-                "wish" => format!("Recorded a wish for {}.", project.name),
-                _ => format!("Recorded a {kind} for {}.", project.name),
+            if let Some(id) = db.latest_event_id(project.id, kind)? {
+                if let Some(principle) = principle {
+                    db.name_principle(id, principle)?;
+                }
+                if let Some(asker) = &asker {
+                    db.name_asker(id, asker.id)?;
+                }
+            }
+            Ok(match (kind, &asker) {
+                ("next", _) => format!("The next session for {} starts from this line.", project.name),
+                ("question", _) => format!("Asked the owner; it waits in {}'s packet until they answer.", project.name),
+                ("wish", Some(asker)) => format!("Recorded a wish for {} from {}.", project.name, asker.name),
+                ("wish", None) => format!("Recorded a wish for {}.", project.name),
+                _ => match principle {
+                    Some(principle) => format!("Recorded a {kind} for {}, on the principle '{principle}'.", project.name),
+                    None => format!("Recorded a {kind} for {}.", project.name),
+                },
             })
         }
+    }
+}
+
+/// A project by the name a tool was given, refusing one the record does
+/// not have.
+///
+/// A name that resolves to nothing is a typo, not an empty answer: a link
+/// to a project that does not exist, or a wish from one, would be recorded
+/// against nothing and never fire.
+fn named_project(db: &Db, name: &str) -> Result<Project> {
+    match db.project_by_name(name)? {
+        Some(project) => Ok(project),
+        None => bail!("no project named '{name}'; the projects are listed by `rigger project list`"),
     }
 }
 
@@ -718,6 +897,10 @@ mod tests {
             "resolve",
             "close_task",
             "set_task_status",
+            "principles",
+            "why_principle",
+            "link",
+            "links",
         ] {
             assert!(names.contains(&promised.to_string()), "{promised} is missing from {names:?}");
         }
