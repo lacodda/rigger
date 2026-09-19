@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.21.0] - 2026-09-19
+
+### Bug Fixes
+- Read a workspace's description from the crate that ships
+
+### Documentation
+- Make the readme a shopfront
+- Use the line's license line
+- Show the project's screen and the registration on install
+
+### Features
+- Write one skill for the line instead of one per project
+- Search the documents as well as the events
+- Name what the budget refused, and the documents there are
+- Print the project's screen
+- Publish the line as a registry the record owns
+- Register the server and the hook while installing
+- Say whether the MCP server answers
+
+### Testing
+- Follow find's two lists and the columns of schema 23
+
 ## [0.20.0] - 2026-09-16
 
 ### Bug Fixes
@@ -13,6 +35,7 @@ All notable changes to this project are documented in this file.
 - Let a project state its gate, and run it into the record
 - Take the wishes file into the record and watch it afterwards
 - Read a questionnaire's answers into the record
+
 ## [0.19.0] - 2026-09-15
 
 ### Bug Fixes
@@ -29,10 +52,12 @@ All notable changes to this project are documented in this file.
 
 ### Testing
 - Give the editor stubs a script on disk instead of a quoted one-liner
+
 ## [0.18.0] - 2026-09-08
 
 ### Features
 - Task cards - find, make, open, link, write against and close
+
 ## [0.17.0] - 2026-09-08
 
 ### Breaking Changes
@@ -48,11 +73,13 @@ requires a root when the profile names one.
 
 ### Features
 - Profiles with a record of their own, and a vocabulary of task statuses
+
 ## [0.16.0] - 2026-09-08
 
 ### Features
 - Let a hub written from the record keep growing, and strike what a hand struck
 - Withdraw a struck question, and keep a tag-only version out of the changelog
+
 ## [0.15.0] - 2026-09-08
 
 ### Bug Fixes
@@ -70,6 +97,7 @@ requires a root when the profile names one.
 
 ### Testing
 - Compare the hub path the way the record spells it
+
 ## [0.14.0] - 2026-09-06
 
 ### Bug Fixes
@@ -92,6 +120,7 @@ requires a root when the profile names one.
 ### Features
 - Say when a hub writes one version up twice
 - Generate the README's state block from the record
+
 ## [0.13.0] - 2026-09-05
 
 ### Documentation
@@ -99,6 +128,7 @@ requires a root when the profile names one.
 
 ### Features
 - Make a sitting something the record knows
+
 ## [0.12.0] - 2026-09-05
 
 ### Documentation
@@ -106,6 +136,7 @@ requires a root when the profile names one.
 
 ### Features
 - Look back at a cycle and see what the plan was worth
+
 ## [0.11.0] - 2026-09-05
 
 ### Documentation
@@ -113,6 +144,7 @@ requires a root when the profile names one.
 
 ### Features
 - Give the owner a week to read
+
 ## [0.10.0] - 2026-09-04
 
 ### Documentation
@@ -120,6 +152,7 @@ requires a root when the profile names one.
 
 ### Features
 - Put the release calendar in the record
+
 ## [0.9.0] - 2026-09-04
 
 ### Documentation
@@ -127,6 +160,7 @@ requires a root when the profile names one.
 
 ### Features
 - Show the owner what waits and what moved
+
 ## [0.8.0] - 2026-09-04
 
 ### Documentation
@@ -134,6 +168,7 @@ requires a root when the profile names one.
 
 ### Features
 - Ask the record where and why
+
 ## [0.7.1] - 2026-09-04
 
 ### Documentation
@@ -141,6 +176,7 @@ requires a root when the profile names one.
 
 ### Features
 - Install rgr beside rigger
+
 ## [0.7.0] - 2026-09-04
 
 ### Documentation
@@ -148,6 +184,7 @@ requires a root when the profile names one.
 
 ### Features
 - Read changes out of commit messages
+
 ## [0.6.0] - 2026-09-04
 
 ### Documentation
@@ -155,6 +192,7 @@ requires a root when the profile names one.
 
 ### Features
 - Read tags and commits into facts
+
 ## [0.5.0] - 2026-09-04
 
 ### Documentation
@@ -162,6 +200,7 @@ requires a root when the profile names one.
 
 ### Features
 - Serve the record to an assistant over MCP
+
 ## [0.4.2] - 2026-09-04
 
 ### Bug Fixes
@@ -169,6 +208,7 @@ requires a root when the profile names one.
 
 ### Documentation
 - Changelog for v0.4.2
+
 ## [0.4.1] - 2026-09-04
 
 ### Bug Fixes
@@ -184,10 +224,12 @@ requires a root when the profile names one.
 ### Testing
 - Compare the assistant's directory by its tail
 - Read past the byte-order mark PowerShell writes
+
 ## [0.4.0] - 2026-09-04
 
 ### Features
 - Start a Claude Code session with the packet ready
+
 ## [0.3.0] - 2026-09-04
 
 ### CI
@@ -198,6 +240,7 @@ requires a root when the profile names one.
 
 ### Features
 - Print the context packet a session starts from
+
 ## [0.2.0] - 2026-09-04
 
 ### Bug Fixes
@@ -211,6 +254,7 @@ requires a root when the profile names one.
 
 ### Features
 - Import a notes hub into the record
+
 ## [0.1.0] - 2026-09-04
 
 ### CI
