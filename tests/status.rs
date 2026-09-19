@@ -133,6 +133,12 @@ fn an_open_task_from_before_reads_as_new() {
          ALTER TABLE tasks DROP COLUMN key; ALTER TABLE tasks DROP COLUMN aliases;
          ALTER TABLE tasks DROP COLUMN summary; ALTER TABLE tasks DROP COLUMN updated_at;
          ALTER TABLE projects DROP COLUMN gate;
+         ALTER TABLE projects DROP COLUMN on_session_end;
+         DROP INDEX projects_by_mark;
+         ALTER TABLE projects DROP COLUMN mark_code; ALTER TABLE projects DROP COLUMN accent;
+         ALTER TABLE projects DROP COLUMN accent2; ALTER TABLE projects DROP COLUMN form;
+         ALTER TABLE projects DROP COLUMN docs_url;
+         DROP TABLE documents_fts;
          DROP TABLE documents;
          PRAGMA user_version = 16;",
     )

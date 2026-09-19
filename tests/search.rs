@@ -282,7 +282,10 @@ fn both_commands_answer_as_json() {
 
     let found = output(data.path(), &["find", "second", "--json"]);
     let parsed: serde_json::Value = serde_json::from_str(&found).expect("find --json must be JSON");
-    assert!(parsed.as_array().is_some_and(|a| !a.is_empty()), "{found}");
+    // Two lists, because a search answers over two kinds of thing: what was
+    // recorded as it happened, and what was written down as a document.
+    assert!(parsed["events"].as_array().is_some_and(|a| !a.is_empty()), "{found}");
+    assert!(parsed["documents"].as_array().is_some(), "{found}");
 
     let why = output(data.path(), &["why", "proj", "v0.2.0", "--json"]);
     let parsed: serde_json::Value = serde_json::from_str(&why).expect("why --json must be JSON");

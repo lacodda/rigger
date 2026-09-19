@@ -186,7 +186,7 @@ fn every_run_is_kept_even_when_it_says_the_same_thing() {
 
     let out = rigger(data.path()).args(["find", "green", "--json"]).output().unwrap();
     let found: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let runs = found.as_array().map(|a| a.len()).unwrap_or(0);
+    let runs = found["events"].as_array().map(|a| a.len()).unwrap_or(0);
     assert_eq!(runs, 3, "each run is its own fact: {found}");
 }
 
