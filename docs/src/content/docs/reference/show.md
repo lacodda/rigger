@@ -29,6 +29,13 @@ Current stage: v0.3.0 · The screen
   > the documents on it
   x the commands table
 
+Paired with:
+  sample-server v0.3.0 (here: v0.3.0) — the machine report
+Draws on:
+  widgets
+Neighbours are asking for:
+  [88] A status colour that is not the accent — downstream
+
 Written down:
   vision    Vision of sample                   2026-09-12  rigger doc show sample vision
   rituals   Rituals of sample                  2026-09-15  rigger doc show sample rituals
@@ -48,6 +55,16 @@ So `show` has no budget and no event log. It replaces the hub's README as the su
 Only what the record knows is printed; a project with no tier has no tier line. The task marks are `x` done, `-` dropped, `>` active, `~` frozen or waiting, and a space for a task not started.
 
 Each document carries the command that opens it, so that knowing a vision exists and reading it are one step apart rather than two.
+
+## The neighbours
+
+Who a project stands beside, what it draws on, and what draws on it - printed from its [links](/rigger/reference/link/) rather than from prose. This is the half of a README that used to be written by hand in two hubs and went stale in both.
+
+The three kinds get three headings because they are three different facts: drawing on a product is not the same as standing beside it, and folding them into one list of neighbours would say it was.
+
+Under them, the wishes a neighbour has asked this project for, each with the id that sorts it and the name of who is waiting. Those are the same wishes the [packet](/rigger/reference/context/) carries and the [inbox](/rigger/reference/inbox/) gathers; here they are on the screen of the project being asked.
+
+A project tied to nothing prints no heading at all, rather than an empty one that reads as something gone missing.
 
 ## Related
 

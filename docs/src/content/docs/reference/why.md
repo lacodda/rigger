@@ -5,6 +5,8 @@ description: The decisions, findings and changes that led to a version.
 
 ```
 rigger why <PROJECT> <VERSION> [--json]
+rigger why [PROJECT] --principle <NAME> [--json]
+rigger why --principles [--json]
 ```
 
 Shows the work that went into one release: what was decided, what was learnt, what was tripped over, and what changed - everything recorded between the release before it and itself.
@@ -51,8 +53,39 @@ The number is matched by value, not by text, so `v1.9`, `1.9` and `v1.9.0` all f
 
 A version the record does not have is refused, with a pointer to what it does have.
 
+## A principle, across the line
+
+A version is one window on the record. A principle is another, cut the other way: every decision that stands on one thing this line believes, from every project, oldest first.
+
+```console
+$ rigger why --principle "no users, no compatibility"
+no users, no compatibility
+6 decisions across 5 projects
+
+2026-08-30 · sample
+  Broke the format outright rather than reading both.
+  ...
+```
+
+Read one project at a time, six such decisions look like six opinions. Read as one thread they are something the line learnt, with what it cost each time - which is what makes a principle arguable rather than a slogan.
+
+Naming a project alongside narrows it to that project's share.
+
+`--principles` prints the vocabulary: every name used, with how often.
+
+```console
+$ rigger why --principles
+no users, no compatibility  —  6 decisions
+measure the screen  —  3 decisions
+```
+
+A name nothing stands on is far likelier a misspelling than a new principle - these are typed by hand, months apart - so the answer lists the ones the record knows rather than an empty result.
+
+Decisions carry a principle when they are recorded: see [`note --principle`](/rigger/reference/note/).
+
 ## Related
 
+- [`note`](/rigger/reference/note/) - naming the principle a decision stands on.
 - [`find`](/rigger/reference/find/) - searching by word rather than by version.
 - [`sync`](/rigger/reference/sync/) - what supplies the tags this window is drawn from.
 - [`context`](/rigger/reference/context/) - the current stage and its open tasks.

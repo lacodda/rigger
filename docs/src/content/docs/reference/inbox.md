@@ -41,6 +41,19 @@ A question only one project asks is not a group, and neither are two questions i
 
 A hub's "waiting for the owner" section becomes questions when it is [imported](/rigger/reference/import/), and an assistant adds one with the `ask_owner` tool over [MCP](/rigger/reference/mcp/). Both land in the same queue.
 
+## What the neighbours are asking for
+
+Below the questions, the orders one product has placed with another - a [wish recorded with `--from`](/rigger/reference/note/):
+
+```console
+Neighbours are asking for:
+dowel        [88] 2026-09-18  A status colour that is not the accent — lyrid
+```
+
+These are not questions and nothing is being asked of you to decide: they are work one product is waiting on another to do. They are on this screen because it is where you look for what is waiting, and in a group of their own because answering a question and doing a piece of work are not the same job.
+
+One is taken off the list by [`rigger resolve`](/rigger/reference/resolve/), like any wish.
+
 ## Answering
 
 [`rigger resolve`](/rigger/reference/resolve/) takes a question off the queue, and the answer becomes a decision in the record:
@@ -58,3 +71,4 @@ Nothing is deleted - the question stays in the record as what was asked, and onl
 - [`resolve`](/rigger/reference/resolve/) - answering one.
 - [`digest`](/rigger/reference/digest/) - the other direction: what moved.
 - [`context`](/rigger/reference/context/) - the same questions, in a project's packet.
+- [`link`](/rigger/reference/link/) - the ties the neighbours' orders sit beside.

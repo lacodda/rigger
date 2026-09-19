@@ -38,6 +38,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger rules`](/rigger/reference/rules/) | v0.20.0 | How the work is done: the rituals of the line, and of one project |
 | [`rigger gate`](/rigger/reference/gate/) | v0.20.0 | Run the command that says a project is fit to commit, and record how it went |
 | [`rigger show`](/rigger/reference/show/) | v0.21.0 | The project's screen: what it is, where it stands, what it has written down |
+| [`rigger link`](/rigger/reference/link/) | v0.22.0 | Tie two projects together, and see when a pair has parted company |
 
 ## Common to all commands
 

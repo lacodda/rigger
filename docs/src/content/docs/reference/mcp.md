@@ -58,10 +58,20 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `task_find` | Finds the [card](/rigger/reference/task/) a line of text means, and says whether to take it, ask, or make a new one |
 | `task_context` | Where a card stands: what it is, where it is worked, everything written against it |
 | `record_plan` | A step of the plan of edits, against a card |
+| `principles` | The principles the record stands on, with how often each is invoked |
+| `why_principle` | Every decision across the line that stands on one principle |
+| `link` | Ties two projects together: a pair, a consumer or a donor |
+| `links` | What a project is tied to, and what its neighbours have asked it for |
 
 `doc_write` replaces the whole body of a document, so read it with `doc_show` first and send back the whole of it. What it is not told, it keeps: a rewrite without `kind` or `title` leaves both as they were, so a correction to the vision cannot silently retitle it or turn it into a research note. An empty body is refused - a document is removed with `rigger doc remove`, not by emptying it.
 
 This is what lets an assistant write a research note or fix a vision into the record rather than into a file somebody has to remember to import. See [`doc`](/rigger/reference/doc/).
+
+`record_decision` also takes a `principle`: the name of the thing this line already believes that the decision is one more instance of. Read `principles` before naming one, so that a decision joins a thread rather than starting a synonym of it; `why_principle` reads the whole thread back, across every project. See [`note`](/rigger/reference/note/) and [`why`](/rigger/reference/why/).
+
+`wish` takes a `from`, naming the project that is asking, when one product needs something of another. The order then shows on the neighbour's packet and in the owner's [inbox](/rigger/reference/inbox/) as theirs - it is still an ordinary wish, sorted by the same `resolve`.
+
+`link` states a tie between two products, anchoring a version on a side by writing it `kasl@v1.13.0`. Only pairs are checked for drift, and the drift is raised on the owner's own screens without anyone asking. See [`link`](/rigger/reference/link/).
 
 The recording tools - `record_decision`, `record_finding`, `record_pitfall`, `record_change`, `record_plan` and `set_next_step` - take a `task` instead of a `project`: the event is then written against that card, under the desk the cards live in.
 

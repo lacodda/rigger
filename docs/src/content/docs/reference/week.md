@@ -58,8 +58,24 @@ Tier B is measured by the last turn rather than the last tag - a commit or a not
 
 Tier C is the one rule about a pair rather than a clock: when two declared products have both been started and neither has shipped, the later start is named along with the one it should have waited for.
 
+## Pairs out of step
+
+A section of its own, after the tier signals, present only when there is something in it:
+
+```
+Pairs out of step
+  kasl v1.13.0 shipped without kasl-server v0.23.0 — the machine report
+```
+
+A tier signal is about one product going too slowly. This is about two that stopped agreeing - two halves of one capability where one has shipped and the other has not, or where one has released twice past where the pair was agreed while the other stood still. The answer to one is a week of work; the answer to the other is usually a release of the half left behind.
+
+It is here, and in [`next`](/rigger/reference/next/) and [`retro`](/rigger/reference/retro/), because a pair belongs to no single project. Every screen that reads one project at a time is the reason this kind of drift went unseen for weeks at a time.
+
+Pairs are recorded with [`rigger link`](/rigger/reference/link/), which also prints them on demand.
+
 ## Related
 
+- [`link`](/rigger/reference/link/) - recording the pairs this section checks.
 - [`release-day`](/rigger/reference/release-day/) - the queue in full.
 - [`next`](/rigger/reference/next/) - the same week with what is past its date.
 - [`inbox`](/rigger/reference/inbox/) - the questions themselves.
