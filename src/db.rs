@@ -398,6 +398,59 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE projects ADD COLUMN docs_url TEXT;
     CREATE UNIQUE INDEX projects_by_mark ON projects (mark_code) WHERE mark_code IS NOT NULL;
     ",
+    // v24: the line as a graph - what a project is tied to, what principle
+    // a decision stands on, and which neighbour asked for a wish.
+    //
+    // Eighteen projects were eighteen separate lists, and everything they
+    // share lived in prose: that kasl and kasl-server are two halves of one
+    // thing, that lyrid draws on dowel, that rhapsod's HTTPS door is what
+    // hilvan is waiting for. Prose cannot be checked, so the halves drifted
+    // and only a review caught it - twice.
+    //
+    // A table of its own rather than a column on `versions`. A pair is
+    // symmetric and a consumer is directed, and both are needed at once; a
+    // "paired version" column could hold one link per version and could not
+    // tell the two apart. Versions are optional on each side on purpose: a
+    // tie between products outlives any pair of versions, and demanding a
+    // version would mean inventing one.
+    //
+    // `CHECK` rather than a check in Rust: a kind the schema refuses is a
+    // kind that cannot be written by a careless caller, and this table is
+    // written by the CLI, by MCP and by the import.
+    "
+    CREATE TABLE links (
+        id             INTEGER PRIMARY KEY,
+        kind           TEXT NOT NULL CHECK (kind IN ('pair', 'consumer', 'donor')),
+        from_project   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        from_version   INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+        to_project     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        to_version     INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+        note           TEXT,
+        created_at     TEXT NOT NULL,
+        CHECK (from_project <> to_project)
+    );
+    CREATE INDEX links_by_from ON links (from_project);
+    CREATE INDEX links_by_to ON links (to_project);
+    -- One link per pair of ends. A version anchor is part of the identity:
+    -- kasl v1.12 <-> kasl-server v0.22 and kasl v1.13 <-> kasl-server v0.23
+    -- are two links, not one rewritten. `COALESCE` because a NULL never
+    -- equals a NULL, and without it the unversioned tie could be recorded
+    -- as many times as it was mentioned.
+    CREATE UNIQUE INDEX links_once ON links (
+        kind, from_project, COALESCE(from_version, -1), to_project, COALESCE(to_version, -1)
+    );
+    -- The principle a decision stands on, by name. A column rather than a
+    -- table of its own: a principle has no properties beyond its name, and
+    -- the vocabulary is the set of names already used - which is what makes
+    -- it the profile's own dictionary rather than a list someone maintains.
+    ALTER TABLE events ADD COLUMN principle TEXT;
+    CREATE INDEX events_by_principle ON events (principle) WHERE principle IS NOT NULL;
+    -- The neighbour who asked for a wish. A wish from a neighbour is still a
+    -- wish - same table, same `resolve`, same place in the plan - so this is
+    -- a field on it rather than a kind of its own, which would have doubled
+    -- every query that already reads wishes.
+    ALTER TABLE events ADD COLUMN asked_by INTEGER REFERENCES projects(id) ON DELETE SET NULL;
+    ",
 ];
 
 /// The place a desk keeps its cards: a project the record keeps for
@@ -656,6 +709,65 @@ pub struct DocLine {
 }
 
 /// What the record knows about one version.
+/// What `link` is asked to record.
+///
+/// A struct rather than seven arguments: the two projects and their two
+/// versions are the same two types in the same order, and a call that
+/// swapped a pair of them would compile.
+pub struct NewLink<'a> {
+    pub kind: crate::link::Kind,
+    pub from_project: i64,
+    pub from_version: Option<&'a str>,
+    pub to_project: i64,
+    pub to_version: Option<&'a str>,
+    pub note: Option<&'a str>,
+}
+
+/// An event standing on a named principle, with the project it came from.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrincipleEvent {
+    pub project: String,
+    pub kind: String,
+    pub at: String,
+    pub body: String,
+    /// The version it was recorded against, when it was recorded against one.
+    pub version: Option<String>,
+}
+
+/// The versions a link was anchored to, as the record spells them.
+pub struct Anchored {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+/// A link as its row comes back, with the ids the distance is counted from.
+struct LinkRow {
+    link: crate::link::Link,
+    near_project: i64,
+    near_version: Option<i64>,
+    far_project: i64,
+    far_version: Option<i64>,
+}
+
+/// An open wish a neighbour asked for.
+#[derive(Debug, Clone, Serialize)]
+pub struct Asked {
+    pub id: i64,
+    pub body: String,
+    pub asked_by: String,
+}
+
+/// The same, read across the line, so it carries who it was asked of.
+#[derive(Debug, Clone, Serialize)]
+pub struct AskedOf {
+    pub id: i64,
+    pub body: String,
+    pub asked_by: String,
+    /// The project being asked.
+    pub project: String,
+    pub date: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct VersionFacts {
     pub name: String,
@@ -3076,6 +3188,372 @@ impl Db {
             events: count("events")?,
         })
     }
+
+    /// Ties two projects together, optionally anchoring a version on each
+    /// side.
+    ///
+    /// Recording the same link twice is not an error: the unique index says
+    /// a link exists once, and a session that states a tie it already stated
+    /// should be told nothing happened rather than made to check first.
+    pub fn add_link(&self, link: &NewLink<'_>) -> Result<(i64, Change, Anchored)> {
+        let from_version = self.version_id(link.from_project, link.from_version)?;
+        let to_version = self.version_id(link.to_project, link.to_version)?;
+        // What was anchored, as the record spells it. A version is matched
+        // by value, so the words typed are not always the words recorded,
+        // and a confirmation that echoed the typing would hide exactly the
+        // disagreement between hubs that the matching exists to absorb.
+        let anchored = Anchored {
+            from: self.version_name(from_version)?,
+            to: self.version_name(to_version)?,
+        };
+        let seen: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM links WHERE kind = ?1 AND from_project = ?2 AND COALESCE(from_version, -1) = COALESCE(?3, -1) \
+                 AND to_project = ?4 AND COALESCE(to_version, -1) = COALESCE(?5, -1)",
+                params![link.kind.as_str(), link.from_project, from_version, link.to_project, to_version],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = seen {
+            // A note added to a link that was recorded bare is the one
+            // thing worth changing in place: the tie is the same tie, and
+            // refusing the sentence would send it to a second row.
+            if link.note.is_some() {
+                self.conn
+                    .execute("UPDATE links SET note = ?1 WHERE id = ?2 AND note IS NULL", params![link.note, id])?;
+            }
+            return Ok((id, Change::Unchanged, anchored));
+        }
+        self.conn.execute(
+            "INSERT INTO links (kind, from_project, from_version, to_project, to_version, note, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                link.kind.as_str(),
+                link.from_project,
+                from_version,
+                link.to_project,
+                to_version,
+                link.note,
+                now()
+            ],
+        )?;
+        Ok((self.conn.last_insert_rowid(), Change::Added, anchored))
+    }
+
+    /// The name a version is recorded under, for an id that may be absent.
+    fn version_name(&self, version_id: Option<i64>) -> Result<Option<String>> {
+        let Some(id) = version_id else {
+            return Ok(None);
+        };
+        Ok(self.conn.query_row("SELECT name FROM versions WHERE id = ?1", [id], |r| r.get(0)).optional()?)
+    }
+
+    /// Removes a link by its id, saying whether there was one.
+    pub fn remove_link(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM links WHERE id = ?1", [id])? > 0)
+    }
+
+    /// The id of a named version of a project, refusing a name the project
+    /// does not have.
+    ///
+    /// A typo in a version is the likeliest mistake at this door, and a
+    /// link silently anchored to nothing would be a link that never drifts
+    /// - a warning that can never fire is worse than no warning.
+    fn version_id(&self, project_id: i64, version: Option<&str>) -> Result<Option<i64>> {
+        let Some(name) = version else {
+            return Ok(None);
+        };
+        // Matched by value rather than by text, the way `why` already reads
+        // a version: the hubs of this line do not agree on how to spell one,
+        // and kasl writes `v1.13` where kasl-server writes `v0.23.0`. A door
+        // that insisted on the text would make anchoring a pair a matter of
+        // remembering which of two products spells it which way.
+        let wanted = version_order(name);
+        let mut stmt = self.conn.prepare("SELECT id, name FROM versions WHERE project_id = ?1")?;
+        let rows = stmt.query_map([project_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut found = None;
+        for row in rows {
+            let (id, spelt) = row?;
+            if version_order(&spelt) == wanted {
+                // An exact spelling wins over a match by value, so a project
+                // holding both `v1.13` and `v1.13.0` anchors to the one that
+                // was actually asked for.
+                if spelt == name {
+                    return Ok(Some(id));
+                }
+                found = found.or(Some(id));
+            }
+        }
+        match found {
+            Some(id) => Ok(Some(id)),
+            None => {
+                let project: String = self.conn.query_row("SELECT name FROM projects WHERE id = ?1", [project_id], |r| r.get(0))?;
+                bail!("{project} has no version {name} in the record; `rigger show {project}` lists what it has")
+            }
+        }
+    }
+
+    /// Every link one project has, read from that project's side.
+    ///
+    /// The row is written once and matched from either column, so a pair
+    /// recorded by the neighbour reads here the same way round as one
+    /// recorded here. A directed kind is turned about when it is found in
+    /// the far column: what the other end recorded as a consumer is a donor
+    /// seen from this side.
+    pub fn links_of(&self, project_id: i64) -> Result<Vec<crate::link::Link>> {
+        let sql = "
+            SELECT l.id, l.kind, l.note,
+                   np.name, nv.name, nv.shipped_at IS NOT NULL,
+                   fp.name, fv.name, fv.shipped_at IS NOT NULL,
+                   l.from_project = ?1
+              FROM links l
+              JOIN projects np ON np.id = CASE WHEN l.from_project = ?1 THEN l.from_project ELSE l.to_project END
+              JOIN projects fp ON fp.id = CASE WHEN l.from_project = ?1 THEN l.to_project ELSE l.from_project END
+         LEFT JOIN versions nv ON nv.id = CASE WHEN l.from_project = ?1 THEN l.from_version ELSE l.to_version END
+         LEFT JOIN versions fv ON fv.id = CASE WHEN l.from_project = ?1 THEN l.to_version ELSE l.from_version END
+             WHERE l.from_project = ?1 OR l.to_project = ?1
+          ORDER BY l.kind, fp.name, l.id";
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([project_id], |row| {
+            let kind: String = row.get(1)?;
+            let near_side: bool = row.get(9)?;
+            let kind = crate::link::Kind::parse(&kind).unwrap_or(crate::link::Kind::Pair);
+            Ok(crate::link::Link {
+                id: row.get(0)?,
+                kind: if near_side { kind } else { kind.flipped() },
+                note: row.get(2)?,
+                near: end_from(row, 3, 4, 5)?,
+                far: end_from(row, 6, 7, 8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Every link of the record, each read from the side it was recorded
+    /// from, with the distance each end has travelled past its anchor.
+    ///
+    /// The distance is what tells a pair being built from a pair forgotten:
+    /// an anchored version that is still to come, with three shipped
+    /// versions past it, is an end that moved on without its other half.
+    pub fn pairs(&self) -> Result<Vec<crate::link::Pair>> {
+        let sql = "
+            SELECT l.id, l.kind, l.note,
+                   fp.name, fv.name, fv.shipped_at IS NOT NULL,
+                   tp.name, tv.name, tv.shipped_at IS NOT NULL,
+                   l.from_project, l.to_project, fv.id, tv.id
+              FROM links l
+              JOIN projects fp ON fp.id = l.from_project
+              JOIN projects tp ON tp.id = l.to_project
+         LEFT JOIN versions fv ON fv.id = l.from_version
+         LEFT JOIN versions tv ON tv.id = l.to_version
+          ORDER BY l.id";
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows: Vec<LinkRow> = stmt
+            .query_map([], |row| {
+                let kind: String = row.get(1)?;
+                Ok(LinkRow {
+                    link: crate::link::Link {
+                        id: row.get(0)?,
+                        kind: crate::link::Kind::parse(&kind).unwrap_or(crate::link::Kind::Pair),
+                        note: row.get(2)?,
+                        near: end_from(row, 3, 4, 5)?,
+                        far: end_from(row, 6, 7, 8)?,
+                    },
+                    near_project: row.get(9)?,
+                    near_version: row.get(11)?,
+                    far_project: row.get(10)?,
+                    far_version: row.get(12)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // The distance is counted after the rows are read rather than in
+        // the closure: `shipped_past` prepares a statement of its own, and
+        // a connection cannot be borrowed again while one is being stepped.
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(crate::link::Pair {
+                near_ahead: self.shipped_past(row.near_project, row.near_version)?,
+                far_ahead: self.shipped_past(row.far_project, row.far_version)?,
+                link: row.link,
+            });
+        }
+        Ok(out)
+    }
+
+    /// How many versions a project has tagged that sort above the anchored
+    /// one, when the anchored one is itself still to come.
+    ///
+    /// Zero for an anchor that has shipped: the question "how far has this
+    /// end run ahead of where the pair was agreed" only makes sense while
+    /// the agreed version is still ahead of the project, and counting past
+    /// a shipped anchor would report every pair that ever worked.
+    fn shipped_past(&self, project_id: i64, version_id: Option<i64>) -> Result<u32> {
+        let Some(version_id) = version_id else {
+            return Ok(0);
+        };
+        let anchored: Option<(String, Option<String>)> = self
+            .conn
+            .query_row("SELECT name, shipped_at FROM versions WHERE id = ?1", [version_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        let Some((name, shipped_at)) = anchored else {
+            return Ok(0);
+        };
+        if shipped_at.is_some() {
+            return Ok(0);
+        }
+        // Compared as numbers rather than as text: `v0.10.0` sorts below
+        // `v0.9.0` as a string, which would have made the busiest projects
+        // of this line look like the ones standing still.
+        let anchor = version_order(&name);
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL")?;
+        let names = stmt.query_map([project_id], |r| r.get::<_, String>(0))?;
+        let mut past = 0;
+        for shipped in names {
+            if version_order(&shipped?) > anchor {
+                past += 1;
+            }
+        }
+        Ok(past)
+    }
+
+    /// The principles a profile has used, each with how often.
+    ///
+    /// The vocabulary is the set of names already written down rather than
+    /// a list someone keeps: a principle has no properties beyond its name,
+    /// and a list to maintain is a list that goes stale.
+    pub fn principles(&self) -> Result<Vec<(String, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT principle, COUNT(*) FROM events WHERE principle IS NOT NULL \
+             GROUP BY principle ORDER BY COUNT(*) DESC, principle",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.unsigned_abs())))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Names a principle on the most recent event of a project, which is
+    /// the one just recorded.
+    ///
+    /// Written as a second statement rather than a parameter of
+    /// `record_event` because an event that was already there gets no
+    /// second principle: a re-imported hub would otherwise relabel a
+    /// decision made months ago with whatever the current session believes.
+    pub fn name_principle(&self, event_id: i64, principle: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE events SET principle = ?1 WHERE id = ?2", params![principle, event_id])?;
+        Ok(())
+    }
+
+    /// The id of the event just recorded by this project, of this kind.
+    pub fn latest_event_id(&self, project_id: i64, kind: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM events WHERE project_id = ?1 AND kind = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![project_id, kind],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Every event standing on one principle, across every project.
+    ///
+    /// Ordered oldest first: a principle is read as the story of how it
+    /// came to be believed, and a story is read forwards.
+    pub fn on_principle(&self, principle: &str) -> Result<Vec<PrincipleEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.name, e.kind, e.created_at, e.body, v.name \
+               FROM events e \
+               JOIN projects p ON p.id = e.project_id \
+          LEFT JOIN versions v ON v.id = e.version_id \
+              WHERE e.principle = ?1 COLLATE NOCASE \
+           ORDER BY e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([principle], |r| {
+            Ok(PrincipleEvent {
+                project: r.get(0)?,
+                kind: r.get(1)?,
+                at: r.get(2)?,
+                body: r.get(3)?,
+                version: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Records which neighbour asked for a wish that was just recorded.
+    pub fn name_asker(&self, event_id: i64, asked_by: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE events SET asked_by = ?1 WHERE id = ?2", params![asked_by, event_id])?;
+        Ok(())
+    }
+
+    /// Every open wish of the record that a neighbour asked for, with the
+    /// project it was asked of.
+    ///
+    /// One query rather than one per project: the inbox is read across the
+    /// whole line, and eighteen round trips to answer one screen is how a
+    /// screen becomes slow enough that it stops being opened.
+    pub fn all_asked_wishes(&self) -> Result<Vec<AskedOf>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.body, asker.name, target.name, substr(e.created_at, 1, 10) FROM events e \
+               JOIN projects asker ON asker.id = e.asked_by \
+               JOIN projects target ON target.id = e.project_id \
+              WHERE e.kind = 'wish' \
+           ORDER BY target.name, e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(AskedOf {
+                id: r.get(0)?,
+                body: r.get(1)?,
+                asked_by: r.get(2)?,
+                project: r.get(3)?,
+                date: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The open wishes of a project that a neighbour asked for.
+    ///
+    /// A neighbour's wish is still a wish - the same row, the same
+    /// `resolve`, the same place in the plan - so this is a reading of the
+    /// wishes rather than a second list beside them.
+    pub fn asked_wishes(&self, project_id: i64) -> Result<Vec<Asked>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.body, p.name FROM events e \
+               JOIN projects p ON p.id = e.asked_by \
+              WHERE e.project_id = ?1 AND e.kind = 'wish' \
+           ORDER BY e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(Asked {
+                id: r.get(0)?,
+                body: r.get(1)?,
+                asked_by: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+/// One end of a link, read out of three columns of a joined row.
+fn end_from(row: &rusqlite::Row, project: usize, version: usize, shipped: usize) -> rusqlite::Result<crate::link::End> {
+    let version: Option<String> = row.get(version)?;
+    Ok(crate::link::End {
+        project: row.get(project)?,
+        // The flag is only meaningful when a version is anchored: SQLite
+        // answers `shipped_at IS NOT NULL` with a false for a row that the
+        // outer join did not find, and a false there reads as "not shipped
+        // yet" rather than "there is nothing here".
+        shipped: version.as_ref().map(|_| row.get(shipped)).transpose()?,
+        version,
+    })
 }
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {

@@ -140,6 +140,9 @@ fn an_open_task_from_before_reads_as_new() {
          ALTER TABLE projects DROP COLUMN docs_url;
          DROP TABLE documents_fts;
          DROP TABLE documents;
+         DROP INDEX events_by_principle;
+         ALTER TABLE events DROP COLUMN principle; ALTER TABLE events DROP COLUMN asked_by;
+         DROP TABLE links;
          PRAGMA user_version = 16;",
     )
     .unwrap();
