@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.22.0] - 2026-09-19
+
+### Documentation
+- The links of the line, the principles, and who is asking
+
+### Features
+- Record what ties two projects together
+- Print the neighbours from the links, not from prose
+- Name the principle a decision stands on, and who asks
+
 ## [0.21.0] - 2026-09-19
 
 ### Bug Fixes
