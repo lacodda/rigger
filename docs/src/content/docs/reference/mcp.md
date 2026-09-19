@@ -18,6 +18,20 @@ $ claude mcp add rigger -- rigger mcp
 Added stdio MCP server rigger with command: rigger mcp to local config
 ```
 
+The installer runs this for you, along with adding the [`Stop` hook](/rigger/reference/session/) that closes a sitting. It is skipped when the assistant is not on the PATH, and never fails the install - registration that is tidy is worth less than an install that works. `RIGGER_NO_REGISTER=1` opts out.
+
+In Git Bash the command needs `MSYS_NO_PATHCONV=1` in front of it: otherwise the shell rewrites the bare `--` separator into a Windows path and the server ends up registered under the name of a directory. The installer does this already.
+
+[`doctor`](/rigger/reference/doctor/) says whether the server answers:
+
+```console
+$ rigger doctor
+...
+mcp:       answers - protocol 2025-06-18, 18 tools, 1 prompt
+```
+
+It asks the server rather than starting a process and speaking the protocol down a pipe. "Does the server answer" is a question about this code; a subprocess would test the shell, the PATH and the binary on disk instead - three things that can be wrong while the server is fine, and one, a stale binary earlier in the PATH, that would make a broken install look healthy.
+
 The server needs the database, so run [`rigger init`](/rigger/reference/init/) first; without one it exits saying so rather than serving an empty record.
 
 Anything the server writes on stdout is a protocol message, so a diagnostic never goes there. If a client reports the server as broken, its stderr is where the reason is.

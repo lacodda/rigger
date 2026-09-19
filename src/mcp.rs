@@ -71,6 +71,45 @@ pub fn serve() -> Result<()> {
     }
 }
 
+/// What the server says about itself when asked whether it is there.
+///
+/// `doctor` asks this rather than starting a process and speaking the
+/// protocol down a pipe. The question "does the server answer" is about
+/// this code, and a subprocess would test the shell, the PATH and the
+/// binary on disk instead - three things that can be wrong while the
+/// server is perfectly fine, and one - a stale binary earlier in PATH -
+/// that would make a broken install look healthy.
+pub fn self_check(db: &Db) -> Result<Check> {
+    let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+    let Some(response) = handle(db, &request) else {
+        bail!("the server returned nothing to a request that requires an answer");
+    };
+    if let Some(error) = response.get("error") {
+        bail!("the server answered with an error: {error}");
+    }
+    let tools = response
+        .get("result")
+        .and_then(|r| r.get("tools"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    Ok(Check {
+        protocol: PROTOCOL_VERSION,
+        version: env!("CARGO_PKG_VERSION"),
+        tools,
+        prompts: prompts().len(),
+    })
+}
+
+/// What `doctor` prints about the server.
+#[derive(Debug, serde::Serialize)]
+pub struct Check {
+    pub protocol: &'static str,
+    pub version: &'static str,
+    pub tools: usize,
+    pub prompts: usize,
+}
+
 /// Answers one message, or `None` when it is a notification.
 fn handle(db: &Db, request: &Value) -> Option<Value> {
     let id = request.get("id").cloned();
