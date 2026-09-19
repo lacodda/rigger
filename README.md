@@ -77,11 +77,37 @@ $ rigger open sample
 Starting claude in C:\dev\sample with the packet for sample
 ```
 
-Connect the MCP server instead, and the assistant reads the same packet and writes back to the record as it works - decisions, findings and pitfalls become events, not lines in a transcript nobody opens again:
+The MCP server is how the assistant reads that packet and writes back to the record as it works - decisions, findings and pitfalls become events, not lines in a transcript nobody opens again. The installer registers it, along with the hook that closes a sitting when the assistant stops:
 
 ```console
-$ claude mcp add rigger -- rigger mcp
-Added stdio MCP server rigger with command: rigger mcp to local config
+$ irm https://raw.githubusercontent.com/lacodda/rigger/main/tools/install.ps1 | iex
+...
+Registered the rigger MCP server with claude.
+Added the Stop hook: a sitting now closes itself.
+```
+
+And for you, rather than for the assistant, the project's own screen - what it is, where it stands, what it has written down:
+
+```console
+$ rigger show sample
+sample
+A sample product
+
+path       C:\dev\sample
+gate       cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
+
+Last shipped v0.2.0 on 2026-09-03, 2 commits since
+1 versions planned, 2 tasks open
+
+Current stage: v0.3.0 · Search
+  > full-text index
+    a query language
+
+Written down:
+  vision    Vision of sample                   2026-09-12  rigger doc show sample vision
+
+Next step
+  Ship the importer next.
 ```
 
 What actually shipped is not taken on trust. `sync` reads the repository's tags and commits in-process and writes what they prove; where the plan says a version shipped and no tag agrees, the disagreement is reported rather than corrected:
