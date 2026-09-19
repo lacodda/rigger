@@ -63,22 +63,17 @@ fn git_config(root: &Path) -> Option<String> {
 /// guessed when neither says anything.
 pub fn detect_about(root: &Path) -> Option<String> {
     if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
-        let mut in_package = false;
-        for line in text.lines() {
-            let line = line.trim();
-            if line.starts_with('[') {
-                in_package = line == "[package]";
-                continue;
-            }
-            if in_package
-                && let Some((key, value)) = line.split_once('=')
-                && key.trim() == "description"
-            {
-                let value = value.trim().trim_matches('"').trim();
-                if !value.is_empty() {
-                    return Some(value.to_string());
-                }
-            }
+        if let Some(about) = package_description(&text) {
+            return Some(about);
+        }
+        // A workspace root has no `[package]` of its own, and the product's
+        // description lives in one of its members. Reading only the root
+        // gave five projects of this line no description at all - in the
+        // skill an assistant reads, in the public registry, and on the
+        // project's own screen - and nothing said so, because a project
+        // genuinely without a description looks exactly the same.
+        if let Some(about) = workspace_description(root, &text) {
+            return Some(about);
         }
     }
     if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
@@ -91,9 +86,207 @@ pub fn detect_about(root: &Path) -> Option<String> {
     None
 }
 
+/// The `description` of a manifest's own `[package]`, if it states one.
+fn package_description(text: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+            continue;
+        }
+        if in_package
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "description"
+        {
+            let value = value.trim().trim_matches('"').trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The description of the member that is the product.
+///
+/// A workspace splits a product into crates, and only one of them is the
+/// product - the rest are the library it is built on and the plugins it
+/// loads. Their descriptions describe those parts, so picking the wrong
+/// member does not say "no description": it says something confidently
+/// wrong. sefy came back as "Core library for sefy", which is true of the
+/// crate and false of the product.
+///
+/// So the member is chosen, in order: the one named after the project,
+/// then the one named `<project>-cli`, which is how this line names the
+/// crate that ships. Only if neither is there does it fall back to the
+/// first member that describes itself - a guess, but a guess in a
+/// workspace that has not said which crate is the product.
+fn workspace_description(root: &Path, text: &str) -> Option<String> {
+    let members = workspace_members(text);
+    if members.is_empty() {
+        return None;
+    }
+    let name = root.file_name()?.to_string_lossy().to_string();
+    let described = |member: &String| -> Option<String> {
+        let text = std::fs::read_to_string(root.join(member).join("Cargo.toml")).ok()?;
+        package_description(&text)
+    };
+    let basename = |member: &String| member.rsplit(['/', '\\']).next().unwrap_or(member).to_string();
+    for wanted in [name.clone(), format!("{name}-cli")] {
+        if let Some(about) = members.iter().find(|m| basename(m) == wanted).and_then(&described) {
+            return Some(about);
+        }
+    }
+    members.iter().find_map(&described)
+}
+
+/// The paths a `[workspace]` lists as members.
+///
+/// Read by hand rather than with a TOML parser, as the rest of this module
+/// is: the list is written on one line or over many, and both forms are in
+/// this line's repositories.
+fn workspace_members(text: &str) -> Vec<String> {
+    let mut members = Vec::new();
+    let mut in_workspace = false;
+    let mut in_list = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && !in_list {
+            in_workspace = line == "[workspace]";
+            continue;
+        }
+        if !in_workspace {
+            continue;
+        }
+        let rest = match line.split_once('=') {
+            Some((key, rest)) if key.trim() == "members" => {
+                in_list = true;
+                rest.trim()
+            }
+            _ if in_list => line,
+            _ => continue,
+        };
+        for piece in rest.trim_start_matches('[').trim_end_matches(']').split(',') {
+            let piece = piece.trim().trim_matches('"').trim();
+            if !piece.is_empty() {
+                members.push(piece.to_string());
+            }
+        }
+        if rest.contains(']') {
+            in_list = false;
+        }
+    }
+    members
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Five projects of this line are workspaces whose root states no
+    /// description, and every one came back as "a project recorded in
+    /// rigger". Nothing said so, because a project genuinely without a
+    /// description looks the same.
+    #[test]
+    fn a_workspace_is_described_by_the_member_that_is_the_product() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("nooma");
+        std::fs::create_dir_all(root.join("crates").join("nooma")).unwrap();
+        std::fs::create_dir_all(root.join("crates").join("nooma-core")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/nooma\", \"crates/nooma-core\"]\nresolver = \"3\"\n\n[workspace.package]\nversion = \"0.2.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("nooma").join("Cargo.toml"),
+            "[package]\nname = \"nooma\"\ndescription = \"Local semantic search\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("nooma-core").join("Cargo.toml"),
+            "[package]\nname = \"nooma-core\"\ndescription = \"The library behind it\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(detect_about(&root).as_deref(), Some("Local semantic search"));
+    }
+
+    /// The crate that ships wins over the library it is built on, however
+    /// the list is ordered - and the list is read whether it was written
+    /// on one line or over many, both of which are in this line's
+    /// repositories.
+    ///
+    /// Picking the wrong member is worse than picking none: sefy came back
+    /// as "Core library for sefy", which is true of the crate and false of
+    /// the product, and reads as an answer rather than as a gap.
+    #[test]
+    fn the_crate_that_ships_wins_over_the_library_it_sits_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sefy");
+        for member in ["sefy-core", "sefy-cli"] {
+            std::fs::create_dir_all(root.join("crates").join(member)).unwrap();
+        }
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\n    \"crates/sefy-core\",\n    \"crates/sefy-cli\",\n]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("sefy-core").join("Cargo.toml"),
+            "[package]\nname = \"sefy-core\"\ndescription = \"Core library for sefy\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("sefy-cli").join("Cargo.toml"),
+            "[package]\nname = \"sefy-cli\"\ndescription = \"An inconspicuous encrypted store\"\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("An inconspicuous encrypted store"));
+
+        // And a member named exactly after the project outranks even that.
+        let named = dir.path().join("nooma");
+        for member in ["nooma-cli", "nooma"] {
+            std::fs::create_dir_all(named.join("crates").join(member)).unwrap();
+        }
+        std::fs::write(named.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/nooma-cli\", \"crates/nooma\"]\n").unwrap();
+        std::fs::write(
+            named.join("crates").join("nooma-cli").join("Cargo.toml"),
+            "[package]\nname = \"nooma-cli\"\ndescription = \"The wrapper\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            named.join("crates").join("nooma").join("Cargo.toml"),
+            "[package]\nname = \"nooma\"\ndescription = \"The product\"\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&named).as_deref(), Some("The product"));
+    }
+
+    /// A workspace whose product is named otherwise still says something:
+    /// the one member that describes itself is the answer.
+    #[test]
+    fn a_workspace_with_one_described_member_means_that_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("austeris");
+        std::fs::create_dir_all(root.join("crates").join("api")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/api\"]\n").unwrap();
+        std::fs::write(
+            root.join("crates").join("api").join("Cargo.toml"),
+            "[package]\nname = \"api\"\ndescription = \"Household bookkeeping\"\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("Household bookkeeping"));
+
+        // A workspace whose members say nothing is still nothing, rather
+        // than an error or an invented line.
+        let bare = dir.path().join("bare");
+        std::fs::create_dir_all(bare.join("crates").join("x")).unwrap();
+        std::fs::write(bare.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/x\"]\n").unwrap();
+        std::fs::write(bare.join("crates").join("x").join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        assert_eq!(detect_about(&bare), None);
+    }
 
     #[test]
     fn about_comes_from_the_package_section_only() {
