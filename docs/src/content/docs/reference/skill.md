@@ -5,7 +5,9 @@ description: Write a thin project skill from a template and the record.
 
 ```
 rigger skill <PROJECT> [--install] [--dir <DIR>] [--replace] [--template <FILE>]
+rigger skill --line [--install] [--dir <DIR>] [--replace] [--template <FILE>]
 rigger skill --print-template
+rigger skill --line --print-template
 ```
 
 Writes the skill file an assistant reads before it reads anything else about a project - from one template, filled with what the record knows.
@@ -73,6 +75,27 @@ Move what it says that only this project can say into the hub, then run again wi
 ```
 
 The marker after the front matter is how the next run knows the file is rigger's. It carries no timestamp: a stamp would make an unchanged skill a diff on every run.
+
+## `--line`: one skill instead of one per project
+
+A skill per project is still a file per project, and a line with seventeen of them has seventeen descriptions in the assistant's catalogue saying nearly the same thing. `--line` writes one:
+
+```console
+$ rigger skill --line --install
+Wrote C:\Users\me\.claude\skills\line\SKILL.md from the built-in template: 18 projects, description 512 of 1024 characters.
+```
+
+It is named after the [profile](/rigger/reference/profile/), because a line of products and a ticket desk are different ways of working and should not answer to one skill. The project is named in the request, or taken from the working directory - every recorded path is one rigger knows.
+
+The body carries the table of projects, and `project add` rewrites it when a skill is already installed. A project added after the skill was written would otherwise leave it describing a line one short, and an assistant asked to work on that project would read a skill that has never heard of it.
+
+### The description is measured
+
+Every assistant loads all of its skills' descriptions at once, to decide which one a request belongs to. Anthropic's limit is 1024 characters, and a description over it is not truncated - the skill is rejected whole. The failure is silent: the skill does not announce itself, it simply never matches anything.
+
+So `--line` measures what it writes, and refuses a description that is too long or that carries `<` or `>`, which break the catalogue's parse. The names of the projects go into the description while they fit - a router matching "continue midda" has to see that word somewhere - and the rest of the list is in the body, which is not loaded until the skill is already chosen.
+
+The line template's placeholders are its own: `{{line}}`, `{{description}}` and `{{projects}}`. A project's `{{name}}` would have to pick a project arbitrarily, so it is an error instead. `--line --print-template` prints the template; a `skill.line.md` in the data directory replaces it.
 
 ## Moving a project onto rigger
 

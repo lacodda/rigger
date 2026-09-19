@@ -16,6 +16,7 @@ mod export;
 mod gate;
 mod hub;
 mod import;
+mod line;
 mod mcp;
 mod open;
 mod owner;
@@ -25,6 +26,7 @@ mod repo;
 mod retro;
 mod search;
 mod session;
+mod show;
 mod skill;
 mod sync;
 mod week;
@@ -97,7 +99,7 @@ enum Command {
     /// Write a thin project skill from a template and the record
     Skill {
         /// Project name
-        #[arg(required_unless_present = "print_template")]
+        #[arg(required_unless_present_any = ["print_template", "line"])]
         project: Option<String>,
         /// Write it into the assistant's skills directory instead of printing it
         #[arg(long)]
@@ -114,6 +116,17 @@ enum Command {
         /// Print the built-in template, to start one of your own from
         #[arg(long)]
         print_template: bool,
+        /// Write one skill for the whole line instead of one per project
+        #[arg(long, conflicts_with = "project")]
+        line: bool,
+    },
+    /// The project's screen: what it is, where it stands, what it has written
+    Show {
+        /// Project name
+        project: String,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Print what an assistant needs to start a session on a project
     Context {
@@ -274,11 +287,18 @@ enum Command {
     },
     /// Write a hub back out of the record
     Export {
-        /// Project name
-        project: String,
+        /// Project name; omitted with --line
+        #[arg(required_unless_present = "line")]
+        project: Option<String>,
         /// Directory of the hub to write
+        #[arg(long, required_unless_present = "line", conflicts_with = "line")]
+        hub: Option<PathBuf>,
+        /// Write the line's public registry instead of a hub
         #[arg(long)]
-        hub: PathBuf,
+        line: bool,
+        /// Where the registry goes; standard output when omitted
+        #[arg(long, value_name = "FILE", requires = "line")]
+        to: Option<PathBuf>,
         /// Say what would change without writing anything
         #[arg(long)]
         check: bool,
@@ -687,6 +707,35 @@ enum ProjectCommand {
         /// Forget the gate
         #[arg(long, conflicts_with = "gate")]
         no_gate: bool,
+        /// The command to run when a sitting on this project closes
+        #[arg(long, value_name = "COMMAND")]
+        on_session_end: Option<String>,
+        /// Forget the end-of-session command
+        #[arg(long, conflicts_with = "on_session_end")]
+        no_on_session_end: bool,
+    },
+    /// Record how a product looks from outside: its mark, colours, form and docs
+    Mark {
+        /// Project name
+        name: String,
+        /// The two-letter code of its mark
+        #[arg(long)]
+        code: Option<String>,
+        /// The colour it owns, as #RRGGBB
+        #[arg(long)]
+        accent: Option<String>,
+        /// The second colour, for a mark drawn as a pair
+        #[arg(long)]
+        accent2: Option<String>,
+        /// What shape of thing it is: cli, desktop, web, library, service
+        #[arg(long)]
+        form: Option<String>,
+        /// Where its documentation lives
+        #[arg(long, value_name = "URL")]
+        docs: Option<String>,
+        /// Forget the mark entirely
+        #[arg(long, conflicts_with_all = ["code", "accent", "accent2", "form", "docs"])]
+        clear: bool,
     },
     /// Set the tier a project sits in, and how often it should release
     Tier {
@@ -817,7 +866,30 @@ fn run(cli: Cli) -> Result<()> {
             ProjectCommand::Service { name } => project_service(&name),
             ProjectCommand::List { json } => project_list(json),
             ProjectCommand::Show { name, json } => project_show(&name, json),
-            ProjectCommand::Set { name, gate, no_gate } => project_set(&name, gate.as_deref(), no_gate),
+            ProjectCommand::Set {
+                name,
+                gate,
+                no_gate,
+                on_session_end,
+                no_on_session_end,
+            } => project_set(&name, gate.as_deref(), no_gate, on_session_end.as_deref(), no_on_session_end),
+            ProjectCommand::Mark {
+                name,
+                code,
+                accent,
+                accent2,
+                form,
+                docs,
+                clear,
+            } => project_mark(
+                &name,
+                code.as_deref(),
+                accent.as_deref(),
+                accent2.as_deref(),
+                form.as_deref(),
+                docs.as_deref(),
+                clear,
+            ),
             ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
         },
         Command::Import {
@@ -892,14 +964,16 @@ fn run(cli: Cli) -> Result<()> {
             replace,
             template,
             print_template,
-        } => write_skill(
-            project.as_deref(),
-            install || dir.is_some(),
-            dir.as_deref(),
-            replace,
-            template.as_deref(),
-            print_template,
-        ),
+            line,
+        } => {
+            let install = install || dir.is_some();
+            if line {
+                write_line_skill(install, dir.as_deref(), replace, template.as_deref(), print_template)
+            } else {
+                write_skill(project.as_deref(), install, dir.as_deref(), replace, template.as_deref(), print_template)
+            }
+        }
+        Command::Show { project, json } => show_project(&project, json),
         Command::Context {
             project,
             json,
@@ -946,11 +1020,23 @@ fn run(cli: Cli) -> Result<()> {
         Command::Export {
             project,
             hub,
+            line,
+            to,
             check,
             adopt,
             docs,
             json,
-        } => export_hub(&project, &hub, check, adopt, docs, json),
+        } => match line {
+            true => export_line(to.as_deref(), check),
+            false => export_hub(
+                &project.expect("clap requires a project without --line"),
+                &hub.expect("clap requires --hub without --line"),
+                check,
+                adopt,
+                docs,
+                json,
+            ),
+        },
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
         Command::Wish { project, text } => note(&project, "wish", &text),
@@ -1240,6 +1326,83 @@ Move what it says that only this project can say into the hub, then run again wi
     Ok(())
 }
 
+/// One skill for the whole line, instead of one per project.
+///
+/// Seventeen near-identical skills were seventeen copies of the same
+/// instructions, and a change to the ritual was seventeen rewrites - or,
+/// as it usually went, one rewrite and sixteen files quietly stale. What
+/// differs between them is the project's name, and a name is an argument,
+/// not a file.
+///
+/// The name of the skill is the profile's: a line of products and a ticket
+/// desk are different ways of working and should not answer to one skill.
+fn write_line_skill(install: bool, dir: Option<&Path>, replace: bool, template: Option<&Path>, print_template: bool) -> Result<()> {
+    if print_template {
+        print!("{}", skill::DEFAULT_LINE_TEMPLATE);
+        return Ok(());
+    }
+    let db = Db::open(&paths::db_path()?)?;
+    let line = profile::Config::load()?.current_name().to_string();
+    let (template, source) = skill::load_line_template(template)?;
+    let listed = listed_projects(&db)?;
+    let description = skill::line_description(&line, &listed);
+    let rendered = skill::render_line(&template, &line, &description, &listed)?;
+    if !install {
+        print!("{}", rendered.text);
+        return Ok(());
+    }
+
+    let dir = match dir {
+        Some(dir) => dir.to_path_buf(),
+        None => skill::skills_dir()?,
+    }
+    .join(&line);
+    let path = dir.join("SKILL.md");
+    let before = std::fs::read_to_string(&path).unwrap_or_default();
+    if !before.is_empty() && !skill::is_generated(&before) && !replace {
+        bail!(
+            "{} was written by hand and rigger has not written it before.
+Move what it says into the record, then run again with `--replace`.",
+            path.display()
+        );
+    }
+    if before == rendered.text {
+        println!("{} is already what the template says.", path.display());
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
+    let what = if before.is_empty() { "Wrote" } else { "Rewrote" };
+    println!(
+        "{what} {} from {source}: {} projects, description {} of {} characters.",
+        path.display(),
+        listed.len(),
+        description.chars().count(),
+        skill::DESCRIPTION_LIMIT
+    );
+    Ok(())
+}
+
+/// Every project the line's skill lists, in the order it lists them.
+///
+/// A place the record keeps for itself is left out: it has no repository
+/// to work in and no stage to continue, so naming it among the projects
+/// would be offering an assistant somewhere it cannot go.
+fn listed_projects(db: &Db) -> Result<Vec<skill::Listed>> {
+    let mut listed: Vec<skill::Listed> = db
+        .projects()?
+        .into_iter()
+        .filter(|p| p.kind == db::Kind::Repo)
+        .map(|p| skill::Listed {
+            about: repo::detect_about(Path::new(&p.path)),
+            name: p.name,
+            path: p.path,
+        })
+        .collect();
+    listed.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(listed)
+}
+
 fn open_project(db: &Db, name: &str) -> Result<db::Project> {
     if let Some(project) = db.project_by_name(name)? {
         return Ok(project);
@@ -1280,6 +1443,22 @@ fn project_here(db: &Db, name: Option<&str>) -> Result<db::Project> {
     )
 }
 
+fn show_project(project: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let about = match project.kind {
+        db::Kind::Repo => repo::detect_about(Path::new(&project.path)),
+        db::Kind::Service => None,
+    };
+    let screen = show::build(&db, &project, about)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&screen)?);
+        return Ok(());
+    }
+    print!("{}", show::render(&screen));
+    Ok(())
+}
+
 fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
@@ -1297,6 +1476,10 @@ fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Resu
             println!("{:<14} {:>5} tokens", cost.section, cost.tokens);
         }
         println!("{:<14} {:>5} tokens of {budget}", "total", context::estimate_tokens(&text));
+        // What the budget refused, by name. The packet says how many
+        // events it dropped; this says which, so that "there is something
+        // you have not seen" can be acted on.
+        print!("{}", context::render_dropped(&packet));
     }
     Ok(())
 }
@@ -1451,24 +1634,38 @@ fn find(query: &str, project: Option<&str>, kind: Option<&str>, limit: u32, json
     if let Some(name) = project {
         open_project(&db, name)?;
     }
-    let found = db
-        .find_events(&search::as_fts_query(query), project, kind, limit)
-        .with_context(|| format!("{query:?} is not a search FTS5 understands"))?;
+    use search::Provider as _;
+    let provider = search::Fts(&db);
+    let hits = search::look(&provider, query, project, kind, limit).with_context(|| format!("{query:?} is not a search {} understands", provider.name()))?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&found)?);
+        println!("{}", serde_json::to_string_pretty(&hits)?);
         return Ok(());
     }
-    if found.is_empty() {
+    if hits.is_empty() {
         println!("{}", search::nothing_found(query, project, kind));
         return Ok(());
     }
     // The project column is dead weight when the search was for one project.
     let show_project = project.is_none();
-    for event in &found {
+    for event in &hits.events {
         print!("{}", search::render_event(event, show_project));
     }
-    if found.len() as u32 == limit {
+    // Documents under the events, and named: a vision and a decision are
+    // different kinds of answer, and one that has to be opened with a
+    // second command should say so rather than look like a line of the
+    // list above it.
+    if !hits.documents.is_empty() {
+        if !hits.events.is_empty() {
+            println!();
+        }
+        println!("Documents");
+        for doc in &hits.documents {
+            print!("{}", search::render_document(doc, show_project));
+            println!("             {}", search::open_command(doc));
+        }
+    }
+    if hits.events.len() as u32 == limit {
         println!("({limit} shown; --limit for more)");
     }
     Ok(())
@@ -2589,6 +2786,39 @@ fn project_add(path: PathBuf, name: Option<String>) -> Result<()> {
         Some(url) => println!("  remote: {url}"),
         None => println!("  remote: none (no origin in .git/config)"),
     }
+    refresh_line_skill(&db)?;
+    Ok(())
+}
+
+/// Rewrites the line's one skill, when one has been installed.
+///
+/// The body lists the projects, so a project added after it was written
+/// leaves it describing a line that is one short - and an assistant asked
+/// to work on the new project reads a skill that has never heard of it.
+/// Only when the file is already there: installing a skill is something
+/// the owner asks for once, not something `project add` decides.
+fn refresh_line_skill(db: &Db) -> Result<()> {
+    // Only inside the directory this run was pointed at. A run with a
+    // record of its own has no business rewriting the skill in the owner's
+    // home - and did, until a test's fixture turned up there.
+    if !skill::may_refresh_installed() {
+        return Ok(());
+    }
+    let line = profile::Config::load()?.current_name().to_string();
+    let path = skill::skills_dir()?.join(&line).join("SKILL.md");
+    let before = match std::fs::read_to_string(&path) {
+        Ok(text) if skill::is_generated(&text) => text,
+        _ => return Ok(()),
+    };
+    let (template, _) = skill::load_line_template(None)?;
+    let listed = listed_projects(db)?;
+    let description = skill::line_description(&line, &listed);
+    let rendered = skill::render_line(&template, &line, &description, &listed)?;
+    if rendered.text == before {
+        return Ok(());
+    }
+    std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
+    println!("  {} now lists {} projects", path.display(), listed.len());
     Ok(())
 }
 
@@ -2668,16 +2898,23 @@ fn project_show(name: &str, json: bool) -> Result<()> {
 /// The gate is the first of these: the command CI runs, so that "green
 /// before a commit" has one spelling per project instead of a copy in the
 /// skill file, the README and whatever an assistant remembers.
-fn project_set(name: &str, gate: Option<&str>, no_gate: bool) -> Result<()> {
+fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Option<&str>, no_on_session_end: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, name)?;
 
-    if !no_gate && gate.is_none() {
+    if !no_gate && gate.is_none() && !no_on_session_end && on_session_end.is_none() {
         // Nothing asked for is a question, not a no-op: a command that
         // silently did nothing would look like it had worked.
         match &project.gate {
             Some(gate) => println!("{}: gate is `{gate}`", project.name),
             None => println!("{} has no gate; set one with --gate \"<command>\"", project.name),
+        }
+        match &project.on_session_end {
+            Some(hook) => println!("{}: a closing session runs `{hook}`", project.name),
+            None => println!(
+                "{} runs nothing when a session closes; set it with --on-session-end \"<command>\"",
+                project.name
+            ),
         }
         return Ok(());
     }
@@ -2685,16 +2922,28 @@ fn project_set(name: &str, gate: Option<&str>, no_gate: bool) -> Result<()> {
     if no_gate {
         db.set_gate(project.id, None)?;
         println!("{} has no gate now.", project.name);
-        return Ok(());
+    } else if let Some(gate) = gate {
+        let gate = gate.trim();
+        if gate.is_empty() {
+            bail!("an empty gate is not a gate; use --no-gate to take it off");
+        }
+        db.set_gate(project.id, Some(gate))?;
+        println!("{}: gate is `{gate}`", project.name);
+        println!("Run it with: rigger gate {}", project.name);
     }
 
-    let gate = gate.unwrap_or_default().trim();
-    if gate.is_empty() {
-        bail!("an empty gate is not a gate; use --no-gate to take it off");
+    if no_on_session_end {
+        db.set_on_session_end(project.id, None)?;
+        println!("{} runs nothing when a session closes now.", project.name);
+    } else if let Some(hook) = on_session_end {
+        let hook = hook.trim();
+        if hook.is_empty() {
+            bail!("an empty command is not a command; use --no-on-session-end to take it off");
+        }
+        db.set_on_session_end(project.id, Some(hook))?;
+        println!("{}: a closing session runs `{hook}`", project.name);
+        println!("It runs after the sitting is written down, and its outcome is recorded.");
     }
-    db.set_gate(project.id, Some(gate))?;
-    println!("{}: gate is `{gate}`", project.name);
-    println!("Run it with: rigger gate {}", project.name);
     Ok(())
 }
 
@@ -2753,6 +3002,121 @@ fn gate(project: Option<&str>, check: bool, json: bool) -> Result<()> {
         // bury it under a second account of the same failure.
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// Records how a product looks from outside.
+fn project_mark(
+    name: &str,
+    code: Option<&str>,
+    accent: Option<&str>,
+    accent2: Option<&str>,
+    form: Option<&str>,
+    docs: Option<&str>,
+    clear: bool,
+) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, name)?;
+
+    if clear {
+        db.set_mark(project.id, &db::Mark::default())?;
+        println!("{} has no mark recorded now.", project.name);
+        return Ok(());
+    }
+
+    if code.is_none() && accent.is_none() && accent2.is_none() && form.is_none() && docs.is_none() {
+        // Nothing asked for is a question, not a no-op.
+        match (&project.mark_code, &project.accent) {
+            (None, None) => println!("{} has no mark recorded; `--code` and `--accent` start one", project.name),
+            _ => {
+                println!("{}:", project.name);
+                for (label, value) in [
+                    ("code", &project.mark_code),
+                    ("accent", &project.accent),
+                    ("accent 2", &project.accent2),
+                    ("form", &project.form),
+                    ("docs", &project.docs_url),
+                ] {
+                    if let Some(value) = value {
+                        println!("  {label:<8} {value}");
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // What was given is checked before anything is written, so a command
+    // that refuses one field does not leave the other four changed.
+    if let Some(code) = code {
+        line::check_code(code)?;
+    }
+    for accent in [accent, accent2].into_iter().flatten() {
+        line::check_accent(accent)?;
+    }
+    if let Some(form) = form {
+        line::check_form(form)?;
+    }
+
+    // What is not named keeps what it had: `--form cli` states the form,
+    // not the whole mark. `--clear` is how a mark is taken off.
+    let mark = db::Mark {
+        code: code.map(str::to_string).or(project.mark_code),
+        accent: accent.map(str::to_string).or(project.accent),
+        accent2: accent2.map(str::to_string).or(project.accent2),
+        form: form.map(str::to_string).or(project.form),
+        docs_url: docs.map(str::to_string).or(project.docs_url),
+    };
+    db.set_mark(project.id, &mark)
+        .with_context(|| format!("cannot record the mark of {}", project.name))?;
+    println!("{}: mark recorded.", project.name);
+    for (label, value) in [
+        ("code", &mark.code),
+        ("accent", &mark.accent),
+        ("accent 2", &mark.accent2),
+        ("form", &mark.form),
+        ("docs", &mark.docs_url),
+    ] {
+        if let Some(value) = value {
+            println!("  {label:<8} {value}");
+        }
+    }
+    Ok(())
+}
+
+/// Writes the line's public registry.
+fn export_line(to: Option<&Path>, check: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let registry = line::build(&db, |p| repo::detect_about(Path::new(&p.path)))?;
+    // Before the file is written, every time. The one mistake this command
+    // can make is publishing something private, and that one cannot be
+    // taken back.
+    line::check_public(&registry)?;
+    let json = format!(
+        "{}
+",
+        serde_json::to_string_pretty(&registry)?
+    );
+
+    let Some(path) = to else {
+        print!("{json}");
+        return Ok(());
+    };
+    let before = std::fs::read_to_string(path).unwrap_or_default();
+    if before == json {
+        println!("{} is already what the record says.", path.display());
+        return Ok(());
+    }
+    if check {
+        println!("{} would change: {} products", path.display(), registry.products.len());
+        return Ok(());
+    }
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    std::fs::write(path, &json).with_context(|| format!("cannot write {}", path.display()))?;
+    let what = if before.is_empty() { "Wrote" } else { "Rewrote" };
+    println!("{what} {} - {} products", path.display(), registry.products.len());
     Ok(())
 }
 
@@ -3588,6 +3952,56 @@ Make one with: rigger project service line"
 /// id, not a moment in time. A gate that went red a week ago and was never
 /// run again says nothing about this sitting, and a reminder that fires for
 /// ever is a reminder that gets ignored.
+/// What a project's closing command came to.
+#[derive(Debug, serde::Serialize)]
+struct HookRun {
+    command: String,
+    verdict: String,
+    passed: bool,
+}
+
+/// Runs the command a project says a closing sitting should run.
+///
+/// A red result does not fail the close. The session is already over and
+/// already written down; refusing to end it would leave the record with a
+/// sitting open for ever because a publish step could not reach the
+/// network. So the outcome is recorded and said out loud, and the session
+/// closes either way - visible, not fatal.
+///
+/// Recorded as a change, because that is what it is: something happened
+/// outside the record because a session ended.
+fn run_session_hook(db: &Db, project: &db::Project) -> Result<Option<HookRun>> {
+    let Some(command) = project.on_session_end.clone() else {
+        return Ok(None);
+    };
+    let dir = Path::new(&project.path);
+    if !dir.is_dir() {
+        // A project whose directory has moved is not a reason to fail a
+        // close; saying so beats a shell error nobody can place.
+        eprintln!("{} is not a directory, so `{command}` was not run", project.path);
+        return Ok(None);
+    }
+    eprintln!("Running the end-of-session command: {command}");
+    let run = match gate::run(&command, dir) {
+        Ok(run) => run,
+        Err(e) => {
+            eprintln!("cannot run `{command}`: {e}");
+            return Ok(None);
+        }
+    };
+    let verdict = run.event_body(&command);
+    // Stamped at the moment it finished, not with the day: two runs on one
+    // day that came back the same would otherwise be one row, and the
+    // second - the one that says the publish worked on the retry - would
+    // vanish into the first.
+    db.record_event(project.id, "change", &format!("end of session: {verdict}"), &db::now(), "rigger")?;
+    Ok(Some(HookRun {
+        command,
+        passed: run.passed(),
+        verdict,
+    }))
+}
+
 fn red_gate_reminder(db: &Db, project: &db::Project, session: i64) -> Result<Option<String>> {
     let Some(last) = db.last_gate_in_session(session)? else {
         return Ok(None);
@@ -3706,9 +4120,21 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
         None => None,
     };
 
+    // The project's own closing command, after the record is written and
+    // before anything is reported. After, because what it does - rhapsod
+    // publishes its novellas - belongs to the sitting that has just been
+    // written down, and a command that ran first would publish a session
+    // the record had not yet closed.
+    let hook = run_session_hook(&db, &project)?;
+
     let mut missing = summary.missing();
     if let Some(red) = red_gate_reminder(&db, &project, open.id)? {
         missing.push(red);
+    }
+    if let Some(run) = &hook
+        && !run.passed
+    {
+        missing.push(format!("`{}` came back {}", run.command, run.verdict));
     }
 
     if json {
@@ -3719,6 +4145,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
                 "missing": missing,
                 "diary": written,
                 "backup": insured,
+                "on_session_end": hook,
             }))?
         );
         return Ok(());
@@ -3766,6 +4193,9 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
 
     if let Some(target) = &insured {
         println!("copied the database to {}", target.display());
+    }
+    if let Some(run) = &hook {
+        println!("{}: {}", run.command, run.verdict);
     }
 
     if !missing.is_empty() {
@@ -4141,6 +4571,12 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     let newest_backup = db.newest_backup_at()?;
     let backup_age = newest_backup.as_deref().and_then(days_since_utc);
 
+    // Whether the other door opens. An assistant talks to the record over
+    // MCP, and a server that does not answer looks from the outside like a
+    // record with nothing in it - the failure reads as "this project has no
+    // history", which is the most misleading thing rigger could say.
+    let server = mcp::self_check(&db);
+
     // Where the plan and git disagree. Reported, never corrected: the record
     // cannot prove a tag's absence - it may simply not have been fetched -
     // and a silent correction would erase what the owner wrote (ADR 0005).
@@ -4171,6 +4607,10 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                 "initialised": true,
                 "schema_version": schema,
                 "counts": counts,
+                "mcp": match &server {
+                    Ok(check) => serde_json::to_value(check)?,
+                    Err(e) => serde_json::json!({ "error": format!("{e:#}") }),
+                },
                 "backup": {
                     "newest_at": newest_backup,
                     "age_days": backup_age,
@@ -4207,6 +4647,15 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     println!("tasks:     {}", counts.tasks);
     println!("sessions:  {}", counts.sessions);
     println!("events:    {}", counts.events);
+    match &server {
+        Ok(check) => println!(
+            "mcp:       answers - protocol {}, {}, {}",
+            check.protocol,
+            plural(check.tools, "tool", "tools"),
+            plural(check.prompts, "prompt", "prompts")
+        ),
+        Err(e) => println!("mcp:       does not answer: {e:#}"),
+    }
     match backup_age {
         None => println!("backup:    none - one file, no copy of it; run `rigger backup`"),
         Some(days) => {

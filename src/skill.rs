@@ -39,6 +39,115 @@ pub const SKILLS_DIR_ENV: &str = "RIGGER_SKILLS_DIR";
 /// The template rigger ships.
 pub const DEFAULT_TEMPLATE: &str = include_str!("skill.template.md");
 
+/// The template for the one skill that covers the whole line.
+pub const DEFAULT_LINE_TEMPLATE: &str = include_str!("skill.line.template.md");
+
+/// The template a line writes for its own one skill.
+pub const LINE_TEMPLATE_FILE: &str = "skill.line.md";
+
+/// The longest a skill's description may be.
+///
+/// Every assistant that reads these files loads all of their descriptions
+/// at once, to decide which skill a request belongs to, and refuses a
+/// catalogue it cannot parse. Anthropic's limit is 1024 characters, and a
+/// description over it is not truncated - the skill is rejected whole, so
+/// the failure is "this skill does not exist" rather than "this line is
+/// long". One skill for seventeen projects makes that an easy limit to
+/// cross by listing them, which is why the list lives in the body.
+pub const DESCRIPTION_LIMIT: usize = 1024;
+
+/// What a description may not contain.
+///
+/// The catalogue is assembled into markup, and a description carrying
+/// angle brackets breaks the parse of every skill around it, not only its
+/// own. A path like `C:\Projects\<project>` is the natural way to write
+/// the trigger this skill needs, so this is a real hazard here and not a
+/// theoretical one.
+pub const FORBIDDEN_IN_DESCRIPTION: [char; 2] = ['<', '>'];
+
+/// The profile's name as a sentence names it.
+///
+/// A profile called `line` would otherwise read as "the line line", and
+/// one called `work` as "the work line" - which is right. So the word is
+/// added only when the name does not already end in it.
+fn named(line: &str) -> String {
+    if line.eq_ignore_ascii_case("line") || line.to_lowercase().ends_with(" line") {
+        format!("the {line}")
+    } else {
+        format!("the {line} line")
+    }
+}
+
+/// The description of the line's one skill.
+///
+/// One sentence about what it covers and two about how a project is named,
+/// because those are the only two things a router has to get right: that
+/// this skill is the one for any project of the line, and that the request
+/// says which.
+pub fn line_description(line: &str, projects: &[Listed]) -> String {
+    let line = named(line);
+    let mut out = format!(
+        "Work on any project of {line}: the record says where a project stands, what the current stage is, and how the work is done there. Name the project in the request, or work in its directory - the path is recorded. Triggers on \"work on NAME\", \"continue NAME\", \"what is next for NAME\", \"wishes for NAME\", and any change under a recorded project's directory."
+    );
+    // The names themselves, while they fit. A router matching "continue
+    // midda" has to see the word `midda` somewhere, and the body is not
+    // loaded until the skill is already chosen. What does not fit is in
+    // the body, which is why running out of room here is not an error.
+    let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+    if !names.is_empty() {
+        let tail = format!(" The projects: {}.", names.join(", "));
+        if out.chars().count() + tail.chars().count() <= DESCRIPTION_LIMIT {
+            out.push_str(&tail);
+        }
+    }
+    out
+}
+
+/// Whether a description is one an assistant will accept.
+///
+/// Checked rather than trusted, because the failure it prevents is silent:
+/// a skill whose description is refused does not announce itself, it
+/// simply never matches anything, and the next session reads no skill at
+/// all and nobody finds out for a month.
+pub fn check_description(description: &str) -> Result<()> {
+    let length = description.chars().count();
+    if length > DESCRIPTION_LIMIT {
+        bail!(
+            "the description is {length} characters, over the {DESCRIPTION_LIMIT} an assistant accepts; a skill whose description is refused never matches anything, so the list of projects belongs in the body"
+        );
+    }
+    if let Some(c) = description.chars().find(|c| FORBIDDEN_IN_DESCRIPTION.contains(c)) {
+        bail!("the description contains `{c}`, which breaks the catalogue an assistant parses; write the path without angle brackets");
+    }
+    Ok(())
+}
+
+/// A project as the line's skill lists it.
+pub struct Listed {
+    pub name: String,
+    pub path: String,
+    pub about: Option<String>,
+}
+
+/// The table of projects in the body: what each one is, and where.
+pub fn projects_table(projects: &[Listed]) -> String {
+    if projects.is_empty() {
+        return "No projects are recorded yet; `rigger project add <path>` records one.".to_string();
+    }
+    let mut out = String::from("| Project | What it is | Where |\n| --- | --- | --- |\n");
+    for p in projects {
+        let about = p.about.as_deref().unwrap_or("a project recorded in rigger");
+        out.push_str(&format!("| `{}` | {} | `{}` |\n", p.name, escape_cell(about), p.path));
+    }
+    out.pop();
+    out
+}
+
+/// A pipe in a description would end the cell it is in.
+fn escape_cell(text: &str) -> String {
+    text.replace('|', "\\|").replace('\n', " ")
+}
+
 /// What fills the placeholders.
 pub struct Fields<'a> {
     pub name: &'a str,
@@ -98,6 +207,21 @@ pub fn load_template(explicit: Option<&Path>) -> Result<(String, Source)> {
     Ok((DEFAULT_TEMPLATE.to_string(), Source::BuiltIn))
 }
 
+/// Whether this run may write outside its own data directory.
+///
+/// `RIGGER_DATA_DIR` names a record somewhere other than the owner's, which
+/// is what a test harness and a throwaway profile both do. A command that
+/// then wrote into `~/.claude/skills` would reach out of the box it was put
+/// in - and it did: a test that recorded a project rewrote the owner's real
+/// skill to describe the test's fixture, because `project add` keeps an
+/// installed skill current and nothing said where "installed" was.
+///
+/// A skill asked for by name still goes where it is asked to go; this only
+/// governs what a command does of its own accord.
+pub fn may_refresh_installed() -> bool {
+    std::env::var_os(SKILLS_DIR_ENV).is_some() || std::env::var_os(paths::DATA_DIR_ENV).is_none()
+}
+
 /// Where skills are installed: `RIGGER_SKILLS_DIR`, else the directory the
 /// default assistant reads, `~/.claude/skills`.
 pub fn skills_dir() -> Result<PathBuf> {
@@ -136,6 +260,64 @@ pub fn render(template: &str, fields: &Fields) -> Result<Rendered> {
     }
     out.push_str(rest);
     Ok(Rendered { text: with_mark(&out), notes })
+}
+
+/// Fills the line template.
+///
+/// Its placeholders are its own - `{{line}}`, `{{description}}`,
+/// `{{projects}}` - and none of a project template's, because there is no
+/// one project for them to mean. A template that spelt `{{name}}` here
+/// would have to pick a project arbitrarily, so it is an error instead.
+pub fn render_line(template: &str, line: &str, description: &str, projects: &[Listed]) -> Result<Rendered> {
+    check_description(description)?;
+    let table = projects_table(projects);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            bail!("the template opens a placeholder with `{{{{` and never closes it");
+        };
+        let key = after[..end].trim();
+        out.push_str(match key {
+            "line" => line,
+            "description" => description,
+            "projects" => &table,
+            _ => bail!("the line template names {{{{{key}}}}}, which rigger does not know; a skill for the whole line knows line, description and projects"),
+        });
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    Ok(Rendered {
+        text: with_mark(&out),
+        notes: Vec::new(),
+    })
+}
+
+/// Where the line template is looked for, the same way a project's is.
+pub fn line_template_paths() -> Result<Vec<PathBuf>> {
+    Ok(vec![
+        crate::profile::current_dir()?.join(LINE_TEMPLATE_FILE),
+        paths::data_dir()?.join(LINE_TEMPLATE_FILE),
+    ])
+}
+
+/// The line template named, else the profile's, else the data
+/// directory's, else the built-in one.
+pub fn load_line_template(explicit: Option<&Path>) -> Result<(String, Source)> {
+    if let Some(path) = explicit {
+        let text = std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+        return Ok((text, Source::File(path.to_path_buf())));
+    }
+    for path in line_template_paths()? {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return Ok((text, Source::File(path))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+        }
+    }
+    Ok((DEFAULT_LINE_TEMPLATE.to_string(), Source::BuiltIn))
 }
 
 fn value(key: &str, fields: &Fields, notes: &mut Vec<String>) -> Result<String> {
@@ -242,6 +424,117 @@ mod tests {
         assert!(r.text.ends_with("deploy after the tag|"), "{}", r.text);
         assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
         assert!(r.notes[0].contains("Other.md"), "{:?}", r.notes);
+    }
+
+    fn listed(names: &[&str]) -> Vec<Listed> {
+        names
+            .iter()
+            .map(|n| Listed {
+                name: (*n).to_string(),
+                path: format!("/dev/{n}"),
+                about: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_description_over_the_limit_is_refused_rather_than_written() {
+        // The failure this prevents is silent: an assistant rejects a skill
+        // whose description is too long, and the skill then matches nothing
+        // and says nothing. So the refusal is checked by making it happen.
+        let long = "x".repeat(DESCRIPTION_LIMIT + 1);
+        let err = check_description(&long).unwrap_err().to_string();
+        assert!(err.contains(&(DESCRIPTION_LIMIT + 1).to_string()), "the error says how long it was: {err}");
+        assert!(err.contains("body"), "and where the list belongs instead: {err}");
+
+        // Exactly at the limit is within it.
+        check_description(&"x".repeat(DESCRIPTION_LIMIT)).unwrap();
+
+        // And `render_line` refuses rather than writing such a file.
+        let template = "---
+name: {{line}}
+description: {{description}}
+---
+";
+        assert!(render_line(template, "line", &long, &[]).is_err());
+    }
+
+    #[test]
+    fn angle_brackets_are_refused_because_they_break_the_whole_catalogue() {
+        // A path like `C:\Projects\<project>` is the natural way to write
+        // this skill's trigger, so this is a real hazard and not a
+        // theoretical one - and it breaks the parse of the skills around
+        // it, not only its own.
+        let err = check_description("work in C:/Projects/<project>").unwrap_err().to_string();
+        assert!(err.contains("catalogue"), "{err}");
+        check_description("work in C:/Projects/, named in the request").unwrap();
+    }
+
+    #[test]
+    fn a_line_too_long_to_name_keeps_the_description_within_the_limit() {
+        // The names go into the description while they fit. A line of
+        // sixty products with long names is how that stops fitting, and
+        // the description must shorten rather than be refused - the list
+        // is in the body for exactly this reason.
+        let many: Vec<String> = (0..60).map(|i| format!("a-rather-long-product-name-{i}")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        let description = line_description("line", &listed(&refs));
+        check_description(&description).expect("a long line still yields a usable description");
+        assert!(!description.contains("a-rather-long-product-name-59"), "the tail is left to the body");
+
+        // A line small enough to name is named.
+        let few = line_description("line", &listed(&["sample", "other"]));
+        assert!(few.contains("sample, other"), "{few}");
+        check_description(&few).unwrap();
+    }
+
+    #[test]
+    fn the_line_template_knows_its_own_placeholders_and_no_others() {
+        let r = render_line("{{line}} | {{description}} | {{projects}}", "line", "about it", &listed(&["sample"])).unwrap();
+        assert!(r.text.contains("line | about it |"), "{}", r.text);
+        assert!(r.text.contains("| `sample` |"), "{}", r.text);
+
+        // `{{name}}` would have to pick a project arbitrarily.
+        let err = render_line("{{name}}", "line", "about it", &[]).unwrap_err().to_string();
+        assert!(err.contains("{{name}}"), "{err}");
+    }
+
+    #[test]
+    fn a_line_with_no_projects_says_so_rather_than_printing_an_empty_table() {
+        let table = projects_table(&[]);
+        assert!(table.contains("project add"), "{table}");
+    }
+
+    #[test]
+    fn a_pipe_in_a_description_does_not_end_the_cell_it_sits_in() {
+        let listed = vec![Listed {
+            name: "sample".into(),
+            path: "/dev/sample".into(),
+            about: Some("reads a | writes b".into()),
+        }];
+        let table = projects_table(&listed);
+        assert!(table.contains("reads a \\| writes b"), "{table}");
+        // One row, not two: an unescaped pipe would split the cell.
+        assert_eq!(table.lines().filter(|l| l.contains("sample")).count(), 1, "{table}");
+    }
+
+    #[test]
+    fn the_built_in_line_template_renders_and_fits() {
+        let listed = listed(&["sample", "other"]);
+        let description = line_description("line", &listed);
+        let r = render_line(DEFAULT_LINE_TEMPLATE, "line", &description, &listed).unwrap();
+        assert!(
+            r.text.starts_with(
+                "---
+name: line
+"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(r.text.contains("rigger context <project>"), "{}", r.text);
+        assert!(r.text.contains("| `sample` |"), "{}", r.text);
+        assert!(is_generated(&r.text));
     }
 
     #[test]
