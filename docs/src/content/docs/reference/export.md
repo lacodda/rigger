@@ -5,6 +5,7 @@ description: Write a hub back out of the record.
 
 ```
 rigger export <PROJECT> --hub <DIR> [--check] [--adopt] [--docs] [--json]
+rigger export --line [--to <FILE>] [--check]
 ```
 
 Generates a project's hub from the record. The plan, the changelog and the diary are views of what the database holds, so this is the other half of [`import`](/rigger/reference/import/): the record is read once, written by hand no more, and the notes follow it.
@@ -109,7 +110,43 @@ A hub is prose with structure in it, and most of what a person wrote is neither 
 
 The line ending is the file's own. Every hub written on Windows is CRLF, and a generated file in LF would differ from its source on every single line - which is not a diff anybody reads.
 
+## `--line`: the public registry
+
+Every generator on a line needs the same list - which products exist, what each one's mark and colour are, what shape of thing it is, where to read about it. `--line` writes it as JSON, from the same record:
+
+```console
+$ rigger export --line --to ..\line\line.json
+Wrote ..\line\line.json - 18 products
+```
+
+```json
+{
+  "generator": "rigger",
+  "version": "0.21.0",
+  "products": [
+    {
+      "name": "sample",
+      "about": "A sample product",
+      "mark": "sa",
+      "accent": "#3FA873",
+      "form": "cli",
+      "repository": "https://github.com/example/sample.git",
+      "docs": "https://example.github.io/sample/"
+    }
+  ]
+}
+```
+
+The fields come from [`project mark`](/rigger/reference/project/) and from the repository itself. A product recorded before its mark was drawn is still published, with those fields simply absent - leaving it out would make the registry disagree with the record about what exists, which is the fault this command fixes. Without `--to` the JSON goes to standard output.
+
+### What it will not publish
+
+The record holds paths on a machine, the hubs in a notes vault, the stages of unreleased work and the questions waiting for an owner. This command writes into a public repository, so the one mistake it can make is the one that cannot be taken back.
+
+The rendered file is therefore checked before it is written, every time, rather than reviewed by whoever remembers to: a drive letter, a UNC prefix or a home directory anywhere in it refuses the write, as does a repository or documentation address that is not `https://`. The check reads the finished JSON rather than the fields it knows about, because the field that leaks will be the one added after the check was written.
+
 ## Related
 
 - [`import`](/rigger/reference/import/) - the other half: a hub read into the record.
 - [`doctor`](/rigger/reference/doctor/) - `--hubs` names a generated file somebody has edited since.
+- [`project`](/rigger/reference/project/) - `project mark` records what `--line` publishes.

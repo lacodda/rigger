@@ -85,6 +85,7 @@ A project with no tier at all is out by omission, and is equally left alone: rig
 
 ```
 rigger project set <NAME> [--gate <COMMAND>] [--no-gate]
+                          [--on-session-end <COMMAND>] [--no-on-session-end]
 ```
 
 Sets what the record keeps about a project beyond what git can tell it.
@@ -109,6 +110,58 @@ sample: gate is `cargo test`
 ```
 
 `--no-gate` takes it off. An empty `--gate` is refused: an empty gate is not a gate.
+
+### `--on-session-end`
+
+The command to run when a sitting on this project closes.
+
+```console
+$ rigger project set rhapsod --on-session-end "pnpm publish:novellas"
+rhapsod: a closing session runs `pnpm publish:novellas`
+It runs after the sitting is written down, and its outcome is recorded.
+```
+
+Some projects end a session by doing something: publishing what was written, running a linter over it, pushing a stand. That belonged to a list in a skill file which the assistant had to remember at exactly the moment it was running out of context - which is when it is least likely to remember anything. Stated here, it happens.
+
+It runs after the session is written down, because what it does belongs to the sitting that has just been recorded. The outcome is recorded as a change, with the command and how long it took.
+
+A red result does not fail the close. The session is already over and already written down; refusing to end it would leave a sitting open for ever because a publish step could not reach the network. So it is said out loud and listed among what the ritual still asks for - visible, not fatal:
+
+```console
+$ rigger session end rhapsod
+Session on rhapsod closed, open since 2026-09-19T08:12:04Z.
+...
+pnpm publish:novellas: red (exit 1) in 4 seconds
+
+before you stop:
+  `pnpm publish:novellas` came back red (exit 1) in 4 seconds
+```
+
+`--no-on-session-end` takes it off. It is a field of the project rather than a setting of the profile: what has to happen when a sitting on one project ends has nothing to do with the others.
+
+## `rigger project mark <name>`
+
+```
+rigger project mark <NAME> [--code <XX>] [--accent <#RRGGBB>] [--accent2 <#RRGGBB>]
+                           [--form <FORM>] [--docs <URL>] [--clear]
+```
+
+How a product looks from outside: the two-letter code of its mark, the colour it owns, what shape of thing it is, and where its documentation lives.
+
+```console
+$ rigger project mark sample --code sa --accent "#3FA873" --form cli --docs https://example.github.io/sample/
+sample: mark recorded.
+  code     sa
+  accent   #3FA873
+  form     cli
+  docs     https://example.github.io/sample/
+```
+
+This existed in three places and agreed in none: a table in a notes vault, a constant in the project generator, and whatever a README happened to say. A hardcoded list does not know it is stale. Recorded here, it is published by [`export --line`](/rigger/reference/export/) and read by everything that needs it.
+
+The forms are `cli`, `desktop`, `web`, `library` and `service` - a closed list, because a generator switches on it and a form spelt two ways is a branch that silently does not run. A code is two lowercase letters and unique across the line, which the schema holds rather than the habit. A colour is `#RRGGBB`.
+
+What is not named keeps what it had, so `--form cli` states the form and not the whole mark; `--clear` takes the mark off. With no flags, `mark` says what is recorded.
 
 ## `rigger project service <name>`
 
