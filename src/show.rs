@@ -16,7 +16,8 @@ use std::fmt::Write;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::db::{Db, DocLine, Project, Task};
+use crate::db::{Asked, Db, DocLine, Project, Task};
+use crate::link;
 
 #[derive(Debug, Serialize)]
 pub struct Screen {
@@ -37,6 +38,10 @@ pub struct Screen {
     pub documents: Vec<DocLine>,
     pub questions: usize,
     pub wishes: usize,
+    /// What this project is tied to, read from its own side.
+    pub links: Vec<link::Link>,
+    /// The open wishes a neighbour asked for.
+    pub asked: Vec<Asked>,
     pub next_step: Option<String>,
 }
 
@@ -72,6 +77,8 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         documents: db.document_lines(project.id)?,
         questions: db.open_events(project.id, "question")?.len(),
         wishes: db.open_events(project.id, "wish")?.len(),
+        links: db.links_of(project.id)?,
+        asked: db.asked_wishes(project.id)?,
         next_step: db.latest_event_body(project.id, "next")?,
     })
 }
@@ -140,6 +147,12 @@ pub fn render(screen: &Screen) -> String {
         }
     }
 
+    let neighbours = render_neighbours(screen);
+    if !neighbours.is_empty() {
+        out.push('\n');
+        out.push_str(&neighbours);
+    }
+
     if !screen.documents.is_empty() {
         out.push('\n');
         out.push_str("Written down:\n");
@@ -160,6 +173,61 @@ pub fn render(screen: &Screen) -> String {
         out.push('\n');
         out.push_str("Next step\n");
         let _ = writeln!(out, "  {}", trim_to(next.lines().next().unwrap_or("").trim(), 96));
+    }
+    out
+}
+
+/// Who this project stands beside, and who is waiting on it.
+///
+/// This is the half of a project's README that used to be prose - "kasl and
+/// kasl-server are two halves of one thing", "the HTTPS door rhapsod built
+/// is what hilvan needs" - written once in each of two hubs and true in
+/// neither after a month. Printed from the links instead, so it is as
+/// current as the last thing recorded.
+///
+/// The three kinds get three headings because they are three different
+/// facts. Folding them into one list of neighbours would say that lyrid
+/// stands beside dowel the way kasl stands beside kasl-server, and the
+/// whole point of the distinction is that it does not.
+fn render_neighbours(screen: &Screen) -> String {
+    let mut out = String::new();
+    let heading = |out: &mut String, text: &str| {
+        let _ = writeln!(out, "{text}:");
+    };
+
+    for (kind, title) in [
+        (link::Kind::Pair, "Paired with"),
+        (link::Kind::Consumer, "Draws on"),
+        (link::Kind::Donor, "Drawn on by"),
+    ] {
+        let of_kind: Vec<&link::Link> = screen.links.iter().filter(|l| l.kind == kind).collect();
+        if of_kind.is_empty() {
+            continue;
+        }
+        heading(&mut out, title);
+        for found in of_kind {
+            let far = match &found.far.version {
+                Some(version) => format!("{} {version}", found.far.project),
+                None => found.far.project.clone(),
+            };
+            // The near version only when there is one: the anchor is what
+            // the pair was agreed at, and a blank there reads as a missing
+            // version rather than as a tie that has none.
+            let near = match &found.near.version {
+                Some(version) => format!(" (here: {version})"),
+                None => String::new(),
+            };
+            let note = found.note.as_deref().map(|n| format!(" — {n}")).unwrap_or_default();
+            let _ = writeln!(out, "  {far}{near}{note}");
+        }
+    }
+
+    if !screen.asked.is_empty() {
+        heading(&mut out, "Neighbours are asking for");
+        for wish in &screen.asked {
+            let first = wish.body.lines().next().unwrap_or("").trim();
+            let _ = writeln!(out, "  [{}] {} — {}", wish.id, trim_to(first, 72), wish.asked_by);
+        }
     }
     out
 }
@@ -211,6 +279,8 @@ mod tests {
             documents: Vec::new(),
             questions: 0,
             wishes: 0,
+            links: Vec::new(),
+            asked: Vec::new(),
             next_step: None,
         }
     }
@@ -256,6 +326,64 @@ mod tests {
         assert!(text.contains("rigger doc show sample vision"), "{text}");
         // The day, not the timestamp: a screen is read, not parsed.
         assert!(text.contains("2026-09-12") && !text.contains("08:00:00"), "{text}");
+    }
+
+    fn link_of(kind: link::Kind, far: &str, far_version: Option<&str>, near_version: Option<&str>) -> link::Link {
+        link::Link {
+            id: 1,
+            kind,
+            near: link::End {
+                project: "sample".into(),
+                version: near_version.map(String::from),
+                shipped: near_version.map(|_| false),
+            },
+            far: link::End {
+                project: far.into(),
+                version: far_version.map(String::from),
+                shipped: far_version.map(|_| false),
+            },
+            note: None,
+        }
+    }
+
+    /// The three kinds are three facts, so they get three headings: a
+    /// project that draws on another does not stand beside it.
+    #[test]
+    fn the_neighbours_are_told_apart_by_what_the_tie_is() {
+        let mut s = screen();
+        s.links = vec![
+            link_of(link::Kind::Pair, "sample-server", Some("v0.3.0"), Some("v0.9.0")),
+            link_of(link::Kind::Consumer, "widgets", None, None),
+            link_of(link::Kind::Donor, "downstream", None, None),
+        ];
+        let text = render(&s);
+        assert!(text.contains("Paired with:\n  sample-server v0.3.0 (here: v0.9.0)"), "{text}");
+        assert!(text.contains("Draws on:\n  widgets\n"), "{text}");
+        assert!(text.contains("Drawn on by:\n  downstream\n"), "{text}");
+    }
+
+    /// A project tied to nothing prints no heading at all, rather than an
+    /// empty one that reads as a thing gone missing.
+    #[test]
+    fn a_project_with_no_ties_says_nothing_about_them() {
+        let text = render(&screen());
+        assert!(!text.contains("Paired with"), "{text}");
+        assert!(!text.contains("Neighbours are asking"), "{text}");
+    }
+
+    /// A neighbour's wish carries the id that resolves it and the name of
+    /// who asked: an order with no sender is one nobody can answer.
+    #[test]
+    fn a_wish_from_a_neighbour_names_the_neighbour_and_its_id() {
+        let mut s = screen();
+        s.asked = vec![Asked {
+            id: 42,
+            body: "A gate for the docs address".into(),
+            asked_by: "lyrn".into(),
+        }];
+        let text = render(&s);
+        assert!(text.contains("Neighbours are asking for:"), "{text}");
+        assert!(text.contains("[42] A gate for the docs address — lyrn"), "{text}");
     }
 
     #[test]
