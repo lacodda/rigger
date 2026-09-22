@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.23.0] - 2026-09-22
+
+### Features
+- Ask the owner by a day, and hear a release from its engine
+- Read releases and publish runs from GitHub
+- Show one version, with its JSON as a contract
+- Suggest a tier from the last cycle's releases
+- Write release Fridays and the week's focus as iCalendar
+- Toast the week on its first run
+- Tell kasl, and draft the diary from the sitting
+- Write the digest into a note
+
+### Testing
+- Ask the clock which week is this week
+- Hold the rhythm and the facts to what they promise
+
 ## [0.22.0] - 2026-09-19
 
 ### Documentation
