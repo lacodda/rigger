@@ -3385,6 +3385,23 @@ impl Db {
         Ok(names)
     }
 
+    /// The subject lines of the commits made between two moments, oldest
+    /// first, as `sync` read them. Dated by the commit rather than by the
+    /// sync, so a session's commits are its own even when read a day later.
+    pub fn commits_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT body FROM events
+             WHERE project_id = ?1 AND commit_hash IS NOT NULL AND created_at > ?2 AND created_at <= ?3
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, after, until], |r| r.get::<_, String>(0))?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<String>>>()?
+            .into_iter()
+            .map(|body| body.lines().next().unwrap_or_default().trim().to_string())
+            .collect())
+    }
+
     /// Tasks closed between two moments.
     pub fn tasks_closed_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(

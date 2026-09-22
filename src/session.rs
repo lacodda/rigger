@@ -39,6 +39,12 @@ pub struct Summary {
     pub shipped: Vec<String>,
     /// Tasks closed while it was open.
     pub tasks_closed: Vec<String>,
+    /// Commits made while it was open, by their subject line.
+    ///
+    /// Not counted as recorded - git wrote them, not the session - but they
+    /// are what the session did, and the diary's "done" is the one place
+    /// where the work matters more than who wrote it down.
+    pub commits: Vec<String>,
 }
 
 impl Summary {
@@ -55,6 +61,23 @@ impl Summary {
             && self.questions.is_empty()
             && self.shipped.is_empty()
             && self.tasks_closed.is_empty()
+            && self.commits.is_empty()
+    }
+
+    /// What the session did, for the diary's "done": the tasks it closed,
+    /// the changes it recorded, and the commits it made - each said once.
+    ///
+    /// The three overlap: a change recorded by hand often repeats the commit
+    /// it describes. A line already said, by any of them, is not said again.
+    pub fn done(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for line in self.tasks_closed.iter().chain(&self.changes).chain(&self.commits) {
+            let line = line.trim();
+            if !line.is_empty() && !out.iter().any(|seen| seen.eq_ignore_ascii_case(line)) {
+                out.push(line.to_string());
+            }
+        }
+        out
     }
 
     pub fn recorded(&self) -> usize {
@@ -89,6 +112,7 @@ pub fn summarise(
     events: &[RecentEvent],
     shipped: Vec<String>,
     tasks_closed: Vec<String>,
+    commits: Vec<String>,
     next_step: Option<String>,
 ) -> Summary {
     let mut summary = Summary {
@@ -104,6 +128,7 @@ pub fn summarise(
         next_step,
         shipped,
         tasks_closed,
+        commits,
     };
     for event in events {
         // The chronicle read out of commit messages is not what a session
@@ -131,6 +156,10 @@ pub fn summarise(
 /// no opinion about the day and inventing one would put words in the
 /// owner's diary that nobody said - so the entry is the session's own
 /// sentences, arranged, with the headings the hub already uses.
+///
+/// It is a draft as much as an entry: `session draft` prints it before the
+/// sitting closes, the assistant edits it rather than writing one from a
+/// blank page, and `session end --entry` puts the edited text in its place.
 pub fn diary_entry(summary: &Summary, day: &str, heading: Option<&str>) -> String {
     let title = match heading {
         Some(text) if !text.trim().is_empty() => format!("## {day} · {}", text.trim()),
@@ -153,15 +182,12 @@ pub fn diary_entry(summary: &Summary, day: &str, heading: Option<&str>) -> Strin
     if !summary.shipped.is_empty() {
         out.push_str(&format!("\n**Выпущено.** {}\n", summary.shipped.join(", ")));
     }
-    section(&mut out, "Сделано.", &summary.changes);
+    section(&mut out, "Сделано.", &summary.done());
     section(&mut out, "Решения.", &summary.decisions);
     section(&mut out, "Находки.", &summary.findings);
     section(&mut out, "Грабли.", &summary.pitfalls);
     section(&mut out, "Ждёт владельца.", &summary.questions);
 
-    if !summary.tasks_closed.is_empty() {
-        out.push_str(&format!("\n**Закрыто задач:** {}\n", summary.tasks_closed.len()));
-    }
     if let Some(next) = &summary.next_step {
         out.push_str(&format!("\n**Следующий шаг.** {}\n", next.trim()));
     }
@@ -199,7 +225,7 @@ mod tests {
             event("change", "added the calendar", false),
             event("question", "which tier for dowel?", false),
         ];
-        let summary = summarise("alpha", &session(), &events, vec![], vec![], None);
+        let summary = summarise("alpha", &session(), &events, vec![], vec![], vec![], None);
         assert_eq!(summary.decisions.len(), 1);
         assert_eq!(summary.findings.len(), 1);
         assert_eq!(summary.pitfalls.len(), 1);
@@ -217,17 +243,17 @@ mod tests {
             event("change", "feat: read tags into facts", true),
             event("change", "wrote the session summary", false),
         ];
-        let summary = summarise("alpha", &session(), &events, vec![], vec![], None);
+        let summary = summarise("alpha", &session(), &events, vec![], vec![], vec![], None);
         assert_eq!(summary.changes, vec!["wrote the session summary"]);
         assert_eq!(summary.recorded(), 1);
     }
 
     #[test]
     fn a_session_that_recorded_nothing_says_so() {
-        let summary = summarise("alpha", &session(), &[], vec![], vec![], None);
+        let summary = summarise("alpha", &session(), &[], vec![], vec![], vec![], None);
         assert!(summary.empty());
         // And a session that only shipped is not empty: the tag is the work.
-        let shipped = summarise("alpha", &session(), &[], vec!["v0.1.0".to_string()], vec![], None);
+        let shipped = summarise("alpha", &session(), &[], vec!["v0.1.0".to_string()], vec![], vec![], None);
         assert!(!shipped.empty());
     }
 
@@ -236,7 +262,7 @@ mod tests {
     /// session ends when attention has run out.
     #[test]
     fn the_end_names_what_the_ritual_asks_for_and_did_not_get() {
-        let bare = summarise("alpha", &session(), &[event("change", "did a thing", false)], vec![], vec![], None);
+        let bare = summarise("alpha", &session(), &[event("change", "did a thing", false)], vec![], vec![], vec![], None);
         let missing = bare.missing();
         assert!(missing.iter().any(|m| m.contains("next step")), "{missing:?}");
         assert!(missing.iter().any(|m| m.contains("nothing says why")), "{missing:?}");
@@ -246,6 +272,7 @@ mod tests {
             "alpha",
             &session(),
             &[event("change", "did a thing", false), event("decision", "because", false)],
+            vec![],
             vec![],
             vec![],
             Some("carry on".to_string()),
@@ -262,6 +289,7 @@ mod tests {
             "alpha",
             &session(),
             &[event("decision", "we will use ISO weeks", false)],
+            vec![],
             vec![],
             vec![],
             Some("start on it".to_string()),
@@ -281,6 +309,7 @@ mod tests {
             ],
             vec!["v0.10.0".to_string()],
             vec!["a task".to_string()],
+            vec!["feat(calendar): the grid".to_string()],
             Some("ship the retro".to_string()),
         );
         let entry = diary_entry(&summary, "2026-09-05", Some("v0.10.0 «Календарь»"));
@@ -290,7 +319,10 @@ mod tests {
         assert!(entry.contains("added the calendar"), "{entry}");
         assert!(entry.contains("the tier carries its rhythm"), "{entry}");
         assert!(entry.contains("the grid wraps at 46 releases"), "{entry}");
-        assert!(entry.contains("**Закрыто задач:** 1"), "{entry}");
+        // The closed task and the commit are part of what was done, in the
+        // same list as the recorded change, rather than a count beside it.
+        assert!(entry.contains("- a task"), "{entry}");
+        assert!(entry.contains("- feat(calendar): the grid"), "{entry}");
         assert!(entry.contains("**Следующий шаг.** ship the retro"), "{entry}");
         // An empty section is not printed as an empty heading.
         assert!(!entry.contains("**Находки.**"), "{entry}");
@@ -298,11 +330,33 @@ mod tests {
 
     #[test]
     fn a_diary_entry_without_a_heading_still_names_its_day() {
-        let summary = summarise("alpha", &session(), &[event("change", "a thing", false)], vec![], vec![], None);
+        let summary = summarise("alpha", &session(), &[event("change", "a thing", false)], vec![], vec![], vec![], None);
         let entry = diary_entry(&summary, "2026-09-05", None);
         assert!(entry.starts_with("## 2026-09-05\n"), "{entry}");
         // A heading of nothing but spaces is the same as none.
         let blank = diary_entry(&summary, "2026-09-05", Some("   "));
         assert!(blank.starts_with("## 2026-09-05\n"), "{blank}");
+    }
+
+    /// A change recorded by hand usually repeats the commit it describes,
+    /// and the diary is read by a person: the same line twice reads as two
+    /// things done.
+    #[test]
+    fn what_was_done_is_said_once() {
+        let summary = summarise(
+            "alpha",
+            &session(),
+            &[event("change", "feat: the grid", false)],
+            vec![],
+            vec!["close the grid".to_string()],
+            vec!["feat: the grid".to_string(), "fix: a typo".to_string()],
+            None,
+        );
+        assert_eq!(summary.done(), vec!["close the grid", "feat: the grid", "fix: a typo"]);
+        // Commits alone are work: the session is not empty, and nothing it
+        // recorded is invented from them.
+        let only = summarise("alpha", &session(), &[], vec![], vec![], vec!["fix: a typo".to_string()], None);
+        assert!(!only.empty());
+        assert_eq!(only.recorded(), 0);
     }
 }

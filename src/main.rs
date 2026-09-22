@@ -18,6 +18,7 @@ mod gate;
 mod hub;
 mod ics;
 mod import;
+mod kasl;
 mod line;
 mod link;
 mod mcp;
@@ -891,9 +892,23 @@ enum SessionCommand {
         /// Append the entry to this diary file
         #[arg(long, value_name = "FILE")]
         diary: Option<PathBuf>,
+        /// Use this entry instead of the composed one - an edited `session draft`; `-` reads standard input
+        #[arg(long, value_name = "FILE")]
+        entry: Option<PathBuf>,
         /// Say nothing unless something is worth saying, for a hook
         #[arg(long)]
         remind: bool,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the diary entry the open sitting would leave, to edit before `end`
+    Draft {
+        /// Project name; the project of the working directory when omitted
+        project: Option<String>,
+        /// A title for the entry
+        #[arg(long, value_name = "TEXT")]
+        heading: Option<String>,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -1262,9 +1277,11 @@ fn run(cli: Cli) -> Result<()> {
                 project,
                 heading,
                 diary,
+                entry,
                 remind,
                 json,
-            } => session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), remind, json),
+            } => session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), entry.as_deref(), remind, json),
+            SessionCommand::Draft { project, heading, json } => session_draft(project.as_deref(), heading.as_deref(), json),
         },
         Command::Export {
             project,
@@ -4923,11 +4940,26 @@ fn session_start(project: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = project_here(&db, project)?;
     let (session, change) = db.start_session(project.id, &db::now())?;
+    // Told only when the sitting is new: joining one already open is not a
+    // second interval, and telling kasl twice would split the time it
+    // measures into two pieces of the same work.
+    let kasl = match change {
+        db::Change::Unchanged => None,
+        _ => {
+            let stage = db.current_stage(project.id)?;
+            let name = kasl::task_name(&project.name, stage.as_ref().map(|s| (s.version.as_str(), s.title.as_deref())));
+            Some(kasl::start(&name))
+        }
+    };
 
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "session": session, "already_open": change == db::Change::Unchanged }))?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "session": session,
+                "already_open": change == db::Change::Unchanged,
+                "kasl": kasl,
+            }))?
         );
         return Ok(());
     }
@@ -4946,7 +4978,7 @@ fn session_start(project: Option<&str>, json: bool) -> Result<()> {
 /// skill file that the assistant had to remember at exactly the moment it
 /// was running out of context. A ritual that depends on remembering is a
 /// ritual that stops happening.
-fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path>, remind: bool, json: bool) -> Result<()> {
+fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path>, entry: Option<&Path>, remind: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     // A hook has no name to pass, so a failure to find one is not a failure
     // worth reporting: it fires in every directory, most of which are not
@@ -4974,17 +5006,21 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     };
 
     let at = db::now();
-    let events = db.session_events(open.id)?;
-    let shipped = db.shipped_between(project.id, &open.started_at, &at)?;
-    let closed = db.tasks_closed_between(project.id, &open.started_at, &at)?;
-    let next_step = db.latest_event_body(project.id, "next")?;
-    let ended = db::Session {
-        ended_at: Some(at.clone()),
-        ..open.clone()
+    let summary = session_summary(&db, &project, &open, &at)?;
+    // The owner's words, when the draft was edited: they replace what was
+    // composed, in the record and in the file alike. Read before anything
+    // is closed, so an entry that cannot be read leaves the sitting open to
+    // try again rather than closed without its diary.
+    let entry = match entry {
+        Some(path) => Some(read_entry(path)?),
+        None => None,
     };
-    let summary = session::summarise(&project.name, &ended, &events, shipped, closed, next_step);
 
     db.end_session(open.id, &at)?;
+    // Closed right after the record closes the sitting, so the interval in
+    // kasl ends where the session does rather than after a backup, a diary
+    // and a hook have had their turn.
+    let kasl = kasl::stop();
 
     // A sitting's worth of work has just been written down, and the record
     // is one file. If the newest copy predates today, take one now: the
@@ -5012,14 +5048,15 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     // that only wrote to a file was lost the moment the file was generated.
     // `--diary` still appends it to a file, for a hub kept by hand.
     let day = at.split('T').next().unwrap_or_default().to_string();
-    if !summary.empty() {
-        let entry = session::diary_entry(&summary, &day, heading);
-        let body = entry.split_once('\n').map(|(_, rest)| rest.trim()).unwrap_or_default();
+    let edited = entry.is_some();
+    let text = entry.unwrap_or_else(|| session::diary_entry(&summary, &day, heading));
+    if !summary.empty() || edited {
+        let body = text.split_once('\n').map(|(_, rest)| rest.trim()).unwrap_or_default();
         let title = heading.map(str::trim).filter(|h| !h.is_empty()).map(|h| format!("{day} · {h}"));
         db.write_session_diary(open.id, project.id, &day, title.as_deref(), body)?;
     }
     let written = match diary {
-        Some(path) => Some(write_diary(path, &summary, heading)?),
+        Some(path) => Some(write_diary(path, &text)?),
         None => None,
     };
 
@@ -5049,6 +5086,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
                 "diary": written,
                 "backup": insured,
                 "on_session_end": hook,
+                "kasl": kasl,
             }))?
         );
         return Ok(());
@@ -5123,14 +5161,83 @@ Write it into a diary with: rigger session end {} --diary <file>",
     Ok(())
 }
 
+/// What a session holds up to a moment: the summary `end` writes and
+/// `draft` shows.
+///
+/// The project's own repository is read first. A commit made in the sitting
+/// is part of what it did, and until `sync` has read it the record does not
+/// know the commit exists - so a session that forgot to sync would leave a
+/// diary with the day's work missing from it.
+fn session_summary(db: &Db, project: &db::Project, open: &db::Session, at: &str) -> Result<session::Summary> {
+    if project.kind.reads_git()
+        && std::path::Path::new(&project.path).is_dir()
+        && let Err(e) = sync::sync(db, project)
+    {
+        eprintln!("The repository was not read, so this session's commits may be missing: {e:#}");
+    }
+    let events = db.session_events(open.id)?;
+    let shipped = db.shipped_between(project.id, &open.started_at, at)?;
+    let closed = db.tasks_closed_between(project.id, &open.started_at, at)?;
+    let commits = db.commits_between(project.id, &open.started_at, at)?;
+    let next_step = db.latest_event_body(project.id, "next")?;
+    let ended = db::Session {
+        ended_at: Some(at.to_string()),
+        ..open.clone()
+    };
+    Ok(session::summarise(&project.name, &ended, &events, shipped, closed, commits, next_step))
+}
+
+/// Reads an edited diary entry from a file, or from standard input as `-`.
+///
+/// The entry keeps the shape a composed one has: a `## ` heading line, then
+/// the body. One that arrives without a heading gets today's, so that an
+/// edit of the body alone is still an entry the hub can place.
+fn read_entry(path: &Path) -> Result<String> {
+    let text = match path.as_os_str() == "-" {
+        true => body_argument("-")?,
+        false => std::fs::read_to_string(path).with_context(|| format!("cannot read the entry from {}", path.display()))?,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("the entry is empty; leave --entry out to write the composed one");
+    }
+    Ok(match text.starts_with("## ") {
+        true => format!("{text}\n"),
+        false => format!("## {}\n\n{text}\n", db::today()),
+    })
+}
+
+/// Shows the diary entry the open session would leave, without closing it.
+///
+/// The entry is composed from what the sitting recorded, and the assistant
+/// is the one who knows what the day meant. So it reads the draft, edits
+/// it, and hands it back to `session end --entry` - editing a list of what
+/// happened rather than remembering it from a blank page.
+fn session_draft(project: Option<&str>, heading: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = project_here(&db, project)?;
+    let Some(open) = db.open_session(project.id)? else {
+        bail!("no session is open on {}; a draft is of the sitting in progress", project.name);
+    };
+    let at = db::now();
+    let summary = session_summary(&db, &project, &open, &at)?;
+    let entry = session::diary_entry(&summary, &db::today(), heading);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "session": summary, "done": summary.done(), "entry": entry }))?
+        );
+        return Ok(());
+    }
+    print!("{entry}");
+    Ok(())
+}
+
 /// Appends the entry to a diary file, newest first.
 ///
 /// Newest-first is how the hub's diary is written, so a new entry goes
 /// under the heading and above what came before rather than at the end.
-fn write_diary(path: &Path, summary: &session::Summary, heading: Option<&str>) -> Result<String> {
-    let day = summary.ended_at.split('T').next().unwrap_or_default().to_string();
-    let entry = session::diary_entry(summary, &day, heading);
-
+fn write_diary(path: &Path, entry: &str) -> Result<String> {
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),

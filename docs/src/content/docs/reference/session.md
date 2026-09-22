@@ -5,7 +5,8 @@ description: Open and close a sitting, so that its events belong together and th
 
 ```
 rigger session start [<project>] [--json]
-rigger session end [<project>] [--heading <TEXT>] [--diary <FILE>] [--remind] [--json]
+rigger session draft [<project>] [--heading <TEXT>] [--json]
+rigger session end [<project>] [--heading <TEXT>] [--diary <FILE>] [--entry <FILE>] [--remind] [--json]
 ```
 
 A session is one sitting, and everything recorded while it is open belongs to it.
@@ -31,6 +32,19 @@ A session on sample is already open, since 2026-09-05T09:12:44Z.
 ```
 
 An assistant that lost its place, or a hook that fired again, would otherwise orphan half its events under a session nobody ever ends.
+
+### Told to kasl
+
+kasl measures the working day; rigger knows what the day was spent on. When a sitting opens, rigger tells [kasl](https://github.com/lacodda/kasl) what it is about, and when it closes, that the interval is over - so the time and the work are one truth, and kasl's report names the stage:
+
+```
+kasl focus start "sample v0.3.0 · Search" --from rigger
+kasl focus stop --from rigger
+```
+
+`--from rigger` lets kasl close only what rigger opened, so a focus started by hand is not ended by an assistant's session. Joining a sitting already open tells kasl nothing - it is not a second interval.
+
+Without kasl, or with a kasl that does not know `focus` yet, this is silence: the session opens and closes exactly as it did, and nothing is printed. `--json` says what came of it under `kasl` - `taken`, `absent`, or `refused` with the first line kasl said. kasl is given five seconds to answer; a time tracker checking for its own update does not hold a session up. `RIGGER_KASL` names another kasl to run, and is the only way a record kept under `RIGGER_DATA_DIR` reaches one at all.
 
 ## `session end`
 
@@ -65,6 +79,38 @@ Work with nothing written down about why is work the record cannot explain later
 This is not a gate: the session closes either way. rigger reports; what to do about it is yours.
 
 ## The entry it leaves
+
+**Сделано.** is what the sitting did: the tasks it closed, the changes it recorded, and the commits it made while it was open, each said once - a change recorded by hand usually repeats the commit it describes. The project's repository is read first, so a commit made in the sitting is in the entry even if nobody ran [`sync`](/rigger/reference/sync/).
+
+### `session draft`
+
+The entry is composed, and the assistant is the one who knows what the day meant. So before closing, it reads the draft:
+
+```console
+$ rigger session draft sample --heading "v0.3.0 «Search»"
+## 2026-09-22 · v0.3.0 «Search»
+
+**Сделано.**
+
+- full-text index
+- feat(search): rank by relevance
+
+**Решения.**
+
+- the index is external-content, so text is stored once
+
+**Следующий шаг.** the query language
+```
+
+edits it - a list of what happened, rather than a blank page - and hands the edited text back:
+
+```console
+$ rigger session end sample --heading "v0.3.0 «Search»" --entry entry.md
+```
+
+`--entry` takes a file, or `-` for standard input. The edited entry replaces the composed one in the record and, with `--diary`, in the file. One without a `## ` heading line gets today's. It is read before the sitting closes, so an entry that cannot be read leaves the session open to try again rather than closed without its diary.
+
+### In the record
 
 The sitting's entry goes into the record whatever else happens to it, dated the day the session ended and titled by `--heading` when one is given. A hub written from the record reads its diary from there, so the next [`export`](/rigger/reference/export/) writes the entry at the top of `Дневник.md` - in the rule and spacing the diary already uses. Before this, `end` could only append to a file, and once that file was generated the entry went into a file the next export rewrote without it.
 
@@ -156,7 +202,7 @@ The record is one file, and a sitting that has just been written down is the wor
 $ rigger session end rigger
 Session on rigger closed, open since 2026-09-15T08:02:11Z.
 ...
-copied the database to ...igger.v18-20260915-120253.bak
+copied the database to ...\rigger.v18-20260915-120253.bak
 ```
 
 A second sitting on the same day does not take another: today's copy is insurance enough. The copy is taken on every path a session can close by, including `--json` and the Stop hook - a step that only runs when someone remembers it is the step that stops happening.
