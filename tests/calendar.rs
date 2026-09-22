@@ -298,27 +298,39 @@ fn next_shows_what_is_aimed_at_the_week_and_what_is_past_it() {
     assert!(!out.contains("v0.3.0"), "another week's focus is not this week's: {out}");
 }
 
+/// The week the test runs in, as `2026-W39`.
+///
+/// The grid marks lateness against the real clock, so a test about "this
+/// week" has to ask the clock which week that is. This test once named
+/// 2026-W38 outright, and went red the Monday after - reporting as late the
+/// very focus it was written to prove was not.
+fn this_week() -> String {
+    let week = jiff::Zoned::now().date().iso_week_date();
+    format!("{}-W{:02}", week.year(), week.week())
+}
+
 /// A version planned for this week is not late yet - only a week already
 /// gone is. Getting this wrong would mark the current focus as overdue on
 /// the Monday it began.
 #[test]
 fn the_current_week_is_not_late() {
     let data = tempfile::tempdir().unwrap();
+    let now = this_week();
     rigger(data.path()).arg("init").assert().success();
     project(data.path(), "alpha", &["v0.1.0 · First"], &[]);
     rigger(data.path())
-        .args(["version", "plan", "alpha", "v0.1.0", "--week", "2026-W38"])
+        .args(["version", "plan", "alpha", "v0.1.0", "--week", &now])
         .assert()
         .success();
 
-    let out = output(data.path(), &["next", "--week", "2026-W38"]);
+    let out = output(data.path(), &["next", "--week", &now]);
     assert!(out.contains("v0.1.0"), "{out}");
     assert!(!out.contains("Past their week"), "{out}");
 
     // And the grid agrees: the mark for this week is "planned", not
     // "overdue". Checked here because `next` decides the focus before it
     // asks about lateness, so it would go on looking right either way.
-    let grid = output(data.path(), &["calendar", "--from", "2026-W38", "--weeks", "1"]);
+    let grid = output(data.path(), &["calendar", "--from", &now, "--weeks", "1"]);
     assert!(grid.contains("·v0.1.0"), "this week is planned, not late: {grid}");
     assert!(!grid.contains("!v0.1.0"), "{grid}");
 }
