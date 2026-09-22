@@ -31,6 +31,9 @@ pub struct Screen {
     pub on_session_end: Option<String>,
     pub hub_path: Option<String>,
     pub last_shipped: Option<(String, String)>,
+    /// How far the newest shipped version got past its tag, when anyone has
+    /// said: the release engine, or GitHub as `sync` read it.
+    pub delivery: Option<crate::delivery::Delivery>,
     pub versions_planned: u64,
     pub tasks_open: u64,
     pub commits_since_tag: Option<u32>,
@@ -70,6 +73,7 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         on_session_end: project.on_session_end.clone(),
         hub_path: project.hub_path.clone(),
         last_shipped: db.last_shipped_version(project.id)?,
+        delivery: db.latest_delivery(project.id)?.and_then(|d| d.delivery),
         versions_planned: db.count_versions(project.id, "planned")?,
         tasks_open: db.count_open_tasks(project.id)?,
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
@@ -117,6 +121,9 @@ pub fn render(screen: &Screen) -> String {
     match &screen.last_shipped {
         Some((version, day)) => {
             let _ = write!(out, "Last shipped {version} on {day}");
+            if let Some(delivery) = screen.delivery {
+                let _ = write!(out, " - {}", delivery.describe());
+            }
             match screen.commits_since_tag {
                 Some(0) | None => out.push('\n'),
                 Some(1) => out.push_str(", 1 commit since\n"),
@@ -272,6 +279,7 @@ mod tests {
             on_session_end: None,
             hub_path: None,
             last_shipped: Some(("v0.2.0".into(), "2026-09-10".into())),
+            delivery: None,
             versions_planned: 3,
             tasks_open: 4,
             commits_since_tag: Some(2),

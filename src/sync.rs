@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::db::{Change, Db, Project, version_order};
+use crate::delivery::{Delivery, Unread};
 
 /// What one project's repository says, and what changed in the record.
 #[derive(Debug, Default, Serialize)]
@@ -39,6 +40,18 @@ pub struct Report {
     /// repository exists, and a hub can be imported from a directory that
     /// was never a checkout.
     pub warnings: Vec<String>,
+    /// What GitHub says about the newest shipped version, when it was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryNote>,
+}
+
+/// How far the newest shipped version got past its tag, as GitHub told it.
+#[derive(Debug, Serialize)]
+pub struct DeliveryNote {
+    pub version: String,
+    pub state: Delivery,
+    /// Whether this run is what learnt it.
+    pub newly: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,8 +64,56 @@ pub struct Shipped {
 
 impl Report {
     pub fn changed(&self) -> bool {
-        self.shipped.iter().any(|s| s.newly) || !self.unplanned.is_empty() || self.changes_recorded > 0
+        self.shipped.iter().any(|s| s.newly) || !self.unplanned.is_empty() || self.changes_recorded > 0 || self.delivery.as_ref().is_some_and(|d| d.newly)
     }
+
+    /// Whether GitHub said something the owner has to hear: a version the
+    /// calendar counts as shipped that nobody can install.
+    pub fn short_delivery(&self) -> Option<&DeliveryNote> {
+        self.delivery.as_ref().filter(|d| d.state.is_short())
+    }
+}
+
+/// Asks GitHub how far the newest shipped version got, and records it.
+///
+/// Only the newest: the question is whether the release that counts now
+/// reached anyone, and asking about every tag of every project would spend
+/// a sync on history nobody is going to act on. A version the engine
+/// reported, or one already seen published, is not asked about again -
+/// the first because the engine outranks a look, the second because
+/// nothing un-publishes a crate.
+///
+/// `Ok(None)` when there was nothing to ask: no GitHub remote, nothing
+/// shipped, or a repository that makes no releases at all.
+///
+/// GitHub is asked about the tag, spelt as the tag is: `tags` are the ones
+/// the repository has. A plan writes `v1.13` where the tag says `v1.13.0`,
+/// the record matches the two by value, and GitHub does not - asked about
+/// the plan's spelling, it answered "no release" for a version released the
+/// day before. Found on the first run over the real line.
+pub fn read_delivery(db: &Db, project: &Project, tags: &[&str]) -> Result<Result<Option<DeliveryNote>, Unread>> {
+    let Some(repo) = project.remote.as_deref().and_then(crate::delivery::github_repo) else {
+        return Ok(Ok(None));
+    };
+    let Some(latest) = db.latest_delivery(project.id)? else {
+        return Ok(Ok(None));
+    };
+    if latest.by.as_deref() == Some("engine") || latest.delivery == Some(Delivery::Published) {
+        return Ok(Ok(None));
+    }
+    let wanted = version_order(&latest.version);
+    let tag = tags.iter().find(|t| version_order(t) == wanted).copied().unwrap_or(&latest.version);
+    let state = match crate::delivery::read(&repo, tag) {
+        Ok(Some(state)) => state,
+        Ok(None) => return Ok(Ok(None)),
+        Err(unread) => return Ok(Err(unread)),
+    };
+    let change = db.set_delivery(latest.id, state, &[], "github")?;
+    Ok(Ok(Some(DeliveryNote {
+        version: latest.version,
+        state,
+        newly: change != Change::Unchanged,
+    })))
 }
 
 /// A tag that names a version, and the day its commit was made.

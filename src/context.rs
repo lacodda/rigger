@@ -84,6 +84,12 @@ pub struct State {
     pub remote: Option<String>,
     pub last_shipped: Option<String>,
     pub last_shipped_on: Option<String>,
+    /// How far the newest shipped version got past its tag, when that falls
+    /// short of anyone being able to install it. Only the shortfall is
+    /// carried: a full delivery is the ordinary case and costs the packet a
+    /// line that says nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_short: Option<String>,
     pub versions_planned: u64,
     pub tasks_open: u64,
     /// Days since anything was recorded about this project. A project that
@@ -175,6 +181,11 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         remote: project.remote.clone(),
         last_shipped: db.last_shipped_version(project.id)?.map(|(name, _)| name),
         last_shipped_on: db.last_shipped_version(project.id)?.map(|(_, on)| on),
+        delivery_short: db
+            .latest_delivery(project.id)?
+            .and_then(|d| d.delivery)
+            .filter(|d| d.is_short())
+            .map(|d| d.describe().to_string()),
         versions_planned: db.count_versions(project.id, "planned")?,
         tasks_open: db.count_open_tasks(project.id)?,
         days_quiet: db.last_event_at(project.id)?.as_deref().and_then(days_since),
@@ -469,7 +480,10 @@ fn render_state(p: &Packet) -> String {
         out.push('\n');
     }
     match (&p.state.last_shipped, &p.state.last_shipped_on) {
-        (Some(v), Some(on)) => out.push_str(&format!("Last shipped: {v} on {on}\n")),
+        (Some(v), Some(on)) => match &p.state.delivery_short {
+            Some(short) => out.push_str(&format!("Last shipped: {v} on {on} - {short}\n")),
+            None => out.push_str(&format!("Last shipped: {v} on {on}\n")),
+        },
         _ => out.push_str("Nothing shipped yet\n"),
     }
     out.push_str(&format!(

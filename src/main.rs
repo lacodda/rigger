@@ -1663,6 +1663,10 @@ fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
         None => db.projects()?,
     };
     let mut reports = Vec::new();
+    // Why GitHub stopped being asked, once it has. Offline, every project
+    // would fail the same way, and eighteen lines saying so hide the one
+    // project that changed; the first failure ends the asking for the run.
+    let mut unreachable: Option<String> = None;
     for project in &projects {
         // A place the record keeps for itself has no repository, and asking
         // git about it would warn on every run about a project working
@@ -1674,7 +1678,18 @@ fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
             }
             continue;
         }
-        reports.push(sync::sync(&db, project)?);
+        let mut report = sync::sync(&db, project)?;
+        if unreachable.is_none() {
+            let tags: Vec<&str> = report.shipped.iter().map(|s| s.version.as_str()).collect();
+            match sync::read_delivery(&db, project, &tags)? {
+                Ok(note) => report.delivery = note,
+                // No `gh` is a way of working, not a failure: the tag stays
+                // the fact it always was, and nothing is said.
+                Err(delivery::Unread::NoGh) => unreachable = Some(String::new()),
+                Err(delivery::Unread::Failed(why)) => unreachable = Some(why),
+            }
+        }
+        reports.push(report);
     }
 
     if json {
@@ -1683,6 +1698,9 @@ fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
     }
     for report in &reports {
         print_sync(report, projects.len() > 1);
+    }
+    if let Some(why) = unreachable.filter(|w| !w.is_empty()) {
+        println!("GitHub was not read, so releases and publish runs were not checked: {}", first_line(&why));
     }
     Ok(())
 }
@@ -1693,7 +1711,7 @@ fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
 /// across the whole line is read for what changed, and seventeen "nothing
 /// changed" lines hide the two that did.
 fn print_sync(report: &sync::Report, many: bool) {
-    let quiet = !report.changed() && report.untagged.is_empty() && report.warnings.is_empty();
+    let quiet = !report.changed() && report.untagged.is_empty() && report.warnings.is_empty() && report.short_delivery().is_none();
     if many && quiet {
         return;
     }
@@ -1714,6 +1732,14 @@ fn print_sync(report: &sync::Report, many: bool) {
     }
     for version in &report.untagged {
         println!("  no tag     {version} is closed in the plan");
+    }
+    // A short delivery is said on every run until it is fixed: it is not
+    // news but a standing fault, and the calendar counts the version as
+    // shipped all the while. A full one is said once, when it is learnt.
+    if let Some(note) = &report.delivery
+        && (note.state.is_short() || note.newly)
+    {
+        println!("  delivery   {}: {}", note.version, note.state.describe());
     }
     // Activity is state, not news: it says the same thing on every run until
     // someone commits. Printed when there is something else to say, so a run

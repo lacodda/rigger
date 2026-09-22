@@ -68,6 +68,37 @@ A release the plan never mentioned is reported as `(not in the plan)` - but only
 
 Annotated and lightweight tags both work. The date is always the commit's, because a lightweight tag - what `git tag v0.5.0` makes - has no date of its own.
 
+## Releases and publishing
+
+A tag says the work was finished. It does not say anyone can install it: v0.4.0 of rigger itself was tagged, counted as shipped by every screen, and missing from crates.io, because its publish had gone red and nothing that read the record could tell. So since v0.23.0 a shipped version has a second fact beside its tag - its **delivery** - and `sync` reads it from GitHub.
+
+For the newest shipped version of each project whose remote is on GitHub, `sync` asks [`gh`](https://cli.github.com/): is there a release for the tag, does it carry archives, and how did the tag's publish run end. A publish run is a workflow whose name says `publish`; the one that builds the archives does not decide whether anyone can install.
+
+| Delivery | What GitHub said |
+| --- | --- |
+| `tag-only` | no release for the tag, though the repository makes releases |
+| `no-assets` | a release with nothing to install from |
+| `released` | a release with its archives; no publish run for the tag |
+| `publish-running` | the publish run has not finished |
+| `publish-failed` | the publish run went red |
+| `published` | released, and the publish run went green |
+
+The three that fall short are said on every run until they are fixed - a standing fault, not news - and the full ones once, when learnt:
+
+```console
+$ rigger sync
+widget:
+  delivery   v0.4.0: tag exists, no release
+```
+
+[`show`](/rigger/reference/show/) carries the state beside the last release, and the [context packet](/rigger/reference/context/) carries it when it falls short - `Last shipped: v0.4.0 on 2026-09-04 - tag exists, no release`.
+
+The tag is still what the calendar counts. Delivery sits beside it rather than replacing it: a project that tags and never makes GitHub releases is working that way on purpose, and un-shipping all its versions would rewrite its history. Such a repository - one with no releases at all - is not asked about its tags.
+
+What the release engine reported with [`note --kind shipped`](/rigger/reference/note/#a-release-as-the-engine-made-it) is not overwritten by what `sync` sees: the engine is the thing that made the release, and a look at GitHub is how the record learns when there was no engine. A version already `published` is not asked about again.
+
+Only the newest version is asked about, so a sync of the whole line costs a few calls per project, not one per tag in its history. Without `gh`, nothing is asked and nothing is said; if `gh` cannot answer - offline, signed out - the first failure ends the asking for the run and is said in one line at the end. `RIGGER_GH` names another `gh` to run. A record kept under `RIGGER_DATA_DIR` asks GitHub only through a `gh` named that way: its projects are made up, and a test should not reach the real network.
+
 ## Changes from commit messages
 
 The line writes [Conventional Commits](https://www.conventionalcommits.org/), so a commit already says what kind of change it is. `sync` reads that and records it, which means the changelog side of the record stays current without anyone opening a session.
@@ -91,6 +122,8 @@ The commits since the newest tag, and when the last one landed. It answers a que
 ```
 
 ## Schema
+
+Schema version 25 (v0.23.0) adds a version's delivery, the registries it reached and who said so - the release engine or GitHub - and the day a question is due.
 
 Schema version 4 adds the full-text index that [`rigger find`](/rigger/reference/find/) searches, and the moment a version was tagged - the day alone cannot tell apart releases that shipped hours apart. The database is copied aside before migrating - the copy is named for the schema it holds - and an older rigger refuses a database it does not understand rather than damaging it.
 
