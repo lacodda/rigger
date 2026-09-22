@@ -48,7 +48,8 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `record_change` | Something that changed in the product |
 | `record_state` | One line for the top of the hub's state block, when the state shifted |
 | `set_next_step` | The one line the next session starts from; the newest wins |
-| `ask_owner` | A question only the owner can settle; it waits in the packet |
+| `ask_owner` | A question only the owner can settle; it waits in the packet, with a `due` day when the answer is needed by one |
+| `record_shipped` | A release as the release engine made it: `tag`, `release`, `registries` |
 | `wish` | Something to sort into the plan later |
 | `resolve` | Answers a question or sorts a wish, so it leaves the packet |
 | `close_task` | Marks a task of the current stage done |
@@ -70,6 +71,10 @@ This is what lets an assistant write a research note or fix a vision into the re
 `record_decision` also takes a `principle`: the name of the thing this line already believes that the decision is one more instance of. Read `principles` before naming one, so that a decision joins a thread rather than starting a synonym of it; `why_principle` reads the whole thread back, across every project. See [`note`](/rigger/reference/note/) and [`why`](/rigger/reference/why/).
 
 `wish` takes a `from`, naming the project that is asking, when one product needs something of another. The order then shows on the neighbour's packet and in the owner's [inbox](/rigger/reference/inbox/) as theirs - it is still an ordinary wish, sorted by the same `resolve`.
+
+`ask_owner` takes a `due` - a date, `tomorrow`, `+3d`, `friday` - when the answer is needed by a day; past it, the question is shown as overdue in the inbox, the Monday brief and the packet. See [`note`](/rigger/reference/note/#a-question-with-the-day-it-is-due).
+
+`record_shipped` is what a release engine calls when it has made a release: the `tag`, whether a `release` with its archives went out, and the `registries` it reached. The version closes on it, and `sync`'s own look at GitHub does not overwrite it. See [`note --kind shipped`](/rigger/reference/note/#a-release-as-the-engine-made-it).
 
 `link` states a tie between two products, anchoring a version on a side by writing it `kasl@v1.13.0`. Only pairs are checked for drift, and the drift is raised on the owner's own screens without anyone asking. See [`link`](/rigger/reference/link/).
 

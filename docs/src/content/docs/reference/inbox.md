@@ -29,6 +29,20 @@ Answer one with: rigger resolve <project> <id> "<answer>"
 
 Grouped by project, because answering is done a project at a time, and oldest first within one - what has waited longest is what is most overdue.
 
+## A question past its day
+
+A question asked with a day ([`note --kind question --due`](/rigger/reference/note/#a-question-with-the-day-it-is-due), or `ask_owner` with `due`) carries it at the end of its line, and once the day has gone the line says so - in red, for a person at a terminal:
+
+```console
+$ rigger inbox
+2 questions in 1 project, 1 overdue
+
+sample       [  7] 2026-09-18  Which registry goes first?  overdue since 2026-09-21
+             [  8] 2026-09-22  Which icon?  due 2026-10-22
+```
+
+`--json` carries `due` and `overdue` on every question, read against today when the inbox is read, so every screen that shows a question agrees on whether it is late.
+
 ## One answer, several projects
 
 The block at the bottom is the reason this command groups rather than lists. Questions are copied between projects: a real record had three of them waiting on the same decision about a release calendar, and without the grouping it read as three separate jobs.

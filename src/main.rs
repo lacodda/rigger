@@ -10,6 +10,7 @@ mod card;
 mod commit;
 mod context;
 mod db;
+mod delivery;
 #[allow(dead_code)]
 mod doc;
 mod export;
@@ -21,6 +22,7 @@ mod link;
 mod mcp;
 mod open;
 mod owner;
+mod paint;
 mod paths;
 mod profile;
 mod repo;
@@ -147,14 +149,26 @@ enum Command {
     Note {
         /// Project name
         project: String,
-        /// What happened
-        text: String,
+        /// What happened; a release may leave it out and be described by its flags
+        text: Option<String>,
         /// Kind of event
         #[arg(long, value_name = "KIND", default_value = "finding")]
         kind: NoteKind,
         /// The principle this decision stands on
         #[arg(long, value_name = "NAME")]
         principle: Option<String>,
+        /// The day a question needs its answer by: 2026-09-25, tomorrow, +3d, friday
+        #[arg(long, value_name = "DAY")]
+        due: Option<String>,
+        /// The tag a release went out under
+        #[arg(long, value_name = "TAG")]
+        tag: Option<String>,
+        /// The release was published with its archives
+        #[arg(long)]
+        release: bool,
+        /// A registry the release reached; repeat for each
+        #[arg(long = "registry", value_name = "NAME")]
+        registries: Vec<String>,
     },
     /// Start an assistant session in the project, with the packet in hand
     Open {
@@ -392,10 +406,14 @@ enum Command {
     },
 }
 
-/// The kinds a `note` can record. A question is not among them: it is
-/// addressed to the owner and arrives from the hub or, later, from the
-/// assistant's `ask_owner` tool.
-#[derive(Clone, Copy, clap::ValueEnum)]
+/// The kinds a `note` can record.
+///
+/// A question was once left out, on the grounds that it is addressed to the
+/// owner and arrives through the assistant's `ask_owner`. That made MCP the
+/// only door to the inbox: a script, an assistant without the server, or the
+/// owner at a terminal had no way to put a question there - while `inbox`,
+/// which reads them, was a command all along.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum NoteKind {
     /// A decision and its reason
     Decision,
@@ -411,6 +429,10 @@ enum NoteKind {
     State,
     /// A step of the plan of edits, for a card
     Plan,
+    /// A question only the owner can settle; it waits in the inbox
+    Question,
+    /// A release that went out, as the release engine saw it
+    Shipped,
 }
 
 impl NoteKind {
@@ -423,6 +445,8 @@ impl NoteKind {
             NoteKind::Next => "next",
             NoteKind::State => "state",
             NoteKind::Plan => "plan",
+            NoteKind::Question => "question",
+            NoteKind::Shipped => "shipped",
         }
     }
 }
@@ -1071,7 +1095,31 @@ fn run(cli: Cli) -> Result<()> {
             text,
             kind,
             principle,
-        } => note(&project, kind.as_str(), &text, principle.as_deref(), None),
+            due,
+            tag,
+            release,
+            registries,
+        } => {
+            // The flags that belong to one kind are refused on the others,
+            // so that a `--due` on a finding is a mistake said out loud
+            // rather than a deadline silently dropped.
+            if due.is_some() && kind != NoteKind::Question {
+                bail!("--due belongs to a question; this is a {}", kind.as_str());
+            }
+            if kind != NoteKind::Shipped && (tag.is_some() || release || !registries.is_empty()) {
+                bail!("--tag, --release and --registry describe a release; write --kind shipped");
+            }
+            match kind {
+                NoteKind::Shipped => {
+                    let tag = tag.context("a release is recorded by its tag: --tag v0.23.0")?;
+                    note_shipped(&project, &tag, release, &registries, text.as_deref())
+                }
+                _ => {
+                    let text = text.with_context(|| format!("say what the {} is", kind.as_str()))?;
+                    note(&project, kind.as_str(), &text, principle.as_deref(), None, due.as_deref())
+                }
+            }
+        }
         Command::Sync { project, json } => sync_projects(project.as_deref(), json),
         Command::Inbox { project, json } => inbox(project.as_deref(), json),
         Command::Digest { project, since, json } => digest(project.as_deref(), &since, json),
@@ -1135,7 +1183,7 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Mcp => mcp::serve(),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
-        Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref()),
+        Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref(), None),
         Command::Link { command } => match command {
             LinkCommand::Add { from, to, kind, note } => link_add(&from, &to, kind, note.as_deref()),
             LinkCommand::List { project, json } => link_list(project.as_deref(), json),
@@ -1688,8 +1736,11 @@ fn print_sync(report: &sync::Report, many: bool) {
 /// An event written against a card, under the desk.
 fn note_on_card(task: &str, kind: &str, text: &str) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    if kind == "state" {
-        bail!("a state line belongs to a project's README, not to a card");
+    match kind {
+        "state" => bail!("a state line belongs to a project's README, not to a card"),
+        "question" => bail!("a question waits in a project's inbox, not on a card; write `rigger note <project> --kind question`"),
+        "shipped" => bail!("a release belongs to a project's versions, not to a card; write `rigger note <project> --kind shipped`"),
+        _ => {}
     }
     let card = find_card(&db, task)?;
     let desk = db.desk_project()?;
@@ -1698,9 +1749,32 @@ fn note_on_card(task: &str, kind: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>) -> Result<()> {
+/// Records a release as the release engine reports it.
+fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], text: Option<&str>) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
+    let recorded = delivery::record(&db, &project, tag, release, registries, text)?;
+    match recorded.closed {
+        true => println!("{} {} shipped - {}", project.name, recorded.version, recorded.delivery.describe()),
+        false => println!(
+            "{} {} had shipped already; now {}",
+            project.name,
+            recorded.version,
+            recorded.delivery.describe()
+        ),
+    }
+    if !recorded.registries.is_empty() {
+        println!("  reached {}", recorded.registries.join(", "));
+    }
+    Ok(())
+}
+
+fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>, due: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    // Read before anything is written, so that a day that is not a day
+    // refuses the question rather than leaving it recorded without one.
+    let due = due.map(|d| db::parse_day(d, &db::today())).transpose()?;
     // A state line is not an event: it is the top of the README's state
     // block, which an export writes from the record.
     if kind == "state" {
@@ -1735,9 +1809,21 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
             db.name_asker(id, asker.id)?;
         }
     }
+    // Found by its text rather than as the newest question: asking the same
+    // question again is how a day is given to one already waiting, and the
+    // newest question may be another one entirely.
+    if let Some(due) = &due
+        && let Some(id) = db.question_by_text(project.id, text)?
+    {
+        db.set_due(id, Some(due))?;
+    }
     match (kind, &asker) {
         ("wish", Some(asker)) => println!("Recorded a wish for {} from {}", project.name, asker.name),
+        ("question", _) => println!("Asked the owner about {}; it waits in the inbox until answered", project.name),
         _ => println!("Recorded a {kind} for {}", project.name),
+    }
+    if let Some(due) = &due {
+        println!("  due {due}");
     }
     if let Some(principle) = principle {
         println!("  on the principle {principle:?}");
@@ -2132,14 +2218,19 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
         print_asked(&asked, project.is_some());
         return Ok(());
     }
+    let late = waiting.iter().filter(|q| q.overdue).count();
+    let late = match late {
+        0 => String::new(),
+        n => format!(", {}", paint::red(&format!("{n} overdue"))),
+    };
     match project {
         Some(_) => println!(
-            "{}
+            "{}{late}
 ",
             plural(waiting.len(), "question", "questions")
         ),
         None => println!(
-            "{} in {}
+            "{} in {}{late}
 ",
             plural(waiting.len(), "question", "questions"),
             plural(projects.len(), "project", "projects")
@@ -2156,7 +2247,13 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
             question.project.clone()
         };
         last = Some(&question.project);
-        println!("{name:<12} [{:>3}] {}  {}", question.id, question.date, owner::subject(&question.body));
+        println!(
+            "{name:<12} [{:>3}] {}  {}{}",
+            question.id,
+            question.date,
+            owner::subject(&question.body),
+            due_mark(question)
+        );
     }
 
     // One answer that settles three projects is the most valuable thing on
@@ -2177,6 +2274,19 @@ Asked by several projects - one answer settles each group:"
 Answer one with: rigger resolve <project> <id> \"<answer>\""
     );
     Ok(())
+}
+
+/// What a question's day says, as the tail of its line.
+///
+/// A question past its day is written out as overdue and, for a person at a
+/// terminal, in red - the words carry it for a pipe, the colour for an eye
+/// scanning a list of forty lines that otherwise all look the same.
+fn due_mark(question: &db::Waiting) -> String {
+    match (&question.due, question.overdue) {
+        (Some(due), true) => format!("  {}", paint::red(&format!("overdue since {due}"))),
+        (Some(due), false) => format!("  due {due}"),
+        (None, _) => String::new(),
+    }
 }
 
 /// The orders neighbours have placed, as their own group.
@@ -4076,6 +4186,17 @@ fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
             plural(waiting.len(), "question", "questions"),
             plural(projects.len(), "project", "projects")
         );
+        // A question past its day is named, not counted: the count says how
+        // much is waiting, and these are the ones already costing something.
+        for question in waiting.iter().filter(|q| q.overdue) {
+            println!(
+                "  {} [{}] {}  {}",
+                question.project,
+                question.id,
+                owner::subject(&question.body),
+                paint::red(&format!("overdue since {}", question.due.as_deref().unwrap_or_default()))
+            );
+        }
         // The groups are what makes the queue smaller than it looks, so they
         // are the part worth naming on a screen that is meant to be short.
         for group in shared.iter().take(3) {

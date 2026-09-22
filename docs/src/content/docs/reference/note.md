@@ -5,6 +5,8 @@ description: Record a decision, a finding, a pitfall, a change or the next step.
 
 ```
 rigger note <PROJECT> <TEXT> [--kind <KIND>] [--principle <NAME>]
+rigger note <PROJECT> <TEXT> --kind question [--due <DAY>]
+rigger note <PROJECT> [<TEXT>] --kind shipped --tag <TAG> [--release] [--registry <NAME>]...
 rigger wish <PROJECT> <TEXT> [--from <PROJECT>]
 ```
 
@@ -29,6 +31,8 @@ Recorded a next for sample
 | `next` | the one line the next session starts from |
 | `state` | one line for the hub's state block: where things stand after this sitting |
 | `plan` | a step of the plan of edits, for a [card](/rigger/reference/task/) |
+| `question` | something only the owner can settle; it waits in the [inbox](/rigger/reference/inbox/) (v0.23.0) |
+| `shipped` | a release, as the release engine made it (v0.23.0) |
 
 An event against a [card](/rigger/reference/task/) rather than a project is `rigger task note <CARD> <TEXT> [--kind <KIND>]` - by the card's key, an alias or its id; cards live in the desk, so no project is named. A card's packet reads these back by kind.
 
@@ -58,7 +62,38 @@ The vocabulary is whatever has been used. There is no list to keep: a principle 
 
 Only a decision can carry one. A finding or a change is something that happened, not something believed, and asking for a principle on one is refused rather than quietly dropped.
 
-A question is not a kind here: questions are addressed to the owner, and they arrive from the hub or from an assistant calling [`ask_owner`](/rigger/reference/mcp/). Answering one is [`rigger resolve`](/rigger/reference/resolve/).
+## A question, with the day it is due
+
+A question is addressed to the owner, and waits in the [inbox](/rigger/reference/inbox/) and in the packet until [`rigger resolve`](/rigger/reference/resolve/) answers it. Until v0.23.0 only an assistant could ask one, through [`ask_owner`](/rigger/reference/mcp/); a script, or the owner at a terminal, had no door to the inbox that `rigger inbox` reads.
+
+```console
+$ rigger note sample "Which registry goes first?" --kind question --due friday
+Asked the owner about sample; it waits in the inbox until answered
+  due 2026-09-25
+```
+
+`--due` is the day the answer is needed by - a release waiting on it, say. It takes a date, `today`, `tomorrow`, `+3d`, or a weekday meaning the coming one (today included). Once the day has gone by, the question is called **overdue** wherever it is shown: first in its line of the [inbox](/rigger/reference/inbox/), under **Waiting on you** in the [Monday brief](/rigger/reference/week/), in the week's [toast](/rigger/reference/week/#the-week-as-a-toast), and in the packet as `(overdue since 2026-09-25)`. For a person at a terminal the word is also red; in a pipe it is just the word. The day itself is not overdue: a question due today can still be answered on time.
+
+Asking the same question again with `--due` gives the one already waiting a day, rather than a second copy. `--due` on anything but a question, or a day that is not a day, is refused before anything is written.
+
+## A release, as the engine made it
+
+A tag says the work was finished; it does not say anyone can install it. The release engine - the thing that tags, publishes and uploads - says what it did, and the record believes it:
+
+```console
+$ rigger note sample --kind shipped --tag v0.2.0 --release --registry crates.io --registry npm
+sample v0.2.0 shipped - released and published
+  reached crates.io, npm
+```
+
+- `--tag` names the release, and must name a version.
+- `--release` says a release with its archives went out.
+- `--registry` names a registry it reached; repeat it for each.
+- The text is optional here: without one, the event is composed from the flags - `v0.2.0 went out: the release with its archives, crates.io, npm`.
+
+The version closes on this word, without waiting for [`sync`](/rigger/reference/sync/) to read the tag. When `sync` does read it, the tag's day and moment replace the engine's - the tag is the proof - but what the engine said about delivery stays: `sync`'s own look at GitHub never overwrites it. The same release recorded from an assistant is [`record_shipped`](/rigger/reference/mcp/).
+
+What "delivery" means, and the states it has, is on the [`sync`](/rigger/reference/sync/#releases-and-publishing) page.
 
 A `change` can also arrive on its own: [`rigger sync`](/rigger/reference/sync/) reads them from commit messages.
 

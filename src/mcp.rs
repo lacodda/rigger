@@ -278,9 +278,25 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "ask_owner",
-            "Ask the owner something only they can settle. The question waits in the packet until they answer it - it does not reach them now, so do not block on it.",
-            json!({ "project": project_arg(), "text": text_arg("The question, with enough context to answer it cold") }),
+            "Ask the owner something only they can settle. The question waits in the packet until they answer it - it does not reach them now, so do not block on it. Give `due` when the answer is needed by a day - a release waiting on it, say - so the inbox and the Monday brief can show it overdue.",
+            json!({
+                "project": project_arg(),
+                "text": text_arg("The question, with enough context to answer it cold"),
+                "due": { "type": "string", "description": "The day the answer is needed by: 2026-09-25, tomorrow, +3d, friday" },
+            }),
             &["project", "text"],
+        ),
+        tool(
+            "record_shipped",
+            "Record a release as the release engine made it: the tag, whether a release with its archives went out, and which registries it reached. The version closes on this word rather than on a guess from the tag, and `sync` does not overwrite what is recorded here.",
+            json!({
+                "project": project_arg(),
+                "tag": { "type": "string", "description": "The tag the release went out under, as v0.23.0" },
+                "release": { "type": "boolean", "description": "Whether a release with its archives was published" },
+                "registries": { "type": "array", "items": { "type": "string" }, "description": "The registries it reached: crates.io, npm" },
+                "text": text_arg("Anything worth keeping about how it went; optional"),
+            }),
+            &["project", "tag"],
         ),
         tool(
             "wish",
@@ -443,6 +459,29 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
         "plan" => {
             let project = project(db)?;
             Ok(render_plan(db, &project)?)
+        }
+        "record_shipped" => {
+            let project = project(db)?;
+            let Some(tag) = args.get("tag").and_then(Value::as_str) else {
+                bail!("a release is recorded by its tag: give `tag` as v0.23.0");
+            };
+            let release = args.get("release").and_then(Value::as_bool).unwrap_or(false);
+            let registries: Vec<String> = args
+                .get("registries")
+                .and_then(Value::as_array)
+                .map(|all| all.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            let text = args.get("text").and_then(Value::as_str);
+            let recorded = crate::delivery::record(db, &project, tag, release, &registries, text)?;
+            Ok(match recorded.closed {
+                true => format!("{} {} shipped - {}.", project.name, recorded.version, recorded.delivery.describe()),
+                false => format!(
+                    "{} {} had shipped already; now {}.",
+                    project.name,
+                    recorded.version,
+                    recorded.delivery.describe()
+                ),
+            })
         }
         "task_find" => {
             let Some(query) = args.get("query").and_then(Value::as_str).map(str::trim).filter(|q| !q.is_empty()) else {
@@ -714,7 +753,19 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             {
                 bail!("{} cannot be the neighbour asking itself for something", asker.name);
             }
+            // Read before the question is written, like the principle and
+            // the asker: a day that is not a day refuses the whole call.
+            let due = match (kind, args.get("due").and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty())) {
+                ("question", Some(day)) => Some(crate::db::parse_day(day, &crate::db::today())?),
+                (_, Some(_)) => bail!("`due` belongs to a question"),
+                (_, None) => None,
+            };
             db.record_event(project.id, kind, text, &crate::db::now(), "assistant")?;
+            if let Some(due) = &due
+                && let Some(id) = db.question_by_text(project.id, text)?
+            {
+                db.set_due(id, Some(due))?;
+            }
             if let Some(id) = db.latest_event_id(project.id, kind)? {
                 if let Some(principle) = principle {
                     db.name_principle(id, principle)?;
@@ -725,7 +776,10 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             }
             Ok(match (kind, &asker) {
                 ("next", _) => format!("The next session for {} starts from this line.", project.name),
-                ("question", _) => format!("Asked the owner; it waits in {}'s packet until they answer.", project.name),
+                ("question", _) => match &due {
+                    Some(due) => format!("Asked the owner; it waits in {}'s packet until they answer, due {due}.", project.name),
+                    None => format!("Asked the owner; it waits in {}'s packet until they answer.", project.name),
+                },
                 ("wish", Some(asker)) => format!("Recorded a wish for {} from {}.", project.name, asker.name),
                 ("wish", None) => format!("Recorded a wish for {}.", project.name),
                 _ => match principle {
@@ -901,6 +955,7 @@ mod tests {
             "why_principle",
             "link",
             "links",
+            "record_shipped",
         ] {
             assert!(names.contains(&promised.to_string()), "{promised} is missing from {names:?}");
         }

@@ -218,6 +218,8 @@ mod tests {
             id: 1,
             date: "2026-09-04".into(),
             body: body.into(),
+            due: None,
+            overdue: false,
         }
     }
 

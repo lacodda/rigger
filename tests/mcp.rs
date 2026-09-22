@@ -313,3 +313,41 @@ fn an_assistant_reads_and_writes_the_handwritten_texts() {
     );
     assert_eq!(emptied["result"]["isError"], true, "{emptied}");
 }
+
+/// A question with a day, and a release as the engine made it: the two
+/// facts this door gained in v0.23.0, each read back through the packet
+/// and the version it closed.
+#[test]
+fn a_question_carries_its_day_and_a_release_closes_its_version() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    let mut server = Server::start(data.path());
+    server.request(1, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+
+    let asked = server.call(
+        2,
+        "ask_owner",
+        json!({ "project": "proj", "text": "Which registry first?", "due": "2020-01-10" }),
+    );
+    assert!(asked.contains("due 2020-01-10"), "{asked}");
+    let packet = server.call(3, "context", json!({ "project": "proj" }));
+    assert!(packet.contains("(overdue since 2020-01-10) Which registry first?"), "{packet}");
+
+    // A day on anything but a question is refused, not dropped.
+    let refused = server.request(
+        4,
+        "tools/call",
+        json!({ "name": "wish", "arguments": { "project": "proj", "text": "x", "due": "tomorrow" } }),
+    );
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+
+    let shipped = server.call(
+        5,
+        "record_shipped",
+        json!({ "project": "proj", "tag": "v0.2.0", "release": true, "registries": ["crates.io"] }),
+    );
+    assert!(shipped.contains("v0.2.0 shipped - released and published"), "{shipped}");
+    let packet = server.call(6, "context", json!({ "project": "proj" }));
+    assert!(packet.contains("Last shipped: v0.2.0"), "{packet}");
+    server.finish();
+}

@@ -143,6 +143,9 @@ fn an_open_task_from_before_reads_as_new() {
          DROP INDEX events_by_principle;
          ALTER TABLE events DROP COLUMN principle; ALTER TABLE events DROP COLUMN asked_by;
          DROP TABLE links;
+         ALTER TABLE events DROP COLUMN due;
+         ALTER TABLE versions DROP COLUMN delivery; ALTER TABLE versions DROP COLUMN registries;
+         ALTER TABLE versions DROP COLUMN delivered_by;
          PRAGMA user_version = 16;",
     )
     .unwrap();

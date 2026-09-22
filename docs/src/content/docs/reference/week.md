@@ -42,6 +42,15 @@ The same queue [`release-day`](/rigger/reference/release-day/) reads, cut to wha
 
 A count of the open questions, plus the groups where one answer settles several projects. The questions themselves are one command away; the brief carries the number so that a queue growing quietly is visible on a Monday rather than a month later.
 
+A question past the day it was due is named here, not only counted - in red, for a person at a terminal:
+
+```console
+Waiting on you
+  2 questions in 1 project
+  sample [7] Which registry goes first?  overdue since 2026-09-21
+  see them with: rigger inbox
+```
+
 ## Their tier asks for more
 
 The last section, present only when there is something in it. A tier is a promise about pace, and each tier breaks it in its own way:

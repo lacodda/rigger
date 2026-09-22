@@ -451,6 +451,31 @@ const MIGRATIONS: &[&str] = &[
     -- every query that already reads wishes.
     ALTER TABLE events ADD COLUMN asked_by INTEGER REFERENCES projects(id) ON DELETE SET NULL;
     ",
+    // v25: the rhythm and the facts - when a question has to be answered by,
+    // and what the outside world says about a version the tag called shipped.
+    //
+    // A question with no date waits for ever and looks the same on its
+    // fortieth day as on its first. Some of them hold up a release, and
+    // those have a day after which the answer is too late - the day is what
+    // lets the inbox tell the two apart.
+    //
+    // Delivery sits beside `status` rather than replacing it. The tag is the
+    // fact the calendar counts (ADR 0005): it says the work was finished.
+    // Whether the shopfront got it - a release with its archives, a green
+    // publish, the registries - is a second fact about the same version, and
+    // v0.4.0 of this very product showed the two part company: tagged,
+    // counted as shipped, and missing from crates.io. Folding the second
+    // into the first would un-ship every project that tags without making
+    // GitHub releases, which is a way of working and not a failure.
+    //
+    // `CHECK` for the same reason the links table has one: the states are
+    // written by `sync`, by `note --kind shipped` and by MCP.
+    "
+    ALTER TABLE events ADD COLUMN due TEXT;
+    ALTER TABLE versions ADD COLUMN delivery TEXT CHECK (delivery IN ('tag-only', 'no-assets', 'released', 'publish-running', 'publish-failed', 'published'));
+    ALTER TABLE versions ADD COLUMN registries TEXT;
+    ALTER TABLE versions ADD COLUMN delivered_by TEXT CHECK (delivered_by IN ('engine', 'github'));
+    ",
 ];
 
 /// The place a desk keeps its cards: a project the record keeps for
@@ -654,6 +679,11 @@ pub struct Waiting {
     pub id: i64,
     pub date: String,
     pub body: String,
+    /// The day an answer is needed by, when the question has one.
+    pub due: Option<String>,
+    /// Whether that day has gone by. Read against today when the question
+    /// is fetched, so every screen that shows it agrees on the answer.
+    pub overdue: bool,
 }
 
 /// What a window holds for one project.
@@ -755,6 +785,21 @@ pub struct Asked {
     pub id: i64,
     pub body: String,
     pub asked_by: String,
+}
+
+/// A shipped version and how far it got past its tag.
+#[derive(Debug, Clone, Serialize)]
+pub struct Delivered {
+    #[serde(skip)]
+    pub id: i64,
+    pub version: String,
+    /// `None` when nobody has looked: no engine reported it and `sync` has
+    /// not read GitHub for it.
+    pub delivery: Option<crate::delivery::Delivery>,
+    pub registries: Option<String>,
+    /// `engine` or `github`: who said so.
+    pub by: Option<String>,
+    pub shipped_at: Option<String>,
 }
 
 /// The same, read across the line, so it carries who it was asked of.
@@ -2135,19 +2180,23 @@ impl Db {
     /// Oldest first: a question that has waited three weeks is more overdue
     /// than one asked this morning, and the order should say so.
     pub fn open_questions(&self) -> Result<Vec<Waiting>> {
+        let today = today();
         let mut stmt = self.conn.prepare(
-            "SELECT p.name, e.id, e.created_at, e.body
+            "SELECT p.name, e.id, e.created_at, e.body, e.due
              FROM events e JOIN projects p ON p.id = e.project_id
              WHERE e.kind = 'question'
              ORDER BY e.created_at, p.name, e.id",
         )?;
         let rows = stmt.query_map([], |r| {
             let date: String = r.get(2)?;
+            let due: Option<String> = r.get(4)?;
             Ok(Waiting {
                 project: r.get(0)?,
                 id: r.get(1)?,
                 date: date.split('T').next().unwrap_or(&date).to_string(),
                 body: r.get(3)?,
+                overdue: due.as_deref().is_some_and(|d| is_past(d, &today)),
+                due,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -2408,6 +2457,100 @@ impl Db {
                 Ok(Change::Added)
             }
         }
+    }
+
+    /// Records that a version shipped because the release engine says so.
+    ///
+    /// The engine's word closes a version the tag has not reached yet - the
+    /// engine tags, publishes and reports in one run, and `sync` may not
+    /// have read the tag. It does not move a version a tag already proved:
+    /// the tag's day and moment stay, because `why` bounds a version's work
+    /// by them and the engine's clock is the moment it finished, not the
+    /// commit it tagged. When `sync` reads the tag later, the tag's facts
+    /// replace these, as they replace anything written by hand.
+    pub fn mark_released(&self, project_id: i64, version: &str, date: &str, moment: &str) -> Result<(String, Change)> {
+        let existing: Option<(i64, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, name, status FROM versions WHERE project_id = ?1 AND name = ?2",
+                params![project_id, version],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let existing = match existing {
+            Some(found) => Some(found),
+            None => match self.version_by_number(project_id, version)? {
+                Some(row) => {
+                    let name: String = self.conn.query_row("SELECT name FROM versions WHERE id = ?1", [row.id], |r| r.get(0))?;
+                    Some((row.id, name, row.status))
+                }
+                None => None,
+            },
+        };
+        match existing {
+            Some((_, name, status)) if status == "shipped" => Ok((name, Change::Unchanged)),
+            Some((id, name, _)) => {
+                self.conn.execute(
+                    "UPDATE versions SET status = 'shipped', shipped_at = ?1, shipped_ts = ?2, shipped_source = 'release',
+                        heading = NULL, heading_depth = NULL, rank = NULL, after_prose = NULL, gap_after = NULL
+                     WHERE id = ?3",
+                    params![date, moment, id],
+                )?;
+                Ok((name, Change::Updated))
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO versions (project_id, name, status, shipped_at, shipped_ts, shipped_source) VALUES (?1, ?2, 'shipped', ?3, ?4, 'release')",
+                    params![project_id, version, date, moment],
+                )?;
+                Ok((version.to_string(), Change::Added))
+            }
+        }
+    }
+
+    /// Records how far a shipped version got past its tag.
+    ///
+    /// What the engine said is not overwritten by what GitHub was seen to
+    /// say: the engine is the thing that did it, and a look at GitHub is
+    /// how the record learns when there was no engine. Returns whether the
+    /// record changed, so `sync` reports a state once rather than on every
+    /// run.
+    ///
+    /// `IS`, not `=`, against the columns: they start out NULL, and
+    /// `NULL = 'engine'` is neither true nor false - it is NULL, its `NOT`
+    /// is NULL too, and a WHERE that is NULL matches nothing. Written with
+    /// `=` the first look at GitHub never landed.
+    pub fn set_delivery(&self, version_id: i64, delivery: crate::delivery::Delivery, registries: &[String], by: &str) -> Result<Change> {
+        let joined = (!registries.is_empty()).then(|| registries.join(", "));
+        let changed = self.conn.execute(
+            "UPDATE versions SET delivery = ?2, registries = COALESCE(?3, registries), delivered_by = ?4
+             WHERE id = ?1
+               AND NOT (?4 = 'github' AND delivered_by IS 'engine')
+               AND (delivery IS NOT ?2 OR delivered_by IS NOT ?4 OR (?3 IS NOT NULL AND registries IS NOT ?3))",
+            params![version_id, delivery.as_str(), joined, by],
+        )?;
+        Ok(if changed > 0 { Change::Updated } else { Change::Unchanged })
+    }
+
+    /// The newest shipped version, with what is known of its delivery.
+    pub fn latest_delivery(&self, project_id: i64) -> Result<Option<Delivered>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, delivery, registries, delivered_by, shipped_at FROM versions
+             WHERE project_id = ?1 AND status = 'shipped'",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(Delivered {
+                id: r.get(0)?,
+                version: r.get(1)?,
+                delivery: r.get::<_, Option<String>>(2)?.as_deref().and_then(crate::delivery::Delivery::parse),
+                registries: r.get(3)?,
+                by: r.get(4)?,
+                shipped_at: r.get(5)?,
+            })
+        })?;
+        let mut all: Vec<Delivered> = rows.collect::<rusqlite::Result<_>>()?;
+        all.sort_by(|a, b| version_order(&a.version).cmp(&version_order(&b.version)).then(a.shipped_at.cmp(&b.shipped_at)));
+        Ok(all.pop())
     }
 
     /// A version of this project whose number matches, however it is spelt.
@@ -2994,6 +3137,47 @@ impl Db {
         Ok(stmt.execute(args.as_slice())? as u32)
     }
 
+    /// Gives a question the day an answer is needed by, or takes it away.
+    ///
+    /// Only a question has one: a wish is sorted into the plan when the plan
+    /// gets to it, and a decision has already happened.
+    pub fn set_due(&self, event_id: i64, due: Option<&str>) -> Result<()> {
+        let kind: Option<String> = self
+            .conn
+            .query_row("SELECT kind FROM events WHERE id = ?1", [event_id], |r| r.get(0))
+            .optional()?;
+        match kind.as_deref() {
+            Some("question") => {}
+            Some(other) => bail!("[{event_id}] is a {other}; only a question has a day it is due"),
+            None => bail!("there is no event [{event_id}]"),
+        }
+        self.conn.execute("UPDATE events SET due = ?2 WHERE id = ?1", params![event_id, due])?;
+        Ok(())
+    }
+
+    /// The open question with exactly this text. A question is identified by
+    /// its text - recording it twice is recording it once - so this is how
+    /// the one just asked is found again.
+    pub fn question_by_text(&self, project_id: i64, body: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM events WHERE project_id = ?1 AND kind = 'question' AND body = ?2 ORDER BY id DESC LIMIT 1",
+                params![project_id, body],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// The open questions of one project, with the day each is due.
+    pub fn open_questions_of(&self, project_id: i64) -> Result<Vec<(i64, String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, body, due FROM events WHERE project_id = ?1 AND kind = 'question' ORDER BY created_at, id")?;
+        let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn open_events(&self, project_id: i64, kind: &str) -> Result<Vec<(i64, String)>> {
         let mut stmt = self
             .conn
@@ -3260,7 +3444,7 @@ impl Db {
     /// A typo in a version is the likeliest mistake at this door, and a
     /// link silently anchored to nothing would be a link that never drifts
     /// - a warning that can never fire is worse than no warning.
-    fn version_id(&self, project_id: i64, version: Option<&str>) -> Result<Option<i64>> {
+    pub fn version_id(&self, project_id: i64, version: Option<&str>) -> Result<Option<i64>> {
         let Some(name) = version else {
             return Ok(None);
         };
@@ -3691,9 +3875,84 @@ pub fn today() -> String {
     now().split('T').next().unwrap_or_default().to_string()
 }
 
+/// Whether a day has gone by. The day itself is not past: a question due
+/// today can still be answered on time.
+pub fn is_past(day: &str, today: &str) -> bool {
+    day < today
+}
+
+/// Reads a day the way a person writes one: `2026-09-25`, or `today`,
+/// `tomorrow`, `+3d`, `friday` - the last meaning the coming one, today
+/// included. Kept to days: a question is due on a day, not at an hour.
+pub fn parse_day(text: &str, today: &str) -> Result<String> {
+    let base: jiff::civil::Date = today.parse().with_context(|| format!("{today:?} is not a day"))?;
+    let word = text.trim().to_ascii_lowercase();
+    let day = match word.as_str() {
+        "today" => base,
+        "tomorrow" => base.tomorrow()?,
+        _ if word.starts_with('+') => {
+            let digits = word.trim_start_matches('+').trim_end_matches('d');
+            let n: i64 = digits
+                .parse()
+                .ok()
+                .filter(|n| *n >= 0)
+                .with_context(|| format!("{text:?} is not a number of days; write it as +3d"))?;
+            base.checked_add(jiff::Span::new().days(n))?
+        }
+        _ => match weekday(&word) {
+            Some(wanted) => {
+                let ahead = (wanted.to_monday_zero_offset() - base.weekday().to_monday_zero_offset()).rem_euclid(7);
+                base.checked_add(jiff::Span::new().days(i64::from(ahead)))?
+            }
+            None => word
+                .parse()
+                .map_err(|_| anyhow::anyhow!("{text:?} is not a day; write it as 2026-09-25, today, tomorrow, +3d or a weekday"))?,
+        },
+    };
+    Ok(day.to_string())
+}
+
+fn weekday(word: &str) -> Option<jiff::civil::Weekday> {
+    use jiff::civil::Weekday::*;
+    Some(match word {
+        "monday" | "mon" => Monday,
+        "tuesday" | "tue" => Tuesday,
+        "wednesday" | "wed" => Wednesday,
+        "thursday" | "thu" => Thursday,
+        "friday" | "fri" => Friday,
+        "saturday" | "sat" => Saturday,
+        "sunday" | "sun" => Sunday,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{slugify, stamp_of, version_order};
+    use super::{is_past, parse_day, slugify, stamp_of, version_order};
+
+    #[test]
+    fn a_day_is_read_the_way_a_person_writes_it() {
+        // 2026-09-22 is a Tuesday.
+        let today = "2026-09-22";
+        assert_eq!(parse_day("2026-09-25", today).unwrap(), "2026-09-25");
+        assert_eq!(parse_day("today", today).unwrap(), "2026-09-22");
+        assert_eq!(parse_day("tomorrow", today).unwrap(), "2026-09-23");
+        assert_eq!(parse_day("+3d", today).unwrap(), "2026-09-25");
+        assert_eq!(parse_day("Friday", today).unwrap(), "2026-09-25");
+        // The coming Tuesday is today, not a week away: "due Tuesday" said on
+        // a Tuesday means today.
+        assert_eq!(parse_day("tue", today).unwrap(), "2026-09-22");
+        assert_eq!(parse_day("monday", today).unwrap(), "2026-09-28");
+        assert!(parse_day("soon", today).is_err());
+        assert!(parse_day("2026-02-30", today).is_err());
+    }
+
+    #[test]
+    fn the_day_itself_is_not_past() {
+        assert!(!is_past("2026-09-22", "2026-09-22"));
+        assert!(is_past("2026-09-21", "2026-09-22"));
+        assert!(!is_past("2026-09-23", "2026-09-22"));
+    }
 
     #[test]
     fn ten_sorts_above_nine() {

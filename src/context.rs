@@ -142,6 +142,9 @@ pub struct Item {
     /// What changes is only that somebody is waiting for the answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asked_by: Option<String>,
+    /// The day a question needs its answer by, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,9 +190,9 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         tasks: s.tasks,
     });
     let questions = db
-        .open_events(project.id, "question")?
+        .open_questions_of(project.id)?
         .into_iter()
-        .map(|(id, text)| Item { id, text, asked_by: None })
+        .map(|(id, text, due)| Item { id, text, asked_by: None, due })
         .collect();
     // Who asked is read once and matched by id: the wishes are already in
     // hand, and asking the record a second question per wish would be a
@@ -203,6 +206,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
             id,
             text,
             asked_by: asked.iter().find(|a| a.id == id).map(|a| a.asked_by.clone()),
+            due: None,
         })
         .collect();
     let next_step = db.latest_event_body(project.id, "next")?;
@@ -526,10 +530,19 @@ fn render_items(heading: &str, items: &[Item]) -> String {
         return String::new();
     }
     let mut out = if heading.is_empty() { String::new() } else { format!("\n## {heading}\n") };
+    let today = crate::db::today();
     for item in items {
+        // The day goes in front of the text, where a long question cannot
+        // push it out of sight - and says "overdue" in words, because the
+        // packet is read by a model that sees no colour.
+        let due = match &item.due {
+            Some(day) if crate::db::is_past(day, &today) => format!("(overdue since {day}) "),
+            Some(day) => format!("(due {day}) "),
+            None => String::new(),
+        };
         match &item.asked_by {
-            Some(who) => out.push_str(&format!("- [{}] ({who} asks) {}\n", item.id, item.text)),
-            None => out.push_str(&format!("- [{}] {}\n", item.id, item.text)),
+            Some(who) => out.push_str(&format!("- [{}] {due}({who} asks) {}\n", item.id, item.text)),
+            None => out.push_str(&format!("- [{}] {due}{}\n", item.id, item.text)),
         }
     }
     out
