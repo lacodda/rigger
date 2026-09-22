@@ -16,6 +16,7 @@ mod doc;
 mod export;
 mod gate;
 mod hub;
+mod ics;
 mod import;
 mod line;
 mod link;
@@ -255,6 +256,9 @@ enum Command {
         /// Start from this week instead of the current one
         #[arg(long, value_name = "WEEK")]
         from: Option<String>,
+        /// Write release Fridays and each week's focus as an iCalendar file; `-` prints it
+        #[arg(long, value_name = "FILE", conflicts_with = "json")]
+        ics: Option<PathBuf>,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -1172,7 +1176,10 @@ fn run(cli: Cli) -> Result<()> {
             VersionCommand::Show { project, version, json } => version_show(&project, version.as_deref(), json),
             VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear),
         },
-        Command::Calendar { weeks, from, json } => show_calendar(weeks, from.as_deref(), json),
+        Command::Calendar { weeks, from, ics, json } => match ics {
+            Some(path) => write_ics(weeks, from.as_deref(), &path),
+            None => show_calendar(weeks, from.as_deref(), json),
+        },
         Command::Next { week, json } => show_next(week.as_deref(), json),
         Command::Week { week, json } => show_week(week.as_deref(), json),
         Command::ReleaseDay { week, json } => show_release_day(week.as_deref(), json),
@@ -3879,6 +3886,68 @@ fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool) -
         (Some(week), _) => println!("{version} is aimed at {week} - the week of {}", week.friday()),
         (None, _) => println!("{version} is off the calendar"),
     }
+    Ok(())
+}
+
+/// The calendar as a file for the phone: release Fridays and each week's
+/// focus, over the same weeks the grid would show.
+///
+/// Only what is still ahead: a version already shipped has no Friday left
+/// to be reminded of, and a phone calendar filling up with the past is a
+/// calendar nobody looks at.
+fn write_ics(weeks: u32, from: Option<&str>, path: &Path) -> Result<()> {
+    if weeks == 0 {
+        bail!("a calendar of 0 weeks shows nothing; ask for at least one");
+    }
+    let db = Db::open(&paths::db_path()?)?;
+    let from = match from {
+        Some(text) => calendar::Week::parse(text)?,
+        None => calendar::Week::current(),
+    };
+    let to = from.plus(i64::from(weeks) - 1);
+
+    let mut releases = Vec::new();
+    for project in db.projects()? {
+        for version in db.calendar_versions(project.id, &project.name)? {
+            if let (Some(week), None) = (version.planned, version.shipped)
+                && week >= from
+                && week <= to
+            {
+                releases.push(ics::Release {
+                    project: version.project,
+                    version: version.version,
+                    title: version.title,
+                    week,
+                });
+            }
+        }
+    }
+    releases.sort_by(|a, b| a.week.cmp(&b.week).then_with(|| a.project.cmp(&b.project)));
+    let focus: Vec<ics::Focus> = (0..weeks)
+        .map(|n| from.plus(i64::from(n)))
+        .filter_map(|week| {
+            let items: Vec<String> = releases
+                .iter()
+                .filter(|r| r.week == week)
+                .map(|r| format!("{} {}", r.project, r.version))
+                .collect();
+            (!items.is_empty()).then_some(ics::Focus { week, items })
+        })
+        .collect();
+
+    let file = ics::render(&releases, &focus, &ics::stamp(jiff::Timestamp::now()));
+    if path.as_os_str() == "-" {
+        print!("{file}");
+        return Ok(());
+    }
+    std::fs::write(path, &file).with_context(|| format!("cannot write {}", path.display()))?;
+    println!(
+        "Wrote {} and {} of focus, {from} to {to}, to {}",
+        plural(releases.len(), "release Friday", "release Fridays"),
+        plural(focus.len(), "week", "weeks"),
+        path.display()
+    );
+    println!("Import it into the phone's calendar; importing again updates the events rather than doubling them.");
     Ok(())
 }
 

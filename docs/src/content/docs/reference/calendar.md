@@ -5,6 +5,7 @@ description: Weeks by projects - what is planned, what shipped, what slipped.
 
 ```
 rigger calendar [--weeks <N>] [--from <WEEK>] [--json]
+rigger calendar [--weeks <N>] [--from <WEEK>] --ics <FILE>
 ```
 
 The release calendar as a grid: weeks across, projects down. What a version was aimed at comes from [`version plan`](/rigger/reference/version/); what actually happened comes from the tags [`sync`](/rigger/reference/sync/) reads. Nothing here is a status anyone sets - slippage is the difference between the two, and it appears the moment a tag does.
@@ -57,6 +58,23 @@ Weeks are ISO-8601: `2026-W37` is the week of Monday 7 September, and it release
 `--weeks` is how many to show, starting from this week; `--from` reads a different span. The current week is marked `*` in the heading, so a grid read on a Wednesday says where the reader is standing.
 
 A version that is neither aimed at a week nor shipped is in the plan and not on the calendar - [`digest`](/rigger/reference/digest/) is the screen for that.
+
+## For the phone: `--ics`
+
+The same weeks as a calendar file ([iCalendar](https://www.rfc-editor.org/rfc/rfc5545)), for the calendar on the phone - where Friday's release and Monday's focus show before anyone opens a terminal.
+
+```console
+$ rigger calendar --weeks 6 --ics rigger.ics
+Wrote 3 release Fridays and 2 weeks of focus, 2026-W39 to 2026-W44, to rigger.ics
+Import it into the phone's calendar; importing again updates the events rather than doubling them.
+```
+
+- **A release Friday** is a whole-day event on the Friday of the week a version is aimed at: `sample v0.3.0 · Third`.
+- **A week's focus** is one event from Monday to Friday naming what is aimed at that week: `Focus: sample v0.3.0, widget v0.2.0`.
+
+Only what is still ahead goes in: a version already shipped has no Friday left to be reminded of. Every event is transparent - a release day is a marker, not a meeting, and does not show anyone as busy.
+
+Each event's `UID` is made of what it is about - `release-sample-v0.3.0@rigger`, `focus-2026-W40@rigger` - so importing a newer file updates the events it already made instead of adding copies. `-` prints the file instead of writing it. There is no server and no network: the file goes where it is told, and getting it to the phone - a synced folder, a mail to oneself - is left to the owner.
 
 ## Related
 
