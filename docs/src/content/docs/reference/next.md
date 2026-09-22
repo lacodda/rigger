@@ -79,6 +79,39 @@ A carrying product is allowed one missed cycle, so it appears under "Behind thei
 
 A project set to `out`, or with no tier at all, raises nothing.
 
+## The JSON is a contract
+
+`next --json` is what a release engine reads to learn what the week is aiming at - with [`version show --json`](/rigger/reference/version/#the-json-is-a-contract), it is how `furca release plan` proposes a number and a theme from the record rather than from commits alone. Every field is named here, and the test suite fails when the JSON prints one this page does not name.
+
+| Field | What it holds |
+| --- | --- |
+| `week` | the week read, as `2026-W39` |
+| `friday` | its Friday, as `2026-09-25` |
+| `focus` | the versions aimed at this week with no tag yet |
+| `overdue` | the versions aimed at a week already gone, with no tag |
+| `lapsed` | the projects behind the rhythm of their tier |
+| `signals` | the projects whose tier asks for more |
+| `parted` | the pairs whose halves have parted company |
+
+A version in `focus` or `overdue`:
+
+| Field | What it holds |
+| --- | --- |
+| `project` | the project |
+| `tier` | its tier, `A`, `B`, `C` or `out`, or `null` |
+| `version` | the version's number |
+| `title` | the stage's title, or `null` |
+| `planned` | the week it was aimed at |
+| `overdue_weeks` | how many weeks that week is past; `null` in `focus` |
+
+A project in `lapsed`: `project`, `tier`, `rhythm_weeks` (what the tier asks), `since` (the week of its last release, or `null` for never) and `weeks` (how many weeks without one).
+
+A project in `signals`: `project`, `tier`, `signal` (`missed-cycle`, `without-focus` or `second-start`), `weeks` (for the two measured in weeks, else `null`) and `alongside` (the other project, for `second-start`, else `null`).
+
+A pair in `parted`: `drift` (`shipped-alone` or `run-ahead`), `ahead` and `behind` (each an end: `project`, `version` and `shipped`, whether that version has a tag), `versions` (how far apart, for `run-ahead`) and `note` (what the pair shares, as the link says).
+
+Fields may be added; none is renamed or removed without a major version.
+
 ## Related
 
 - [`week`](/rigger/reference/week/) - the same week as a brief, with what waits on you.

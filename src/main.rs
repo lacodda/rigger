@@ -889,6 +889,16 @@ enum SessionCommand {
 
 #[derive(Subcommand)]
 enum VersionCommand {
+    /// One version: its number, the week it is aimed at, how far it got, its tasks
+    Show {
+        /// Project name
+        project: String,
+        /// Version, as the record spells it; the stage being built when omitted
+        version: Option<String>,
+        /// Print as JSON; the shape is a contract, see the reference page
+        #[arg(long)]
+        json: bool,
+    },
     /// Aim a version at a week of the calendar
     Plan {
         /// Project name
@@ -1138,6 +1148,7 @@ fn run(cli: Cli) -> Result<()> {
             json,
         } => why(project.as_deref(), version.as_deref(), principle.as_deref(), principles, json),
         Command::Version { command } => match command {
+            VersionCommand::Show { project, version, json } => version_show(&project, version.as_deref(), json),
             VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear),
         },
         Command::Calendar { weeks, from, json } => show_calendar(weeks, from.as_deref(), json),
@@ -3687,6 +3698,75 @@ fn project_tier(name: &str, tier: &str, rhythm: Option<u32>) -> Result<()> {
     match rhythm {
         Some(weeks) => println!("  a release every {}", plural(weeks as usize, "week", "weeks")),
         None => println!("  no rhythm to keep"),
+    }
+    Ok(())
+}
+
+/// One version, whole.
+///
+/// The JSON is a contract, not a convenience: a release engine reads it to
+/// learn which number goes out on Friday and under what title, so every
+/// field is named on the reference page and a test holds the two together.
+fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let Some(card) = db.version_card(project.id, version)? else {
+        // Only reachable without a version named: a named one that is not
+        // in the record is refused by the lookup itself.
+        match json {
+            true => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "project": project.name, "version": null }))?
+            ),
+            false => println!("{} has no stage being built; every version in the record has shipped.", project.name),
+        }
+        return Ok(());
+    };
+    let week = card.week.as_deref().and_then(|w| calendar::Week::parse(w).ok());
+    let open: Vec<&db::Task> = card.tasks.iter().filter(|t| db::is_open_status(&t.status)).collect();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "project": project.name,
+                "version": card.version,
+                "title": card.title,
+                "status": card.status,
+                "week": week,
+                "friday": week.map(|w| w.friday().to_string()),
+                "shipped_at": card.shipped_at,
+                "delivery": card.delivery,
+                "registries": card.registries,
+                "tasks": card.tasks,
+                "open_tasks": open.len(),
+            }))?
+        );
+        return Ok(());
+    }
+
+    match &card.title {
+        Some(title) => println!("{} {} · {title}", project.name, card.version),
+        None => println!("{} {}", project.name, card.version),
+    }
+    println!();
+    match (card.status.as_str(), week) {
+        ("shipped", _) => {
+            let on = card.shipped_at.as_deref().unwrap_or("an unknown day");
+            match card.delivery {
+                Some(delivery) => println!("shipped    on {on} - {}", delivery.describe()),
+                None => println!("shipped    on {on}"),
+            }
+            if !card.registries.is_empty() {
+                println!("reached    {}", card.registries.join(", "));
+            }
+        }
+        (_, Some(week)) => println!("aimed at   {week} - releases on {}", week.friday()),
+        (_, None) => println!("aimed at   no week yet - `rigger version plan` gives it one"),
+    }
+    println!("tasks      {} open of {}", open.len(), card.tasks.len());
+    for task in &card.tasks {
+        println!("  [{}] {:<7} {}", task.id, task.status, task.title);
     }
     Ok(())
 }

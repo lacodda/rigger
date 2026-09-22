@@ -787,6 +787,20 @@ pub struct Asked {
     pub asked_by: String,
 }
 
+/// One version, whole: what `version show` prints and a release engine reads.
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionCard {
+    pub version: String,
+    pub title: Option<String>,
+    pub status: String,
+    /// The week it is aimed at, as `2026-W39`.
+    pub week: Option<String>,
+    pub shipped_at: Option<String>,
+    pub delivery: Option<crate::delivery::Delivery>,
+    pub registries: Vec<String>,
+    pub tasks: Vec<Task>,
+}
+
 /// A shipped version and how far it got past its tag.
 #[derive(Debug, Clone, Serialize)]
 pub struct Delivered {
@@ -1547,6 +1561,57 @@ impl Db {
     }
 
     /// The tasks of one version, in the order the plan listed them.
+    /// One version as a release engine asks for it: its number, where it is
+    /// aimed, how far it got, and its tasks with their ids.
+    ///
+    /// Without a name, the stage being built - the same one the packet calls
+    /// current, so that `version show` and `context` can never name two
+    /// different versions as "the next one".
+    pub fn version_card(&self, project_id: i64, name: Option<&str>) -> Result<Option<VersionCard>> {
+        let id = match name {
+            Some(name) => self.version_id(project_id, Some(name))?,
+            None => match self.current_stage(project_id)? {
+                Some(stage) => self.version_id(project_id, Some(&stage.version))?,
+                None => None,
+            },
+        };
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let mut card = self.conn.query_row(
+            "SELECT name, title, status, planned_week, shipped_at, delivery, registries FROM versions WHERE id = ?1",
+            [id],
+            |r| {
+                let registries: Option<String> = r.get(6)?;
+                Ok(VersionCard {
+                    version: r.get(0)?,
+                    title: r.get(1)?,
+                    status: r.get(2)?,
+                    week: r.get(3)?,
+                    shipped_at: r.get(4)?,
+                    delivery: r.get::<_, Option<String>>(5)?.as_deref().and_then(crate::delivery::Delivery::parse),
+                    registries: registries
+                        .map(|all| all.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect())
+                        .unwrap_or_default(),
+                    tasks: Vec::new(),
+                })
+            },
+        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, title, status FROM tasks WHERE version_id = ?1 AND status <> 'dropped' ORDER BY COALESCE(position, id), id")?;
+        card.tasks = stmt
+            .query_map([id], |r| {
+                Ok(Task {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    status: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(Some(card))
+    }
+
     fn tasks_of_version(&self, version_id: i64) -> Result<Vec<crate::hub::Task>> {
         let mut stmt = self
             .conn
