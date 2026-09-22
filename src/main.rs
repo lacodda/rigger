@@ -848,13 +848,21 @@ enum ProjectCommand {
     },
     /// Set the tier a project sits in, and how often it should release
     Tier {
-        /// Project name
-        name: String,
+        /// Project name; with --suggest, only this project
+        #[arg(required_unless_present = "suggest")]
+        name: Option<String>,
         /// A, B, C, or out for a project outside the rotation
-        tier: String,
+        #[arg(required_unless_present = "suggest", conflicts_with = "suggest")]
+        tier: Option<String>,
         /// Weeks between releases; the tier's own rhythm when omitted
-        #[arg(long, value_name = "WEEKS")]
+        #[arg(long, value_name = "WEEKS", conflicts_with = "suggest")]
         rhythm: Option<u32>,
+        /// Suggest a tier for each project from the last cycle's releases, and set nothing
+        #[arg(long)]
+        suggest: bool,
+        /// Print the suggestions as JSON
+        #[arg(long, requires = "suggest")]
+        json: bool,
     },
 }
 
@@ -1009,7 +1017,20 @@ fn run(cli: Cli) -> Result<()> {
                 docs.as_deref(),
                 clear,
             ),
-            ProjectCommand::Tier { name, tier, rhythm } => project_tier(&name, &tier, rhythm),
+            ProjectCommand::Tier {
+                name,
+                tier,
+                rhythm,
+                suggest,
+                json,
+            } => match suggest {
+                true => tier_suggest(name.as_deref(), json),
+                false => project_tier(
+                    &name.expect("clap requires a name without --suggest"),
+                    &tier.expect("clap requires a tier without --suggest"),
+                    rhythm,
+                ),
+            },
         },
         Command::Import {
             project,
@@ -3769,6 +3790,78 @@ fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> 
         println!("  [{}] {:<7} {}", task.id, task.status, task.title);
     }
     Ok(())
+}
+
+/// A tier for each project, read from the last cycle's releases.
+///
+/// The owner was asked twice which tier ten projects belong in and whether
+/// seven others still fit theirs, and both questions waited for weeks - not
+/// for want of an answer, but because answering meant reading a retro and
+/// doing the arithmetic by hand. This does the arithmetic and stops there:
+/// the command that decides is still `project tier`, printed beside each
+/// line so that agreeing costs one paste.
+fn tier_suggest(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let projects = match project {
+        Some(name) => vec![open_project(&db, name)?],
+        None => db.projects()?.into_iter().filter(|p| p.kind.reads_git()).collect(),
+    };
+    let to = calendar::Week::current();
+    let from = to.plus(-i64::from(retro::CYCLE_WEEKS - 1));
+    let span = from.until(to) + 1;
+
+    let mut suggestions = Vec::new();
+    for project in &projects {
+        let versions = db.calendar_versions(project.id, &project.name)?;
+        let shipped = versions.iter().filter(|v| v.shipped.is_some_and(|w| w >= from && w <= to)).count();
+        let tier = project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok());
+        let has_plan = db.count_versions(project.id, "planned")? > 0;
+        suggestions.push(retro::suggest(&project.name, tier, project.rhythm_weeks, shipped, span, has_plan));
+    }
+    // What would move first, and among those the stalled before the rest:
+    // a stall is the one that costs something while it goes unanswered.
+    suggestions.sort_by_key(|s| (!s.moves(), s.verdict != retro::Verdict::Stalled, s.project.clone()));
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "from": from, "to": to, "weeks": span, "suggestions": suggestions }))?
+        );
+        return Ok(());
+    }
+
+    println!("From {from} to {to} ({} weeks) - nothing is set until you run the command", span);
+    println!();
+    let width = suggestions.iter().map(|s| s.project.chars().count()).max().unwrap_or(0);
+    for s in &suggestions {
+        let asked = match s.expected {
+            Some(n) => format!(", {} asks {n}", s.current.map(|t| t.to_string()).unwrap_or_default()),
+            None => String::new(),
+        };
+        let said = match s.verdict {
+            retro::Verdict::Stalled => format!("stalled in {}", tier_name(s.current)),
+            retro::Verdict::Outgrown => format!("outgrew {}", tier_name(s.current)),
+            retro::Verdict::Holds => format!("holds {}", tier_name(s.current)),
+            retro::Verdict::Out => "out by decision".to_string(),
+            retro::Verdict::Untiered => "no tier yet".to_string(),
+        };
+        let numbers = format!("{} shipped{asked}", s.shipped);
+        match s.moves() {
+            true => {
+                let rhythm = s.rhythm_weeks.map(|w| format!(" --rhythm {w}")).unwrap_or_default();
+                println!(
+                    "{:<width$}  {said} - {numbers}\n{:<width$}  rigger project tier {} {}{rhythm}",
+                    s.project, "", s.project, s.suggested
+                );
+            }
+            false => println!("{:<width$}  {said} - {numbers}", s.project),
+        }
+    }
+    Ok(())
+}
+
+fn tier_name(tier: Option<calendar::Tier>) -> String {
+    tier.map(|t| t.to_string()).unwrap_or_else(|| "no tier".to_string())
 }
 
 fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool) -> Result<()> {

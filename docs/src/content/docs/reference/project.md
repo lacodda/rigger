@@ -65,6 +65,7 @@ Timestamps are UTC in RFC 3339. `tier` and `rhythm_weeks` are null until `projec
 
 ```
 rigger project tier <NAME> <A|B|C|out> [--rhythm <WEEKS>]
+rigger project tier --suggest [<NAME>] [--json]
 ```
 
 Where a project sits in the release rotation, and how often it should ship. The tiers are the ones the line already works to: **A** carrying products that are released and used every day, **B** growing ones whose code works but whose circuit is not closed, **C** declared ones with a name and a plan and no product yet.
@@ -80,6 +81,38 @@ Each tier carries a rhythm of its own - two weeks for A, four for B, six for C -
 `out` is for a project deliberately outside the rotation: it is worked on when asked, and [`next`](/rigger/reference/next/) never says it is behind. That is a decision, not an omission - a project given `out` **and** a rhythm is still left alone.
 
 A project with no tier at all is out by omission, and is equally left alone: rigger does not invent a schedule that nobody asked for.
+
+### `--suggest`
+
+```
+rigger project tier --suggest [<NAME>] [--json]
+```
+
+A tier for each project, read from the releases of the last cycle (seven weeks, as [`retro --cycle`](/rigger/reference/retro/) counts them). It sets nothing: each line that would move prints the `project tier` command to paste.
+
+```console
+$ rigger project tier --suggest
+From 2026-W33 to 2026-W39 (7 weeks) - nothing is set until you run the command
+
+idle     stalled in B - 0 shipped, B asks 1
+         rigger project tier idle C
+racing   outgrew C - 12 shipped, C asks 1
+         rigger project tier racing A
+fresh    no tier yet - 2 shipped
+         rigger project tier fresh B
+steady   holds A - 3 shipped, A asks 3
+aside    out by decision - 4 shipped
+```
+
+| Verdict | What the numbers say | Suggested |
+| --- | --- | --- |
+| `stalled` | the tier asked for releases and none came | one tier down; C goes `out` |
+| `outgrown` | twice the tier's pace or more | the tier the pace describes; a racing A keeps A with a shorter `--rhythm` |
+| `holds` | the tier describes what happened | the same tier |
+| `out` | out of the rotation by decision | left out - the numbers are not held against it |
+| `untiered` | no tier yet | the slowest tier whose rhythm the pace keeps; with nothing shipped, C if it has a plan and `out` if not |
+
+A stall moves one step and a race as far as the pace goes, on purpose: stalling is a fact about the last weeks rather than a verdict on the product, and a product shipping forty times what its tier asks is not one step away from its tier. What would move is listed first, stalls before the rest. `--json` gives each project's `verdict`, `suggested`, `current`, `rhythm_weeks`, `shipped` and `expected`.
 
 ## `project set`
 

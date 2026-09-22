@@ -252,6 +252,121 @@ pub fn look_back(from: Week, to: Week, versions: &[Planned], projects: &[(String
     }
 }
 
+/// What the numbers say about a project's tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Verdict {
+    /// The tier asked for releases and none came.
+    Stalled,
+    /// Shipping at twice the tier's pace or more.
+    Outgrown,
+    /// The tier describes what happened.
+    Holds,
+    /// Out of the rotation by decision; the numbers are not held against it.
+    Out,
+    /// No tier yet: the suggestion is read from the pace alone.
+    Untiered,
+}
+
+/// One project's suggested tier, and the numbers it stands on.
+#[derive(Debug, Clone, Serialize)]
+pub struct Suggestion {
+    pub project: String,
+    pub current: Option<Tier>,
+    pub verdict: Verdict,
+    pub suggested: Tier,
+    /// A rhythm to go with it, when the tier's own would not fit - a
+    /// carrying product racing past its two weeks.
+    pub rhythm_weeks: Option<u32>,
+    pub shipped: usize,
+    pub expected: Option<u32>,
+}
+
+impl Suggestion {
+    /// Whether taking the suggestion would change anything.
+    pub fn moves(&self) -> bool {
+        self.current != Some(self.suggested) || self.rhythm_weeks.is_some()
+    }
+}
+
+/// Suggests a tier for one project from what it shipped over a window.
+///
+/// The numbers are the retro's, and the decision is still the owner's: this
+/// only says which way the tier is wrong and by how much. A stalled project
+/// moves one tier down, because stalling is a fact about the last weeks and
+/// not a verdict on the product; an outgrown one moves to the tier its pace
+/// describes, because a product shipping forty times what it was asked is
+/// not one step away from its tier. A project with no tier is read from its
+/// pace alone - and one that shipped nothing is declared if it has a plan
+/// and out of the rotation if it has none.
+pub fn suggest(project: &str, tier: Option<Tier>, rhythm: Option<u32>, shipped: usize, span: i64, has_plan: bool) -> Suggestion {
+    let expected = expected_releases(tier, rhythm, span);
+    let pace = pace_tier(shipped, span, has_plan);
+    let (verdict, suggested) = match tier {
+        Some(Tier::Out) => (Verdict::Out, Tier::Out),
+        None => (Verdict::Untiered, pace),
+        Some(current) => {
+            let standing = Standing {
+                project: project.to_string(),
+                tier: Some(current),
+                rhythm_weeks: rhythm,
+                shipped,
+                planned_and_shipped: 0,
+                missed: 0,
+                expected,
+            };
+            match standing.misfit() {
+                Some(Misfit::Stalled) => (Verdict::Stalled, one_down(current)),
+                Some(Misfit::Outgrown) => (Verdict::Outgrown, pace.min(current)),
+                None => (Verdict::Holds, current),
+            }
+        }
+    };
+    // Tier A is the fastest there is, so a carrying product that outgrows
+    // it can only be told to keep a shorter rhythm.
+    let rhythm_weeks = match (verdict, suggested) {
+        (Verdict::Outgrown, Tier::A) if tier == Some(Tier::A) => Some(observed_rhythm(shipped, span)),
+        _ => None,
+    };
+    Suggestion {
+        project: project.to_string(),
+        current: tier,
+        verdict,
+        suggested,
+        rhythm_weeks,
+        shipped,
+        expected,
+    }
+}
+
+/// Weeks between releases at the pace a window showed, never under one.
+fn observed_rhythm(shipped: usize, span: i64) -> u32 {
+    match shipped {
+        0 => span.max(1) as u32,
+        n => ((span.max(1) as u32) / n as u32).max(1),
+    }
+}
+
+/// The tier whose rhythm describes a pace: the slowest one the pace keeps.
+fn pace_tier(shipped: usize, span: i64, has_plan: bool) -> Tier {
+    if shipped == 0 {
+        return if has_plan { Tier::C } else { Tier::Out };
+    }
+    let rhythm = observed_rhythm(shipped, span);
+    [Tier::A, Tier::B, Tier::C]
+        .into_iter()
+        .find(|t| t.default_rhythm().is_some_and(|r| rhythm <= r))
+        .unwrap_or(Tier::C)
+}
+
+fn one_down(tier: Tier) -> Tier {
+    match tier {
+        Tier::A => Tier::B,
+        Tier::B => Tier::C,
+        Tier::C | Tier::Out => Tier::Out,
+    }
+}
+
 /// How many releases a rhythm asks for over a span of weeks.
 ///
 /// `None` when nothing was promised - no tier, or a tier that is out of the
@@ -557,5 +672,62 @@ mod tests {
         // share of, and a zero here would read as a measurement.
         assert!(!text.contains('%'), "{text}");
         assert!(!text.contains("on time"), "{text}");
+    }
+
+    /// The two directions of a misfit move a tier differently: a stall is
+    /// one step down, a race is as far up as the pace goes.
+    #[test]
+    fn a_tier_is_suggested_from_what_shipped() {
+        // Tier C asks one release in seven weeks; nothing came.
+        let stalled = suggest("slow", Some(Tier::C), None, 0, 7, true);
+        assert_eq!(stalled.verdict, Verdict::Stalled);
+        assert_eq!(stalled.suggested, Tier::Out);
+
+        // Forty-nine releases where C asks one: the pace is A's.
+        let racing = suggest("fast", Some(Tier::C), None, 49, 7, true);
+        assert_eq!(racing.verdict, Verdict::Outgrown);
+        assert_eq!(racing.suggested, Tier::A);
+
+        // Twice B's pace, but not A's: one step, not two.
+        let growing = suggest("mid", Some(Tier::C), None, 2, 7, true);
+        assert_eq!(growing.verdict, Verdict::Outgrown);
+        assert_eq!(growing.suggested, Tier::B);
+
+        // Three releases in seven weeks is what A asks.
+        let steady = suggest("steady", Some(Tier::A), None, 3, 7, true);
+        assert_eq!(steady.verdict, Verdict::Holds);
+        assert!(!steady.moves());
+    }
+
+    /// A carrying product cannot be moved up, so racing past A is told as a
+    /// shorter rhythm instead.
+    #[test]
+    fn outgrowing_the_top_tier_asks_for_a_shorter_rhythm() {
+        let racing = suggest("fast", Some(Tier::A), None, 21, 7, true);
+        assert_eq!(racing.verdict, Verdict::Outgrown);
+        assert_eq!(racing.suggested, Tier::A);
+        assert_eq!(racing.rhythm_weeks, Some(1));
+        assert!(racing.moves());
+    }
+
+    /// With no tier there is no promise to hold a project to - the pace is
+    /// all there is, and a project with no releases and no plan is not in
+    /// the rotation at all.
+    #[test]
+    fn an_untiered_project_is_read_from_its_pace() {
+        assert_eq!(suggest("new", None, None, 0, 7, true).suggested, Tier::C);
+        assert_eq!(suggest("idle", None, None, 0, 7, false).suggested, Tier::Out);
+        assert_eq!(suggest("busy", None, None, 5, 7, true).suggested, Tier::A);
+        assert_eq!(suggest("some", None, None, 2, 7, true).suggested, Tier::B);
+        assert_eq!(suggest("new", None, None, 0, 7, true).verdict, Verdict::Untiered);
+    }
+
+    /// Out is a decision, and the numbers are not held against it.
+    #[test]
+    fn a_project_out_of_the_rotation_stays_out() {
+        let out = suggest("aside", Some(Tier::Out), None, 12, 7, true);
+        assert_eq!(out.verdict, Verdict::Out);
+        assert_eq!(out.suggested, Tier::Out);
+        assert!(!out.moves());
     }
 }
