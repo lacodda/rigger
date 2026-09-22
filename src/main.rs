@@ -208,6 +208,9 @@ enum Command {
         /// How far back to look, as days: 7d, 30d
         #[arg(long, default_value = "7d")]
         since: String,
+        /// Write the digest into this markdown note - a daily note, say - instead of printing it
+        #[arg(long, value_name = "FILE", conflicts_with = "json")]
+        md: Option<PathBuf>,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -1238,7 +1241,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Sync { project, json } => sync_projects(project.as_deref(), json),
         Command::Inbox { project, json } => inbox(project.as_deref(), json),
-        Command::Digest { project, since, json } => digest(project.as_deref(), &since, json),
+        Command::Digest { project, since, md, json } => digest(project.as_deref(), &since, md.as_deref(), json),
         Command::Find {
             query,
             project,
@@ -2467,7 +2470,7 @@ fn print_asked(asked: &[db::AskedOf], one_project: bool) {
 }
 
 /// What moved lately, per project.
-fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
+fn digest(project: Option<&str>, since: &str, md: Option<&Path>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let days = parse_days(since)?;
     let from = day_before(days);
@@ -2494,6 +2497,32 @@ fn digest(project: Option<&str>, since: &str, json: bool) -> Result<()> {
         let signal = signals.iter().find(|s| s.project == project.name).map(signal_line);
         let lines = owner::digest_lines(&facts, next.as_deref(), quiet, signal.as_deref());
         reports.push((project.name.clone(), facts, next, lines, signal));
+    }
+
+    if let Some(path) = md {
+        let listed: Vec<(String, Vec<String>)> = reports
+            .iter()
+            .filter(|(_, facts, _, _, signal)| {
+                project.is_some() || signal.is_some() || !facts.shipped.is_empty() || facts.decisions + facts.findings + facts.changes > 0
+            })
+            .map(|(name, _, _, lines, _)| (name.clone(), lines.clone()))
+            .collect();
+        let quiet: Vec<String> = match project {
+            Some(_) => Vec::new(),
+            None => reports
+                .iter()
+                .filter(|(name, _, _, _, _)| !listed.iter().any(|(listed, _)| listed == name))
+                .map(|(name, _, _, _, _)| name.clone())
+                .collect(),
+        };
+        let block = owner::digest_markdown(&from, &listed, &quiet);
+        let change = owner::write_block(path, &block)?;
+        match change {
+            db::Change::Added => println!("Added the digest since {from} to {}", path.display()),
+            db::Change::Updated => println!("Replaced the digest in {} with the one since {from}", path.display()),
+            db::Change::Unchanged => println!("{} already holds this digest", path.display()),
+        }
+        return Ok(());
     }
 
     if json {

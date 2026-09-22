@@ -204,6 +204,77 @@ pub fn digest_lines(facts: &DigestFacts, next_stage: Option<&str>, quiet_days: O
     lines
 }
 
+/// The marks a digest is written between in a note.
+///
+/// HTML comments, so a markdown viewer shows nothing of them. They are what
+/// makes writing the digest a second time a replacement rather than a
+/// second copy: a daily note the owner also writes in is not rigger's
+/// file, and only the block between the marks is.
+const BLOCK_START: &str = "<!-- rigger digest -->";
+const BLOCK_END: &str = "<!-- /rigger digest -->";
+
+/// The digest as a markdown block for a note.
+pub fn digest_markdown(since: &str, listed: &[(String, Vec<String>)], quiet: &[String]) -> String {
+    let mut out = format!("{BLOCK_START}\n## rigger · since {since}\n\n");
+    if listed.is_empty() {
+        out.push_str("Nothing moved.\n");
+    }
+    for (name, lines) in listed {
+        out.push_str(&format!("**{name}**\n"));
+        for line in lines {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+    if !quiet.is_empty() {
+        out.push_str(&format!("Quiet: {}\n", quiet.join(", ")));
+    }
+    let trimmed = out.trim_end().to_string();
+    format!("{trimmed}\n{BLOCK_END}\n")
+}
+
+/// Puts a block into a note: in place of the one already there, or at the
+/// end. The rest of the note is left exactly as it was - it is the owner's.
+pub fn write_block(path: &std::path::Path, block: &str) -> anyhow::Result<crate::db::Change> {
+    use anyhow::Context;
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    };
+    let (text, change) = match existing {
+        None => (block.to_string(), crate::db::Change::Added),
+        Some(text) => match (text.find(BLOCK_START), text.find(BLOCK_END)) {
+            (Some(start), Some(end)) if end > start => {
+                let after = end + BLOCK_END.len();
+                let rest = text[after..]
+                    .strip_prefix("\r\n")
+                    .or_else(|| text[after..].strip_prefix('\n'))
+                    .unwrap_or(&text[after..]);
+                let replaced = format!("{}{block}{rest}", &text[..start]);
+                let change = if replaced == text {
+                    crate::db::Change::Unchanged
+                } else {
+                    crate::db::Change::Updated
+                };
+                (replaced, change)
+            }
+            _ => {
+                let gap = match text.is_empty() || text.ends_with("\n\n") {
+                    true => "",
+                    false if text.ends_with('\n') => "\n",
+                    false => "\n\n",
+                };
+                (format!("{text}{gap}{block}"), crate::db::Change::Added)
+            }
+        },
+    };
+    if change != crate::db::Change::Unchanged {
+        std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    Ok(change)
+}
+
 fn plural(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }

@@ -5,6 +5,7 @@ description: What moved lately, five lines per project.
 
 ```
 rigger digest [<PROJECT>] [--since <DAYS>] [--json]
+rigger digest [<PROJECT>] [--since <DAYS>] --md <FILE>
 ```
 
 What has happened lately, at five lines per project. Five is the constraint the command is built around: read across a line of projects, a paragraph each would be the notes all over again - which is what stopped being read in the first place.
@@ -50,6 +51,30 @@ alpha
 Releases are counted by the day they shipped, which [`rigger sync`](/rigger/reference/sync/) reads from their tags. Events are counted by kind - the digest says how much was decided, not what; [`find`](/rigger/reference/find/) and [`why`](/rigger/reference/why/) answer the second question.
 
 A stage name is shown without the asides a plan carries: `v0.13.1 · MCP *(deferred from v0.13.0)*` reads as `v0.13.1 · MCP` here. The aside belongs in the plan, not in five lines.
+
+## Into a note: `--md`
+
+The same digest, written into a markdown note - the day's note in a vault, say - instead of printed:
+
+```console
+$ rigger digest --md "Daily/2026-09-22.md"
+Added the digest since 2026-09-15 to Daily/2026-09-22.md
+```
+
+```markdown
+<!-- rigger digest -->
+## rigger · since 2026-09-15
+
+**alpha**
+- shipped v0.1.0
+- recorded 1 decision, 1 change
+- next: v0.2.0 · Search
+
+Quiet: beta, gamma
+<!-- /rigger digest -->
+```
+
+Only on an explicit command, and only into the file named: the note is the owner's, and rigger does not go looking for a vault. The block sits between two HTML comments, which a markdown viewer does not show; they are what makes writing it again a replacement rather than a second copy. Everything outside them is left exactly as it was, and a file that does not exist yet is created.
 
 ## Related
 
