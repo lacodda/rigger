@@ -45,5 +45,6 @@ The command surface arrives one release at a time. Each release adds its command
 
 - `--version` and `--help` on the bare binary; `--help` on every command.
 - `RIGGER_DATA_DIR` overrides the data directory for every command; `RIGGER_PROFILE` names the [profile](/rigger/reference/profile/) to use over the one the config points at.
+- The first command of a new week shows the [week as a toast](/rigger/reference/week/#the-week-as-a-toast).
 - `--json` prints the same facts as data, on the commands that show facts.
 - Exit status is `0` on success and `1` on any failure, with the reason on stderr prefixed `error:`. Never `2`, including for a usage error: an assistant's `Stop` hook reads 2 as a refusal to stop, and a mistyped hook must be ignored rather than hold a session open.

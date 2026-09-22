@@ -3172,6 +3172,21 @@ impl Db {
         Ok(())
     }
 
+    /// Claims a once-per-period duty: true for the caller that moved the
+    /// setting to `value`, false for everyone who found it there already.
+    ///
+    /// One statement, so two processes starting in the same second - the MCP
+    /// server and a command at the terminal, on a Monday morning - cannot
+    /// both see the old week and both toast.
+    pub fn claim_setting(&self, key: &str, value: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE settings.value <> excluded.value",
+            params![key, value],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn count_open_tasks(&self, project_id: i64) -> Result<u64> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('done', 'dropped')",

@@ -51,6 +51,20 @@ Waiting on you
   see them with: rigger inbox
 ```
 
+## The week as a toast
+
+The brief is a command, and a command is read by whoever runs it - on this line, mostly the assistant. So the first time rigger runs in a new week, whatever runs it, the head of the brief goes to the desktop as a notification:
+
+```
+rigger · 2026-W39 · releases on 2026-09-25
+Focus: sample v0.3.0, widget v0.2.0
+1 question overdue · 1 version past its week
+```
+
+The first run claims the week in one statement, so the MCP server starting on Monday morning and a command at the terminal cannot both toast. A week with nothing to say - no focus, nothing late, nothing waiting - is not toasted; a toast announcing an empty week teaches its reader to dismiss it. Nothing about the toast can fail the command it rides on.
+
+It is shown through what the platform already has - PowerShell on Windows, `osascript` on macOS, `notify-send` elsewhere - so nothing is installed for it. `RIGGER_NOTIFY` names another program to show it: the title arrives as its one argument and the body on standard input. A record kept under `RIGGER_DATA_DIR` toasts only through a program named that way, so a test never reaches the desktop it runs on.
+
 ## Their tier asks for more
 
 The last section, present only when there is something in it. A tier is a promise about pace, and each tier breaks it in its own way:

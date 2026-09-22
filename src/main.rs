@@ -33,6 +33,7 @@ mod session;
 mod show;
 mod skill;
 mod sync;
+mod toast;
 mod week;
 
 use std::path::{Path, PathBuf};
@@ -959,6 +960,7 @@ fn work() -> ExitCode {
         Ok(cli) => cli,
         Err(err) => return usage_error(err),
     };
+    week_toast();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -966,6 +968,70 @@ fn work() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The week, as a toast, the first time rigger runs in it.
+///
+/// Whatever runs first - the MCP server an assistant starts on Monday
+/// morning, a hook, the owner at a terminal - claims the week, and the
+/// claim is one statement so two of them cannot both toast. Nothing here
+/// can fail the command it rides on: every error ends the toast, not the
+/// run.
+fn week_toast() {
+    let Some(notifier) = toast::notifier() else {
+        return;
+    };
+    let Ok(path) = paths::db_path() else { return };
+    // Before `init` there is no record to brief from, and opening one here
+    // would create the file `init` is meant to create.
+    if !path.is_file() {
+        return;
+    }
+    let Ok(db) = Db::open(&path) else { return };
+    let now = calendar::Week::current();
+    if !db.claim_setting("week_toast", &now.to_string()).unwrap_or(false) {
+        return;
+    }
+    let Ok(Some((title, body))) = week_toast_text(&db, now) else {
+        return;
+    };
+    toast::show(&notifier, &title, &body);
+}
+
+/// The brief's head, in the room a toast has: a title and two lines.
+///
+/// `None` when the week has nothing to say - no focus, nothing late,
+/// nothing waiting - because a toast announcing an empty week teaches the
+/// owner to dismiss the toast.
+fn week_toast_text(db: &Db, now: calendar::Week) -> Result<Option<(String, String)>> {
+    let facts = week_facts(db, now)?;
+    let waiting = db.open_questions()?;
+    let overdue_questions = waiting.iter().filter(|q| q.overdue).count();
+    if facts.focus.is_empty() && facts.overdue.is_empty() && waiting.is_empty() && facts.signals.is_empty() {
+        return Ok(None);
+    }
+    let title = format!("rigger · {now} · releases on {}", now.friday());
+    let focus = match facts.focus.is_empty() {
+        true => "Nothing is aimed at this week".to_string(),
+        false => {
+            let items: Vec<String> = facts.focus.iter().map(|f| format!("{} {}", f.project, f.version)).collect();
+            format!("Focus: {}", items.join(", "))
+        }
+    };
+    let mut late = Vec::new();
+    if overdue_questions > 0 {
+        late.push(format!("{} overdue", plural(overdue_questions, "question", "questions")));
+    }
+    if !facts.overdue.is_empty() {
+        late.push(format!("{} past its week", plural(facts.overdue.len(), "version", "versions")));
+    }
+    if late.is_empty() && !waiting.is_empty() {
+        late.push(format!("{} waiting on you", plural(waiting.len(), "question", "questions")));
+    }
+    if late.is_empty() && !facts.signals.is_empty() {
+        late.push(format!("{} asking more of their tier", plural(facts.signals.len(), "project", "projects")));
+    }
+    Ok(Some((title, format!("{focus}\n{}", late.join(" · ")))))
 }
 
 /// Prints what clap wants to say, and chooses the exit code.
