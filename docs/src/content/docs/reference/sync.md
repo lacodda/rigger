@@ -68,6 +68,18 @@ A release the plan never mentioned is reported as `(not in the plan)` - but only
 
 Annotated and lightweight tags both work. The date is always the commit's, because a lightweight tag - what `git tag v0.5.0` makes - has no date of its own.
 
+## Cards in git
+
+In a record that holds [task cards](/rigger/reference/task/), `sync` also reads each repository's branches and its newest 500 commits across all of them for the cards' keys. A card found there is tied to the repository, with the branch it is worked on; its commits and its days without movement show on [`task show`](/rigger/reference/task/#what-git-says-about-a-card). What is news is said:
+
+```console
+$ rigger sync webapp
+webapp:
+  card       WA-4130: 1 new commit, 1 branch, linked now
+```
+
+A card whose branch is already known and that has no new commits says nothing: like activity, a branch is state, not news. A record with no cards - a line of products - skips the reading altogether. In `--json` each project's report carries `cards`, one entry per card git named, with its `key`, how many `branches` carry it, the `new_commits` this run added, and whether it was `linked_now`.
+
 ## Releases and publishing
 
 A tag says the work was finished. It does not say anyone can install it: v0.4.0 of rigger itself was tagged, counted as shipped by every screen, and missing from crates.io, because its publish had gone red and nothing that read the record could tell. So since v0.23.0 a shipped version has a second fact beside its tag - its **delivery** - and `sync` reads it from GitHub.

@@ -17,7 +17,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger resolve`](/rigger/reference/resolve/) | v0.7.0 | Answer a question or sort a wish |
 | [`rigger open`](/rigger/reference/open/) | v0.4.0 | Start a Claude Code session with the packet |
 | [`rigger mcp`](/rigger/reference/mcp/) | v0.5.0 | Serve the packet and the recording tools over MCP |
-| [`rigger sync`](/rigger/reference/sync/) | v0.6.0 | Read tags and commits into facts |
+| [`rigger sync`](/rigger/reference/sync/) | v0.6.0 | Read tags and commits into facts; the branches and commits of task cards (v0.24.0) |
 | [`rigger find`](/rigger/reference/find/) | v0.8.0 | Search every project's events |
 | [`rigger why`](/rigger/reference/why/) | v0.8.0 | The work that went into a version |
 | [`rigger inbox`](/rigger/reference/inbox/) | v0.9.0 | Questions waiting for your answer |

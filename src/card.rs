@@ -40,6 +40,35 @@ pub struct Link {
     pub role: Option<String>,
 }
 
+/// What git says about a card in one repository it is worked in.
+#[derive(Debug, Clone, Serialize)]
+pub struct Activity {
+    pub project: String,
+    /// The branches whose name carries the card's, local ones first.
+    pub branches: Vec<Branch>,
+    /// How many of the commits read name the card in their message.
+    pub commits: u32,
+    /// The newest movement: the newest of those commits and the branch tips.
+    pub last_commit: Option<Commit>,
+}
+
+/// A branch a card is worked on - what a worktree for the card is made from.
+#[derive(Debug, Clone, Serialize)]
+pub struct Branch {
+    pub name: String,
+    /// The remote it is on, when there is no local branch of that name.
+    pub remote: Option<String>,
+    pub tip: String,
+    pub tip_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Commit {
+    pub hash: String,
+    pub at: String,
+    pub subject: String,
+}
+
 /// One candidate for a query, and why it scored.
 #[derive(Debug, Clone, Serialize)]
 pub struct Hit {

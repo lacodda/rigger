@@ -476,7 +476,50 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE versions ADD COLUMN registries TEXT;
     ALTER TABLE versions ADD COLUMN delivered_by TEXT CHECK (delivered_by IN ('engine', 'github'));
     ",
+    // v26: a card's activity, read from git. Branches whose name carries a
+    // card's name, and commits whose message does - facts `sync` finds, not
+    // entries anybody writes. Branches are the repository's state and are
+    // replaced on every read, so a branch deleted after its merge leaves the
+    // card; commits are history and stay, so a card keeps what was done for
+    // it after its branch is gone. Tables of their own rather than events:
+    // an event is something the record was told, and a commit is looked up
+    // by its hash, which is what makes reading it twice a no-op.
+    "
+    CREATE TABLE task_branches (
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        remote     TEXT,
+        tip        TEXT NOT NULL,
+        tip_at     TEXT NOT NULL,
+        subject    TEXT NOT NULL,
+        PRIMARY KEY (task_id, project_id, name)
+    );
+    CREATE INDEX task_branches_by_project ON task_branches (project_id);
+    CREATE TABLE task_commits (
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        hash       TEXT NOT NULL,
+        at         TEXT NOT NULL,
+        subject    TEXT NOT NULL,
+        PRIMARY KEY (task_id, project_id, hash)
+    );
+    ",
 ];
+
+/// What one read of a repository added to a card.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct CardRead {
+    #[serde(skip)]
+    pub task_id: i64,
+    pub key: String,
+    /// Branches of this repository whose name carries the card's.
+    pub branches: u32,
+    /// Commits naming the card that the record did not have.
+    pub new_commits: u32,
+    /// Whether this read is what tied the card to the repository.
+    pub linked_now: bool,
+}
 
 /// The place a desk keeps its cards: a project the record keeps for
 /// itself, made on first use.
@@ -3085,6 +3128,137 @@ impl Db {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Writes what one repository's git says about the cards: its branches
+    /// replace the ones read before, its commits join the ones already
+    /// known, and a card found there is linked to it. The branch found
+    /// first becomes the link's branch only where the link has none - a
+    /// branch somebody named with `task link` is theirs to change.
+    ///
+    /// Returns, per card that git named, what this read added.
+    pub fn record_card_activity(&self, project_id: i64, seen: &crate::activity::Seen) -> Result<Vec<CardRead>> {
+        fn entry(out: &mut Vec<CardRead>, task_id: i64) -> &mut CardRead {
+            if let Some(i) = out.iter().position(|r| r.task_id == task_id) {
+                return &mut out[i];
+            }
+            out.push(CardRead {
+                task_id,
+                ..CardRead::default()
+            });
+            out.last_mut().expect("just pushed")
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM task_branches WHERE project_id = ?1", [project_id])?;
+        let mut out: Vec<CardRead> = Vec::new();
+        for b in &seen.branches {
+            tx.execute(
+                "INSERT OR IGNORE INTO task_branches (task_id, project_id, name, remote, tip, tip_at, subject) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![b.task_id, project_id, b.name, b.remote, b.tip, b.tip_at, b.subject],
+            )?;
+            entry(&mut out, b.task_id).branches += 1;
+        }
+        for c in &seen.commits {
+            let added = tx.execute(
+                "INSERT OR IGNORE INTO task_commits (task_id, project_id, hash, at, subject) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![c.task_id, project_id, c.hash, c.at, c.subject],
+            )?;
+            entry(&mut out, c.task_id).new_commits += added as u32;
+        }
+        for read in &mut out {
+            let branch = seen.branches.iter().find(|b| b.task_id == read.task_id).map(|b| b.name.as_str());
+            let linked: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM task_projects WHERE task_id = ?1 AND project_id = ?2)",
+                params![read.task_id, project_id],
+                |r| r.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO task_projects (task_id, project_id, branch) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT (task_id, project_id) DO UPDATE SET branch = COALESCE(branch, excluded.branch)",
+                params![read.task_id, project_id, branch],
+            )?;
+            read.linked_now = !linked;
+            if read.linked_now || read.new_commits > 0 {
+                tx.execute("UPDATE tasks SET updated_at = ?2 WHERE id = ?1", params![read.task_id, now()])?;
+            }
+            read.key = tx
+                .query_row("SELECT key FROM tasks WHERE id = ?1", [read.task_id], |r| r.get::<_, Option<String>>(0))?
+                .unwrap_or_default();
+        }
+        tx.commit()?;
+        Ok(out)
+    }
+
+    /// What git said about a card, per repository, by the repository's name.
+    pub fn card_activity(&self, task_id: i64) -> Result<Vec<crate::card::Activity>> {
+        let mut out = Vec::new();
+        let mut projects = self.conn.prepare(
+            "SELECT p.id, p.name FROM projects p WHERE p.id IN \
+             (SELECT project_id FROM task_branches WHERE task_id = ?1 UNION SELECT project_id FROM task_commits WHERE task_id = ?1) \
+             ORDER BY p.name",
+        )?;
+        let projects: Vec<(i64, String)> = projects
+            .query_map([task_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (project_id, project) in projects {
+            let mut stmt = self.conn.prepare(
+                "SELECT name, remote, tip, tip_at, subject FROM task_branches WHERE task_id = ?1 AND project_id = ?2 \
+                 ORDER BY remote IS NOT NULL, tip_at DESC, name",
+            )?;
+            let rows: Vec<(crate::card::Branch, String)> = stmt
+                .query_map(params![task_id, project_id], |r| {
+                    Ok((
+                        crate::card::Branch {
+                            name: r.get(0)?,
+                            remote: r.get(1)?,
+                            tip: r.get(2)?,
+                            tip_at: r.get(3)?,
+                        },
+                        r.get(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            let commits: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM task_commits WHERE task_id = ?1 AND project_id = ?2",
+                params![task_id, project_id],
+                |r| r.get(0),
+            )?;
+            let newest_commit: Option<crate::card::Commit> = self
+                .conn
+                .query_row(
+                    "SELECT hash, at, subject FROM task_commits WHERE task_id = ?1 AND project_id = ?2 ORDER BY at DESC, hash LIMIT 1",
+                    params![task_id, project_id],
+                    |r| {
+                        Ok(crate::card::Commit {
+                            hash: r.get(0)?,
+                            at: r.get(1)?,
+                            subject: r.get(2)?,
+                        })
+                    },
+                )
+                .optional()?;
+            // A branch tip is movement too: most commits on a ticket's
+            // branch do not repeat its id.
+            let newest_tip = rows.iter().max_by(|a, b| a.0.tip_at.cmp(&b.0.tip_at)).map(|(b, subject)| crate::card::Commit {
+                hash: b.tip.clone(),
+                at: b.tip_at.clone(),
+                subject: subject.clone(),
+            });
+            // Moments are whole seconds, and a commit and the tip made after
+            // it can share one; the tip is where the branch stands, so a tie
+            // goes to it.
+            let last_commit = match (newest_commit, newest_tip) {
+                (Some(c), Some(t)) => Some(if t.at >= c.at { t } else { c }),
+                (c, t) => c.or(t),
+            };
+            out.push(crate::card::Activity {
+                project,
+                branches: rows.into_iter().map(|(b, _)| b).collect(),
+                commits: commits.unsigned_abs() as u32,
+                last_commit,
+            });
+        }
+        Ok(out)
     }
 
     /// The events written against a card, oldest first.

@@ -3,6 +3,7 @@
 //! The command surface grows one release at a time; this release brings the
 //! database, projects and `doctor`.
 
+mod activity;
 mod adopt;
 mod answers;
 mod calendar;
@@ -1879,6 +1880,23 @@ fn print_sync(report: &sync::Report, many: bool) {
         let plural = if commits == 1 { "commit" } else { "commits" };
         println!("  activity   {commits} {plural}{since}, last on {when}");
     }
+    // A card is news when this read tied it to the repository or found new
+    // commits for it; a branch already known is state, like activity.
+    for card in report.cards.iter().filter(|c| c.linked_now || c.new_commits > 0) {
+        let mut said = Vec::new();
+        if card.new_commits > 0 {
+            let plural = if card.new_commits == 1 { "commit" } else { "commits" };
+            said.push(format!("{} new {plural}", card.new_commits));
+        }
+        if card.branches > 0 {
+            let plural = if card.branches == 1 { "branch" } else { "branches" };
+            said.push(format!("{} {plural}", card.branches));
+        }
+        if card.linked_now {
+            said.push("linked now".to_string());
+        }
+        println!("  card       {}: {}", card.key, said.join(", "));
+    }
     if quiet {
         println!("  nothing changed");
     }
@@ -3318,10 +3336,18 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     let card = find_card(&db, task)?;
     let links = db.card_links(card.id)?;
     let events = db.task_events(card.id)?;
+    let activity = db.card_activity(card.id)?;
+    let idle = idle_days(&activity);
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "card": card, "links": links, "events": events.len() }))?
+            serde_json::to_string_pretty(&serde_json::json!({
+                "card": card,
+                "links": links,
+                "activity": activity,
+                "idle_days": idle,
+                "events": events.len(),
+            }))?
         );
         return Ok(());
     }
@@ -3349,7 +3375,63 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     if let Some(next) = events.iter().rev().find(|e| e.kind == "next") {
         println!("  next:     {}", first_line(&next.body));
     }
+    if !activity.is_empty() {
+        println!("  in git:");
+        for line in activity_lines(&activity) {
+            println!("    {line}");
+        }
+        if let Some(days) = idle {
+            println!("  idle:     {}", describe_idle(days));
+        }
+    } else if !links.is_empty() {
+        println!("  in git:   nothing yet - `rigger sync` reads branches and commits that carry the key");
+    }
     Ok(())
+}
+
+/// Whole days since a card last moved in any repository: the newest of its
+/// commits and branch tips. `None` when git has said nothing about it.
+fn idle_days(activity: &[card::Activity]) -> Option<i64> {
+    activity
+        .iter()
+        .filter_map(|a| a.last_commit.as_ref())
+        .map(|c| c.at.as_str())
+        .max()
+        .and_then(activity::days_since)
+}
+
+fn describe_idle(days: i64) -> String {
+    match days {
+        0 => "moved today".to_string(),
+        1 => "1 day without movement".to_string(),
+        n => format!("{n} days without movement"),
+    }
+}
+
+/// A card's activity, a line per repository and one per branch.
+fn activity_lines(activity: &[card::Activity]) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in activity {
+        let mut line = a.project.clone();
+        if a.commits > 0 {
+            let plural = if a.commits == 1 { "commit names" } else { "commits name" };
+            line.push_str(&format!(" - {} {plural} it", a.commits));
+        }
+        if let Some(last) = &a.last_commit {
+            let short: String = last.hash.chars().take(8).collect();
+            line.push_str(&format!("; last {} {short} {}", day_of(&last.at), last.subject));
+        }
+        out.push(line);
+        for b in &a.branches {
+            let place = b.remote.as_deref().map(|r| format!(" (only on {r})")).unwrap_or_default();
+            out.push(format!("  branch {}{place}, tip {}", b.name, day_of(&b.tip_at)));
+        }
+    }
+    out
+}
+
+fn day_of(moment: &str) -> &str {
+    moment.split('T').next().unwrap_or(moment)
 }
 
 /// The packet a task starts from: what it is, where it is worked, and
@@ -3372,6 +3454,16 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
             let branch = link.branch.as_deref().map(|b| format!(" on `{b}`")).unwrap_or_default();
             let role = link.role.as_deref().map(|r| format!(" - {r}")).unwrap_or_default();
             out.push_str(&format!("- {} ({}){branch}{role}\n", link.project, link.path));
+        }
+    }
+    let activity = db.card_activity(card.id)?;
+    if !activity.is_empty() {
+        out.push_str("\n## In git\n");
+        for line in activity_lines(&activity) {
+            out.push_str(&format!("- {line}\n"));
+        }
+        if let Some(days) = idle_days(&activity) {
+            out.push_str(&format!("- {}\n", describe_idle(days)));
         }
     }
     if let Some(next) = events.iter().rev().find(|e| e.kind == "next") {

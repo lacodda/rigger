@@ -43,6 +43,9 @@ pub struct Report {
     /// What GitHub says about the newest shipped version, when it was asked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryNote>,
+    /// Cards whose names this repository's branches or commits carry.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cards: Vec<crate::db::CardRead>,
 }
 
 /// How far the newest shipped version got past its tag, as GitHub told it.
@@ -64,7 +67,11 @@ pub struct Shipped {
 
 impl Report {
     pub fn changed(&self) -> bool {
-        self.shipped.iter().any(|s| s.newly) || !self.unplanned.is_empty() || self.changes_recorded > 0 || self.delivery.as_ref().is_some_and(|d| d.newly)
+        self.shipped.iter().any(|s| s.newly)
+            || !self.unplanned.is_empty()
+            || self.changes_recorded > 0
+            || self.delivery.as_ref().is_some_and(|d| d.newly)
+            || self.cards.iter().any(|c| c.linked_now || c.new_commits > 0)
     }
 
     /// Whether GitHub said something the owner has to hear: a version the
@@ -211,6 +218,13 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
         if db.record_commit_event(project.id, &change.hash, &change.body, &change.moment)? == Change::Added {
             report.changes_recorded += 1;
         }
+    }
+
+    // A record with no cards - a line of products - pays nothing for this.
+    let cards = db.cards(None)?;
+    if !cards.is_empty() {
+        let seen = crate::activity::read(&repo, &cards)?;
+        report.cards = db.record_card_activity(project.id, &seen)?;
     }
 
     Ok(report)

@@ -146,6 +146,7 @@ fn an_open_task_from_before_reads_as_new() {
          ALTER TABLE events DROP COLUMN due;
          ALTER TABLE versions DROP COLUMN delivery; ALTER TABLE versions DROP COLUMN registries;
          ALTER TABLE versions DROP COLUMN delivered_by;
+         DROP TABLE task_branches; DROP TABLE task_commits;
          PRAGMA user_version = 16;",
     )
     .unwrap();
