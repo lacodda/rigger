@@ -35,13 +35,13 @@ fn json(data: &Path, args: &[&str]) -> serde_json::Value {
 fn desk(data: &Path) {
     rigger(data).arg("init").assert().success();
     rigger(data)
-        .args(["task", "new", "rtf files are not supported", "--id", "WA-4130"])
+        .args(["task", "new", "rtf files are not supported", "--id", "ACME-7310"])
         .assert()
         .success();
 }
 
 fn tray_dir(data: &Path) -> PathBuf {
-    data.join("profiles").join("line").join("trays").join("WA-4130")
+    data.join("profiles").join("line").join("trays").join("ACME-7310")
 }
 
 fn write(path: &Path, bytes: usize) {
@@ -67,12 +67,12 @@ fn the_tray_of_the_card_in_hand_is_made_with_a_blank_form_once() {
     desk(data.path());
 
     let out = output(data.path(), &["tray", "show"]);
-    assert!(out.contains("WA-4130 · rtf files are not supported"), "{out}");
+    assert!(out.contains("ACME-7310 · rtf files are not supported"), "{out}");
     assert!(out.contains("made the tray"), "{out}");
     assert!(out.contains("(blank)"), "{out}");
     let form = tray_dir(data.path()).join("incoming.md");
     let text = std::fs::read_to_string(&form).unwrap();
-    assert!(text.starts_with("# WA-4130 · rtf files are not supported"), "{text}");
+    assert!(text.starts_with("# ACME-7310 · rtf files are not supported"), "{text}");
     assert!(text.contains("## Links to files"), "{text}");
 
     // A second look makes nothing and keeps what the person wrote.
@@ -82,8 +82,8 @@ fn the_tray_of_the_card_in_hand_is_made_with_a_blank_form_once() {
     assert!(out.contains("(filled)"), "{out}");
     assert!(std::fs::read_to_string(&form).unwrap().contains("cannot open rtf"));
 
-    let show = json(data.path(), &["tray", "show", "WA-4130", "--json"]);
-    assert_eq!(show["card"]["key"], "WA-4130");
+    let show = json(data.path(), &["tray", "show", "ACME-7310", "--json"]);
+    assert_eq!(show["card"]["key"], "ACME-7310");
     assert_eq!(show["made"], false);
     assert_eq!(show["form"]["filled"], true);
 }
@@ -302,10 +302,10 @@ fn the_tray_follows_the_card_when_it_is_renamed() {
     let root = data.path().join("profiles").join("line").join("trays");
     write(&root.join(&local).join("shot.png"), 10);
 
-    rigger(data.path()).args(["task", "rename", &local, "WA-9"]).assert().success();
-    let show = json(data.path(), &["tray", "show", "WA-9", "--json"]);
+    rigger(data.path()).args(["task", "rename", &local, "ACME-9"]).assert().success();
+    let show = json(data.path(), &["tray", "show", "ACME-9", "--json"]);
     assert_eq!(show["made"], false, "the old tray is found, not a new one made: {show:#}");
-    assert!(root.join("WA-9").join("shot.png").is_file());
+    assert!(root.join("ACME-9").join("shot.png").is_file());
     assert!(!root.join(&local).exists(), "there is one tray per task");
 }
 
@@ -313,16 +313,16 @@ fn the_tray_follows_the_card_when_it_is_renamed() {
 fn the_list_names_only_trays_with_something_in_them() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
-    rigger(data.path()).args(["task", "new", "another", "--id", "WA-5"]).assert().success();
-    output(data.path(), &["tray", "show", "WA-5"]);
-    output(data.path(), &["tray", "show", "WA-4130"]);
+    rigger(data.path()).args(["task", "new", "another", "--id", "ACME-5"]).assert().success();
+    output(data.path(), &["tray", "show", "ACME-5"]);
+    output(data.path(), &["tray", "show", "ACME-7310"]);
     let out = output(data.path(), &["tray", "list"]);
     assert!(out.contains("Nothing waits"), "{out}");
 
     write(&tray_dir(data.path()).join("shot.png"), 10);
     let out = output(data.path(), &["tray", "list"]);
-    assert!(out.contains("WA-4130") && out.contains("1 file"), "{out}");
-    assert!(!out.contains("WA-5"), "{out}");
+    assert!(out.contains("ACME-7310") && out.contains("1 file"), "{out}");
+    assert!(!out.contains("ACME-5"), "{out}");
     let list = json(data.path(), &["tray", "list", "--json"]);
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["title"], "rtf files are not supported");
@@ -332,24 +332,24 @@ fn the_list_names_only_trays_with_something_in_them() {
 fn the_card_says_what_waits_in_its_tray() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
-    let out = output(data.path(), &["task", "show", "WA-4130"]);
+    let out = output(data.path(), &["task", "show", "ACME-7310"]);
     assert!(!out.contains("tray:"), "no tray, no line: {out}");
-    assert!(json(data.path(), &["task", "show", "WA-4130", "--json"])["tray"].is_null());
+    assert!(json(data.path(), &["task", "show", "ACME-7310", "--json"])["tray"].is_null());
 
     output(data.path(), &["tray", "show"]);
     let tray = tray_dir(data.path());
     write(&tray.join("shot.png"), 10);
     fill(&tray.join("incoming.md"), "## Where the work is done (required)", "C:\\work\\webapp");
 
-    let out = output(data.path(), &["task", "show", "WA-4130"]);
+    let out = output(data.path(), &["task", "show", "ACME-7310"]);
     assert!(out.contains("the form filled, 1 file waiting"), "{out}");
-    let packet = output(data.path(), &["task", "context", "WA-4130"]);
+    let packet = output(data.path(), &["task", "context", "ACME-7310"]);
     assert!(packet.contains("## Tray"), "{packet}");
     assert!(packet.contains("the form is filled; read it first"), "{packet}");
     assert!(packet.contains("1 file waiting: shot.png"), "{packet}");
 
     output(data.path(), &["tray", "done"]);
-    let packet = output(data.path(), &["task", "context", "WA-4130"]);
+    let packet = output(data.path(), &["task", "context", "ACME-7310"]);
     assert!(packet.contains("the form is blank"), "{packet}");
     assert!(packet.contains("sorted before:"), "{packet}");
 }
@@ -361,7 +361,7 @@ fn the_profile_says_where_the_trays_are() {
     let elsewhere = data.path().join("elsewhere");
     rigger(data.path()).args(["profile", "set", "--trays"]).arg(&elsewhere).assert().success();
     output(data.path(), &["tray", "show"]);
-    assert!(elsewhere.join("WA-4130").join("incoming.md").is_file());
+    assert!(elsewhere.join("ACME-7310").join("incoming.md").is_file());
     let profile = output(data.path(), &["profile", "show"]);
     assert!(profile.contains("trays:") && profile.contains("elsewhere"), "{profile}");
 }

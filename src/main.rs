@@ -672,7 +672,7 @@ enum TaskCommand {
     New {
         /// The task's title
         title: String,
-        /// Ticket id, such as WA-4130; a local key is made when omitted
+        /// Ticket id, such as ACME-7310; a local key is made when omitted
         #[arg(long = "id", value_name = "KEY")]
         key: Option<String>,
         /// Another name the task goes by; may be given more than once
@@ -802,7 +802,7 @@ enum TaskCommand {
     },
     /// Make a card from a ticket in kasl's inbox: its key and title come from there
     Take {
-        /// The ticket's key, such as WA-4130
+        /// The ticket's key, such as ACME-7310
         key: String,
         /// A project the task is worked in; may be given more than once
         #[arg(long = "project", value_name = "NAME")]

@@ -57,10 +57,10 @@ fn program(dir: &Path, name: &str, windows: &str, unix: &str) -> PathBuf {
 /// Four tickets: one waiting, one taken in kasl, one gone from the tracker,
 /// one asleep until a day that will not come.
 const INBOX: &str = r#"{"issues":[
-  {"key":"WA-1","summary":"Export drops the footer","status":"Open","priority":"Medium","first_seen":"2026-09-20T09:00:00","pinned":false},
-  {"key":"WA-2","summary":"rtf files are not supported","status":"In Progress","priority":"High","score":8.0,"url":"https://tracker.example.com/browse/WA-2","first_seen":"2026-09-19T09:00:00","taken_at":"2026-09-21T10:00:00","pinned":true},
-  {"key":"WA-3","summary":"Old import bug","status":"Done","gone_at":"2026-09-24T10:00:00"},
-  {"key":"WA-4","summary":"Later, perhaps","status":"Open","snoozed_until":"2999-01-01T09:00:00"}
+  {"key":"ACME-1","summary":"Export drops the footer","status":"Open","priority":"Medium","first_seen":"2026-09-20T09:00:00","pinned":false},
+  {"key":"ACME-2","summary":"rtf files are not supported","status":"In Progress","priority":"High","score":8.0,"url":"https://tracker.example.com/browse/ACME-2","first_seen":"2026-09-19T09:00:00","taken_at":"2026-09-21T10:00:00","pinned":true},
+  {"key":"ACME-3","summary":"Old import bug","status":"Done","gone_at":"2026-09-24T10:00:00"},
+  {"key":"ACME-4","summary":"Later, perhaps","status":"Open","snoozed_until":"2999-01-01T09:00:00"}
 ]}"#;
 
 /// A kasl that answers with `inbox`, and writes down its arguments.
@@ -96,20 +96,20 @@ fn the_tickets_without_a_card_are_named_taken_first_and_sleeping_ones_not_at_all
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
     let (kasl, log) = fake_kasl(data.path(), INBOX);
-    rigger(data.path()).args(["task", "new", "Old import bug", "--id", "WA-3"]).assert().success();
+    rigger(data.path()).args(["task", "new", "Old import bug", "--id", "ACME-3"]).assert().success();
 
     let out = output(with_kasl(data.path(), &kasl), &["task", "incoming"]);
     assert!(
         out.contains("kasl's inbox: 3 tickets - 2 without a card, 1 gone with the card still open"),
         "{out}"
     );
-    let two = out.find("WA-2").expect("WA-2 is listed");
-    let one = out.find("WA-1").expect("WA-1 is listed");
+    let two = out.find("ACME-2").expect("ACME-2 is listed");
+    let one = out.find("ACME-1").expect("ACME-1 is listed");
     assert!(two < one, "the ticket taken in kasl comes first:\n{out}");
-    assert!(!out.contains("WA-4"), "a sleeping ticket is not waiting:\n{out}");
+    assert!(!out.contains("ACME-4"), "a sleeping ticket is not waiting:\n{out}");
     assert!(out.contains("rigger task take <KEY>"), "{out}");
     let gone = out.split("The ticket has gone").nth(1).expect("the gone section");
-    assert!(gone.contains("WA-3") && gone.contains("gone 2026-09-24"), "{out}");
+    assert!(gone.contains("ACME-3") && gone.contains("gone 2026-09-24"), "{out}");
     assert!(gone.contains("rigger task close <KEY>"), "{out}");
 
     let asked = std::fs::read_to_string(&log).unwrap();
@@ -121,8 +121,8 @@ fn a_closed_card_is_not_named_again_when_its_ticket_goes() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
     let (kasl, _) = fake_kasl(data.path(), INBOX);
-    rigger(data.path()).args(["task", "new", "Old import bug", "--id", "WA-3"]).assert().success();
-    rigger(data.path()).args(["task", "close", "WA-3"]).assert().success();
+    rigger(data.path()).args(["task", "new", "Old import bug", "--id", "ACME-3"]).assert().success();
+    rigger(data.path()).args(["task", "close", "ACME-3"]).assert().success();
     let out = output(with_kasl(data.path(), &kasl), &["task", "incoming"]);
     assert!(out.contains("0 gone with the card still open"), "{out}");
     assert!(!out.contains("The ticket has gone"), "{out}");
@@ -134,20 +134,20 @@ fn a_card_is_taken_from_the_inbox_by_its_key_alone() {
     desk(data.path());
     let (kasl, _) = fake_kasl(data.path(), INBOX);
 
-    let out = output(with_kasl(data.path(), &kasl), &["task", "take", "wa-2"]);
+    let out = output(with_kasl(data.path(), &kasl), &["task", "take", "acme-2"]);
     assert!(
-        out.contains("Made card WA-2 from kasl's inbox and opened it: rtf files are not supported"),
+        out.contains("Made card ACME-2 from kasl's inbox and opened it: rtf files are not supported"),
         "{out}"
     );
     assert!(out.contains("In Progress · priority High · score 8"), "{out}");
-    assert!(out.contains("https://tracker.example.com/browse/WA-2"), "{out}");
+    assert!(out.contains("https://tracker.example.com/browse/ACME-2"), "{out}");
     let active: serde_json::Value = serde_json::from_str(&output(rigger(data.path()), &["task", "active", "--json"])).unwrap();
-    assert_eq!(active["key"], "WA-2");
+    assert_eq!(active["key"], "ACME-2");
     assert_eq!(active["title"], "rtf files are not supported");
 
     // Taking it again makes no second card.
-    let again = output(with_kasl(data.path(), &kasl), &["task", "take", "WA-2"]);
-    assert!(again.contains("WA-2 already has a card"), "{again}");
+    let again = output(with_kasl(data.path(), &kasl), &["task", "take", "ACME-2"]);
+    assert!(again.contains("ACME-2 already has a card"), "{again}");
     let cards: serde_json::Value = serde_json::from_str(&output(rigger(data.path()), &["task", "list", "--status", "all", "--json"])).unwrap();
     assert_eq!(cards.as_array().unwrap().len(), 1);
 
@@ -155,10 +155,10 @@ fn a_card_is_taken_from_the_inbox_by_its_key_alone() {
     assert!(incoming.contains("1 without a card"), "{incoming}");
 
     with_kasl(data.path(), &kasl)
-        .args(["task", "take", "WA-77"])
+        .args(["task", "take", "ACME-77"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("does not know WA-77").and(predicate::str::contains("rigger task new")));
+        .stderr(predicate::str::contains("does not know ACME-77").and(predicate::str::contains("rigger task new")));
 }
 
 #[test]
@@ -166,20 +166,20 @@ fn a_card_shows_its_ticket_and_its_packet_carries_it() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
     let (kasl, _) = fake_kasl(data.path(), INBOX);
-    output(with_kasl(data.path(), &kasl), &["task", "take", "WA-2"]);
+    output(with_kasl(data.path(), &kasl), &["task", "take", "ACME-2"]);
 
-    let out = output(with_kasl(data.path(), &kasl), &["task", "show", "WA-2"]);
+    let out = output(with_kasl(data.path(), &kasl), &["task", "show", "ACME-2"]);
     assert!(
         out.contains("ticket:   In Progress · priority High · score 8 · taken 2026-09-21 (kasl)"),
         "{out}"
     );
-    let packet = output(with_kasl(data.path(), &kasl), &["task", "context", "WA-2"]);
+    let packet = output(with_kasl(data.path(), &kasl), &["task", "context", "ACME-2"]);
     assert!(packet.contains("## Ticket\nIn Progress · priority High"), "{packet}");
-    assert!(packet.contains("https://tracker.example.com/browse/WA-2"), "{packet}");
+    assert!(packet.contains("https://tracker.example.com/browse/ACME-2"), "{packet}");
 
     // A card found under an alias is the same ticket.
     rigger(data.path())
-        .args(["task", "new", "import", "--id", "LOC-1", "--alias", "WA-3"])
+        .args(["task", "new", "import", "--id", "LOC-1", "--alias", "ACME-3"])
         .assert()
         .success();
     let out = output(with_kasl(data.path(), &kasl), &["task", "show", "LOC-1"]);
@@ -190,7 +190,7 @@ fn a_card_shows_its_ticket_and_its_packet_carries_it() {
 fn a_kasl_that_cannot_answer_is_said_so_only_where_the_inbox_was_asked_for() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
-    rigger(data.path()).args(["task", "new", "rtf", "--id", "WA-2"]).assert().success();
+    rigger(data.path()).args(["task", "new", "rtf", "--id", "ACME-2"]).assert().success();
     let kasl = old_kasl(data.path());
 
     with_kasl(data.path(), &kasl)
@@ -200,11 +200,11 @@ fn a_kasl_that_cannot_answer_is_said_so_only_where_the_inbox_was_asked_for() {
         .stderr(predicate::str::contains("did not list its inbox (unexpected argument '--json' found)"));
     // Taking a ticket kasl cannot give says how to make the card without it.
     with_kasl(data.path(), &kasl)
-        .args(["task", "take", "WA-9"])
+        .args(["task", "take", "ACME-9"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("rigger task new \"<title>\" --id WA-9"));
-    let out = output(with_kasl(data.path(), &kasl), &["task", "show", "WA-2"]);
+        .stderr(predicate::str::contains("rigger task new \"<title>\" --id ACME-9"));
+    let out = output(with_kasl(data.path(), &kasl), &["task", "show", "ACME-2"]);
     assert!(!out.contains("ticket:") && !out.contains("kasl"), "{out}");
 
     // No kasl at all: a scratch record reaches none it was not given.
@@ -215,7 +215,7 @@ fn a_kasl_that_cannot_answer_is_said_so_only_where_the_inbox_was_asked_for() {
         .stderr(predicate::str::contains("no kasl here"));
 
     // An answer that is not the contract is not read as an empty inbox.
-    let (garbled, _) = fake_kasl(data.path(), "[{\"key\":\"WA-1\"}]");
+    let (garbled, _) = fake_kasl(data.path(), "[{\"key\":\"ACME-1\"}]");
     with_kasl(data.path(), &garbled)
         .args(["task", "incoming"])
         .assert()
@@ -244,22 +244,22 @@ fn the_json_of_the_inbox_and_of_a_card_is_the_documented_contract() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
     let (kasl, _) = fake_kasl(data.path(), INBOX);
-    output(with_kasl(data.path(), &kasl), &["task", "take", "WA-2"]);
+    output(with_kasl(data.path(), &kasl), &["task", "take", "ACME-2"]);
     output(rigger(data.path()), &["tray", "show"]);
-    std::fs::write(data.path().join("profiles/line/trays/WA-2/shot.png"), "x").unwrap();
+    std::fs::write(data.path().join("profiles/line/trays/ACME-2/shot.png"), "x").unwrap();
     output(rigger(data.path()), &["tray", "done"]);
-    std::fs::write(data.path().join("profiles/line/trays/WA-2/shot.png"), "x").unwrap();
+    std::fs::write(data.path().join("profiles/line/trays/ACME-2/shot.png"), "x").unwrap();
 
     let page = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/src/content/docs/reference/task.md")).unwrap();
-    for args in [&["task", "incoming", "--json"][..], &["task", "show", "WA-2", "--json"][..]] {
+    for args in [&["task", "incoming", "--json"][..], &["task", "show", "ACME-2", "--json"][..]] {
         let json: serde_json::Value = serde_json::from_str(&output(with_kasl(data.path(), &kasl), args)).unwrap();
         let mut found = std::collections::BTreeSet::new();
         keys(&json, &mut found);
         let missing: Vec<&String> = found.iter().filter(|k| !page.contains(&format!("`{k}`"))).collect();
         assert!(missing.is_empty(), "task.md does not name these fields of {args:?}: {missing:?}\n{json:#}");
     }
-    let show: serde_json::Value = serde_json::from_str(&output(with_kasl(data.path(), &kasl), &["task", "show", "WA-2", "--json"])).unwrap();
-    assert_eq!(show["ticket"]["key"], "WA-2");
+    let show: serde_json::Value = serde_json::from_str(&output(with_kasl(data.path(), &kasl), &["task", "show", "ACME-2", "--json"])).unwrap();
+    assert_eq!(show["ticket"]["key"], "ACME-2");
     assert_eq!(show["tray"]["files"][0]["path"], "shot.png");
 }
 

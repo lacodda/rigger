@@ -580,8 +580,8 @@ mod tests {
 
     #[test]
     fn the_blank_form_is_not_filled_and_one_answer_fills_it() {
-        let blank = blank_form(&card("WA-1"));
-        assert!(blank.starts_with("# WA-1 · rtf files are not supported"));
+        let blank = blank_form(&card("ACME-1"));
+        assert!(blank.starts_with("# ACME-1 · rtf files are not supported"));
         assert!(!is_filled(&blank), "the form's own lines are not answers");
         let answered = blank.replace("## Links to files (optional)\n", "## Links to files (optional)\n\n\\\\server\\share\\3\n");
         assert!(is_filled(&answered));
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn a_key_that_a_path_cannot_hold_is_made_one() {
-        assert_eq!(folder_name("WA-4130"), "WA-4130");
+        assert_eq!(folder_name("ACME-7310"), "ACME-7310");
         assert_eq!(folder_name("A/B:1"), "A_B_1");
     }
 

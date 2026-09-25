@@ -1,7 +1,7 @@
 //! A card's activity, read from git.
 //!
 //! A ticket is worked in branches and commits that carry its id: a branch
-//! called `fix/WA-4130-rtf`, a commit that says `fix(WA-4130): ...`. Until
+//! called `fix/ACME-7310-rtf`, a commit that says `fix(ACME-7310): ...`. Until
 //! now the card knew where it was worked only when somebody ran `task
 //! link`, and how recently only when somebody wrote it down - so the card
 //! of a ticket in full swing read the same as one forgotten a month ago.
@@ -23,7 +23,7 @@ use crate::card::Card;
 #[derive(Debug, Clone)]
 pub struct BranchSeen {
     pub task_id: i64,
-    /// The branch as it is checked out: `fix/WA-4130-rtf`, without the
+    /// The branch as it is checked out: `fix/ACME-7310-rtf`, without the
     /// remote's name in front.
     pub name: String,
     /// The remote the branch is on, when there is no local branch of that
@@ -74,8 +74,8 @@ pub fn needles(card: &Card) -> Vec<String> {
     out
 }
 
-/// Whether `text` names `name` as a whole word: `WA-41` is not in
-/// `WA-4130`, and is in `fix/WA-41-rtf`. Case does not matter.
+/// Whether `text` names `name` as a whole word: `ACME-73` is not in
+/// `ACME-7310`, and is in `fix/ACME-73-rtf`. Case does not matter.
 pub fn names(text: &str, name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -234,27 +234,27 @@ mod tests {
 
     #[test]
     fn a_name_is_found_as_a_whole_word_in_any_case() {
-        assert!(names("fix/WA-4130-rtf", "WA-4130"));
-        assert!(names("fix(wa-4130): read rtf", "WA-4130"));
-        assert!(names("WA-4130", "WA-4130"));
-        assert!(names("see WA-4130.", "WA-4130"));
+        assert!(names("fix/ACME-7310-rtf", "ACME-7310"));
+        assert!(names("fix(acme-7310): read rtf", "ACME-7310"));
+        assert!(names("ACME-7310", "ACME-7310"));
+        assert!(names("see ACME-7310.", "ACME-7310"));
         // The name of another ticket that begins with this one's.
-        assert!(!names("fix/WA-41300-rtf", "WA-4130"));
-        assert!(!names("fix/XWA-4130", "WA-4130"));
-        assert!(!names("fix/WA-41", "WA-4130"));
+        assert!(!names("fix/ACME-73100-rtf", "ACME-7310"));
+        assert!(!names("fix/XACME-7310", "ACME-7310"));
+        assert!(!names("fix/ACME-73", "ACME-7310"));
         // A later occurrence is found after an earlier one that is not whole.
-        assert!(names("WA-41300 then WA-4130", "WA-4130"));
+        assert!(names("ACME-73100 then ACME-7310", "ACME-7310"));
         // A local key, which is not the shape of a tracker's id.
         assert!(names("local-20260908-1-filter", "LOCAL-20260908-1"));
         assert!(!names("local-20260908-12", "LOCAL-20260908-1"));
-        assert!(names("ёж WA-4130 ёж", "WA-4130"));
+        assert!(names("ёж ACME-7310 ёж", "ACME-7310"));
         assert!(!names("anything", ""));
     }
 
     #[test]
     fn an_alias_is_a_needle_only_when_it_is_an_id() {
-        let c = card("WA-4130", &["api-241", "rtf export", "rtf", "LOCAL-20260908-1"]);
-        assert_eq!(needles(&c), vec!["WA-4130", "API-241", "LOCAL-20260908-1"]);
+        let c = card("ACME-7310", &["ops-512", "rtf export", "rtf", "LOCAL-20260908-1"]);
+        assert_eq!(needles(&c), vec!["ACME-7310", "OPS-512", "LOCAL-20260908-1"]);
     }
 
     #[test]

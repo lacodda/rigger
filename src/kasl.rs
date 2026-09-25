@@ -302,16 +302,16 @@ mod tests {
 
     #[test]
     fn an_issue_needs_a_key_and_a_summary_and_nothing_else() {
-        let answer: InboxAnswer = serde_json::from_str(r#"{"issues":[{"key":"WA-1","summary":"s","new_field":3}]}"#).unwrap();
-        assert_eq!(answer.issues[0].key, "WA-1");
+        let answer: InboxAnswer = serde_json::from_str(r#"{"issues":[{"key":"ACME-1","summary":"s","new_field":3}]}"#).unwrap();
+        assert_eq!(answer.issues[0].key, "ACME-1");
         assert_eq!(answer.issues[0].status, None);
         assert!(!answer.issues[0].pinned);
-        assert!(serde_json::from_str::<InboxAnswer>(r#"{"issues":[{"key":"WA-1"}]}"#).is_err());
+        assert!(serde_json::from_str::<InboxAnswer>(r#"{"issues":[{"key":"ACME-1"}]}"#).is_err());
     }
 
     #[test]
     fn the_facts_say_where_a_ticket_went() {
-        let mut issue: Issue = serde_json::from_str(r#"{"key":"WA-1","summary":"s","status":"Open","priority":"High","score":8.0}"#).unwrap();
+        let mut issue: Issue = serde_json::from_str(r#"{"key":"ACME-1","summary":"s","status":"Open","priority":"High","score":8.0}"#).unwrap();
         assert_eq!(issue.facts(), "Open · priority High · score 8");
         issue.gone_at = Some("2026-09-24T10:00:00".to_string());
         assert_eq!(issue.facts(), "Open · priority High · score 8 · gone 2026-09-24 - closed or reassigned");
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_snooze_in_the_past_is_not_sleep() {
-        let mut issue: Issue = serde_json::from_str(r#"{"key":"WA-1","summary":"s"}"#).unwrap();
+        let mut issue: Issue = serde_json::from_str(r#"{"key":"ACME-1","summary":"s"}"#).unwrap();
         issue.snoozed_until = Some("2001-01-01 09:00:00".to_string());
         assert!(!issue.is_asleep());
         issue.snoozed_until = Some("2999-01-01T09:00:00".to_string());

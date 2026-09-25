@@ -75,7 +75,7 @@ In a record that holds [task cards](/rigger/reference/task/), `sync` also reads 
 ```console
 $ rigger sync webapp
 webapp:
-  card       WA-4130: 1 new commit, 1 branch, linked now
+  card       ACME-7310: 1 new commit, 1 branch, linked now
 ```
 
 A card whose branch is already known and that has no new commits says nothing: like activity, a branch is state, not news. A record with no cards - a line of products - skips the reading altogether. In `--json` each project's report carries `cards`, one entry per card git named, with its `key`, how many `branches` carry it, the `new_commits` this run added, and whether it was `linked_now`.

@@ -1,6 +1,6 @@
 //! Task cards: finding the one that is meant, and what a card says.
 //!
-//! At work a task arrives as a line of text - `WA-4130`, a ticket id with
+//! At work a task arrives as a line of text - `ACME-7310`, a ticket id with
 //! a title after it, two customer numbers and a description, or just the
 //! description. Tasks move between trackers and their ids change while
 //! the title stays; the same task is named three different ways in a
@@ -158,7 +158,7 @@ pub fn containment(query: &[String], candidate: &[String]) -> f64 {
     hit as f64 / query.len() as f64
 }
 
-/// Ticket ids in a line: `WA-4130`, `api-241` - two to eight letters, a
+/// Ticket ids in a line: `ACME-7310`, `ops-512` - two to eight letters, a
 /// dash, up to six digits - upper-cased.
 pub fn ticket_ids(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -308,19 +308,19 @@ mod tests {
 
     #[test]
     fn a_line_breaks_into_ids_numbers_and_text() {
-        let q = parse("API-241 [CUSTOMER] 323858, 324546: GUI for showing files");
-        assert_eq!(q.ids, vec!["API-241"]);
-        assert_eq!(q.numbers, vec!["323858", "324546"]);
+        let q = parse("OPS-512 [CUSTOMER] 561207, 561208: GUI for showing files");
+        assert_eq!(q.ids, vec!["OPS-512"]);
+        assert_eq!(q.numbers, vec!["561207", "561208"]);
         assert_eq!(q.text, "[CUSTOMER] GUI for showing files");
-        let q = parse("wa-4130\nrtf files are not supported");
-        assert_eq!(q.ids, vec!["WA-4130"]);
+        let q = parse("acme-7310\nrtf files are not supported");
+        assert_eq!(q.ids, vec!["ACME-7310"]);
         assert_eq!(q.text, "rtf files are not supported");
     }
 
     #[test]
     fn an_id_is_a_certain_match_even_when_the_title_moved() {
-        let cards = [card("WA-4130", "rtf files", &[]), card("WA-4200", "something else", &["WA-4130"])];
-        let (hits, verdict) = find(&parse("WA-4130"), &cards, 8);
+        let cards = [card("ACME-7310", "rtf files", &[]), card("ACME-4200", "something else", &["ACME-7310"])];
+        let (hits, verdict) = find(&parse("ACME-7310"), &cards, 8);
         assert_eq!(verdict, Verdict::Take);
         assert_eq!(hits.len(), 2, "the alias counts: {hits:?}");
         assert!(hits.iter().all(|h| h.score == 100));
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn a_title_close_enough_is_taken_and_a_far_one_is_new() {
-        let cards = [card("WA-1", "Не поддерживаются файлы rtf в родном формате", &[])];
+        let cards = [card("ACME-1", "Не поддерживаются файлы rtf в родном формате", &[])];
         let (hits, verdict) = find(&parse("не поддерживаются файлы rtf"), &cards, 8);
         assert_eq!(verdict, Verdict::Take, "{hits:?}");
         let (hits, verdict) = find(&parse("добавить новый фильтр в отчёт"), &cards, 8);
@@ -337,17 +337,17 @@ mod tests {
 
     #[test]
     fn a_middling_match_asks() {
-        let cards = [card("WA-1", "Экспорт отчёта в файл rtf", &[])];
+        let cards = [card("ACME-1", "Экспорт отчёта в файл rtf", &[])];
         let (hits, verdict) = find(&parse("экспорт файла"), &cards, 8);
         assert_eq!(verdict, Verdict::Ask, "{hits:?}");
     }
 
     #[test]
     fn a_customer_number_lifts_a_card() {
-        let cards = [card("WA-1", "Заказ 323858: не открывается вложение", &[]), card("WA-2", "Другое", &[])];
-        let (hits, _) = find(&parse("обращение 323858"), &cards, 8);
-        assert_eq!(hits[0].key, "WA-1");
-        assert!(hits[0].why.contains("case 323858"), "{hits:?}");
+        let cards = [card("ACME-1", "Заказ 561207: не открывается вложение", &[]), card("ACME-2", "Другое", &[])];
+        let (hits, _) = find(&parse("обращение 561207"), &cards, 8);
+        assert_eq!(hits[0].key, "ACME-1");
+        assert!(hits[0].why.contains("case 561207"), "{hits:?}");
     }
 
     #[test]

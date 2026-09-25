@@ -28,13 +28,13 @@ Cards live in the desk, a project the record keeps for itself, made the first ti
 
 ## Finding the card a line means
 
-A task arrives as a line of text: `WA-4130`, an id with a title after it, two customer numbers and a description, or just the description. Ids change when a task moves between trackers while the title stays, so the line is looked up by everything it holds - the ids, the numbers and the words - and the answer says how sure it is:
+A task arrives as a line of text: `ACME-7310`, an id with a title after it, two customer numbers and a description, or just the description. Ids change when a task moves between trackers while the title stays, so the line is looked up by everything it holds - the ids, the numbers and the words - and the answer says how sure it is:
 
 ```console
-$ rigger task find "WA-4130 rtf files are not supported"
-100  WA-4130  new              rtf files are not supported  (id=WA-4130)
+$ rigger task find "ACME-7310 rtf files are not supported"
+100  ACME-7310  new              rtf files are not supported  (id=ACME-7310)
 
-take WA-4130: it is the one.
+take ACME-7310: it is the one.
 ```
 
 | Verdict | When | What to do |
@@ -46,14 +46,14 @@ take WA-4130: it is the one.
 A duplicate card is worse than one more question, so the middle is wide on purpose. The scoring came from a script that ran a desk for a year: an id match is certain; a title is compared by the Dice coefficient over character bigrams (robust to typos and inflection) and by the share of the query's words found in it (a short query against a long title is not penalised); a customer case number found in the card lifts it. The weak trail is reported too - an id or a number mentioned only in what was written against another card, which is how a task that moved is caught:
 
 ```
-mentioned 323858: WA-9 - another card
+mentioned 561207: ACME-9 - another card
 ```
 
 ## Making and keeping a card
 
 ```console
-$ rigger task new "rtf files are not supported" --id WA-4130 --project webapp --branch fix/rtf
-Made card WA-4130 and opened it: rtf files are not supported
+$ rigger task new "rtf files are not supported" --id ACME-7310 --project webapp --branch fix/rtf
+Made card ACME-7310 and opened it: rtf files are not supported
   webapp (C:\work\webapp) on fix/rtf
 ```
 
@@ -70,13 +70,13 @@ $ rigger task incoming
 kasl's inbox: 14 tickets - 3 without a card, 1 gone with the card still open
 
 Without a card:
-  WA-4131  taken  In Progress    Export drops the footer
-  WA-4200         Open           Import skips empty rows
-  WA-4212         Open           The report header wraps
+  ACME-4131  taken  In Progress    Export drops the footer
+  ACME-4200         Open           Import skips empty rows
+  ACME-4212         Open           The report header wraps
 Take one with: rigger task take <KEY>
 
 The ticket has gone - closed or reassigned - and the card is open:
-  WA-3999  active           gone 2026-09-24  Old import bug
+  ACME-3999  active           gone 2026-09-24  Old import bug
 Close one with: rigger task close <KEY>
 ```
 
@@ -85,10 +85,10 @@ The tickets **without a card** are the ones present in the tracker that no card 
 `rigger task take <KEY>` makes a card from a ticket by its key alone - the title is the tracker's, so nobody types it twice - puts it in hand, and takes `--project` and `--branch` as [`task new`](#making-and-keeping-a-card) does. A ticket that already has a card is put in hand instead of being made twice:
 
 ```console
-$ rigger task take WA-4131
-Made card WA-4131 from kasl's inbox and opened it: Export drops the footer
+$ rigger task take ACME-4131
+Made card ACME-4131 from kasl's inbox and opened it: Export drops the footer
   ticket: In Progress · priority High · score 8 · taken 2026-09-21
-          https://tracker.example.com/browse/WA-4131
+          https://tracker.example.com/browse/ACME-4131
 ```
 
 The ticket's facts are not copied into the card. They stay kasl's, and a card that is a ticket shows them on its [screen](#what-git-says-about-a-card) and in its [packet](#the-packet-of-a-card) as kasl says them at that moment - including that it has gone.
@@ -99,9 +99,9 @@ rigger runs `kasl inbox list --all --snoozed --json` - `--all` keeps the tickets
 
 ```json
 { "issues": [{
-  "key": "WA-4131", "summary": "Export drops the footer",
+  "key": "ACME-4131", "summary": "Export drops the footer",
   "status": "In Progress", "priority": "High", "score": 8.0,
-  "url": "https://tracker.example.com/browse/WA-4131",
+  "url": "https://tracker.example.com/browse/ACME-4131",
   "first_seen": "2026-09-19T09:00:00", "taken_at": "2026-09-21T10:00:00",
   "pinned": false, "snoozed_until": null, "gone_at": null
 }] }
@@ -129,12 +129,12 @@ Only `key` and `summary` are required; every other field may be missing or `null
 `task incoming --json` is every ticket kasl gave, in its order, each with the fields above and a `card` - its `key`, `title` and `status`, or `null` when no card is named by the ticket - under `source`, which is `kasl`:
 
 ```json
-{ "source": "kasl", "issues": [{ "key": "WA-4131", "summary": "...", "card": null }] }
+{ "source": "kasl", "issues": [{ "key": "ACME-4131", "summary": "...", "card": null }] }
 ```
 
 ## What git says about a card
 
-Since v0.24.0 a card is found in git without anybody saying where it is worked. [`sync`](/rigger/reference/sync/#cards-in-git) reads the branches of every recorded repository - local ones, and a remote's where there is no local one of that name - and the newest 500 commits across all of them, and looks for the names of the cards the record holds: a card's key, and those of its aliases that are ids (`API-241`, the `LOCAL-...` key it had before `task rename`), never an alias that is a phrase. A name counts only as a whole word in any case: `fix/wa-4130-rtf` and `feat(WA-4130): ...` name `WA-4130`; `WA-41300` does not.
+Since v0.24.0 a card is found in git without anybody saying where it is worked. [`sync`](/rigger/reference/sync/#cards-in-git) reads the branches of every recorded repository - local ones, and a remote's where there is no local one of that name - and the newest 500 commits across all of them, and looks for the names of the cards the record holds: a card's key, and those of its aliases that are ids (`OPS-512`, the `LOCAL-...` key it had before `task rename`), never an alias that is a phrase. A name counts only as a whole word in any case: `fix/acme-7310-rtf` and `feat(ACME-7310): ...` name `ACME-7310`; `ACME-73100` does not.
 
 What is found is written as facts:
 
@@ -145,17 +145,17 @@ What is found is written as facts:
 An id that names no card makes none. It is somebody else's ticket, or one never handed to this desk.
 
 ```console
-$ rigger task show WA-4130
-WA-4130 · rtf files are not supported
+$ rigger task show ACME-7310
+ACME-7310 · rtf files are not supported
   status:   active
   since:    2026-09-08T09:12:40Z
   worked in:
-  webapp (C:\work\webapp) on fix/WA-4130-rtf
+  webapp (C:\work\webapp) on fix/ACME-7310-rtf
   in git:
     webapp - 1 commit names it; last 2026-09-19 be331aa3 fix: keep the rtf body
-      branch fix/WA-4130-rtf, tip 2026-09-19
+      branch fix/ACME-7310-rtf, tip 2026-09-19
   idle:     4 days without movement
-  tray:     C:\...\trays\WA-4130 - the form filled, 2 files waiting
+  tray:     C:\...\trays\ACME-7310 - the form filled, 2 files waiting
 ```
 
 The last commit is the newest of the commits that name the card and the tips of its branches: most commits on a ticket's branch do not repeat its id, and the branch moving is the ticket moving. **Idle** is the whole days since then, across every repository the card is worked in. The [packet](#the-packet-of-a-card) carries the same lines under `## In git`.
@@ -166,20 +166,20 @@ This is a contract: a git client that makes a worktree per task reads the branch
 
 ```json
 {
-  "card": { "id": 1, "key": "WA-4130", "title": "...", "status": "active", "aliases": [], "summary": null, "created_at": "...", "updated_at": "..." },
-  "links": [{ "project": "webapp", "path": "C:\\work\\webapp", "branch": "fix/WA-4130-rtf", "role": null }],
+  "card": { "id": 1, "key": "ACME-7310", "title": "...", "status": "active", "aliases": [], "summary": null, "created_at": "...", "updated_at": "..." },
+  "links": [{ "project": "webapp", "path": "C:\\work\\webapp", "branch": "fix/ACME-7310-rtf", "role": null }],
   "activity": [{
     "project": "webapp",
-    "branches": [{ "name": "fix/WA-4130-rtf", "remote": null, "tip": "be331aa3...", "tip_at": "2026-09-19T14:02:11Z" }],
+    "branches": [{ "name": "fix/ACME-7310-rtf", "remote": null, "tip": "be331aa3...", "tip_at": "2026-09-19T14:02:11Z" }],
     "commits": 1,
     "last_commit": { "hash": "be331aa3...", "at": "2026-09-19T14:02:11Z", "subject": "fix: keep the rtf body" }
   }],
   "idle_days": 4,
   "events": 0,
-  "ticket": { "key": "WA-4130", "summary": "...", "status": "In Progress", "priority": "High", "score": null, "url": "...", "first_seen": "...", "taken_at": null, "pinned": false, "snoozed_until": null, "gone_at": null },
+  "ticket": { "key": "ACME-7310", "summary": "...", "status": "In Progress", "priority": "High", "score": null, "url": "...", "first_seen": "...", "taken_at": null, "pinned": false, "snoozed_until": null, "gone_at": null },
   "tray": {
-    "path": "C:\\...\\trays\\WA-4130",
-    "form": { "path": "C:\\...\\trays\\WA-4130\\incoming.md", "filled": true },
+    "path": "C:\\...\\trays\\ACME-7310",
+    "form": { "path": "C:\\...\\trays\\ACME-7310\\incoming.md", "filled": true },
     "files": [{ "path": "shot.png", "bytes": 217088, "modified": "2026-09-25T17:22:29Z" }],
     "sorted": [{ "day": "2026-09-20", "files": 5 }]
   }
@@ -209,21 +209,21 @@ Everything a session learns goes against the card as events: `rigger task note <
 ## The packet of a card
 
 ```console
-$ rigger task context WA-4130
-# WA-4130 · rtf files are not supported
+$ rigger task context ACME-7310
+# ACME-7310 · rtf files are not supported
 
 Status: active
 
 ## Ticket
 In Progress · priority High · taken 2026-09-21
-https://tracker.example.com/browse/WA-4130
+https://tracker.example.com/browse/ACME-7310
 
 ## Worked in
 - webapp (C:\work\webapp) on `fix/rtf` - where it is fixed
 
 ## Tray
-C:\...\trays\WA-4130
-- the form is filled; read it first: C:\...\trays\WA-4130\incoming.md
+C:\...\trays\ACME-7310
+- the form is filled; read it first: C:\...\trays\ACME-7310\incoming.md
 - 2 files waiting: shot.png (212 KB), logs/app.log (48 KB)
 
 ## Next step

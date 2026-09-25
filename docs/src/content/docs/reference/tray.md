@@ -23,7 +23,7 @@ The folder is the truth about a tray. Nothing about it is written into the recor
 `<trays>/<KEY>/`, where `<trays>` is what the [profile](/rigger/reference/profile/) names in `trays`, or `trays/` in the profile's own directory. The key is the card's; a card [renamed](/rigger/reference/task/#making-and-keeping-a-card) when its tracker names it keeps its old key as an alias, and a tray made under that key moves to the new one the first time it is looked for - there is one tray per task.
 
 ```
-trays/WA-4130/
+trays/ACME-7310/
   incoming.md          the form
   shot-142229.png      what waits to be sorted
   logs/app.log
@@ -34,10 +34,10 @@ trays/WA-4130/
 
 ```console
 $ rigger tray show
-WA-4130 · rtf files are not supported
+ACME-7310 · rtf files are not supported
   made the tray, with a blank form to fill in
-  tray:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\work\trays\WA-4130
-  form:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\work\trays\WA-4130\incoming.md (blank)
+  tray:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\work\trays\ACME-7310
+  form:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\work\trays\ACME-7310\incoming.md (blank)
   nothing waits in it
 ```
 
@@ -62,12 +62,12 @@ The lines that start with `>` explain each section and stay in the form: they ar
 
 ```console
 $ rigger tray fetch --from \\fileserver\testers\2026\0915\3
-Into the tray of WA-4130 from \\fileserver\testers\2026\0915\3:
+Into the tray of ACME-7310 from \\fileserver\testers\2026\0915\3:
   took shot-142229.png  212 KB
   took logs/app.log  48 KB
   left \\fileserver\testers\2026\0915\3\screen.mp4 (31.4 MB): a recording; describe what it shows, or take it with --video
 Took 2 files (260 KB); left 1 file where it is
-  tray: C:\...\trays\WA-4130
+  tray: C:\...\trays\ACME-7310
 ```
 
 Copies a folder's files - or one file - into the tray, keeping the folder's layout under it and the moment each file was written. Without `--from` it takes every folder the form lists under **Links to files**, so filling the form is all a tester's material needs.
@@ -86,7 +86,7 @@ A file already in the tray is not copied twice, so fetching the same folder agai
 
 ```console
 $ rigger tray intake --since 4h
-Into the tray of WA-4130, what was written in the last 4h in C:\Users\you\Pictures\Screenshots, C:\Users\you\Downloads, C:\Users\you\Desktop:
+Into the tray of ACME-7310, what was written in the last 4h in C:\Users\you\Pictures\Screenshots, C:\Users\you\Downloads, C:\Users\you\Desktop:
   took Screenshot 2026-09-25 142229.png  212 KB
   took export.csv  3 KB
 Took 2 files (215 KB)
@@ -100,7 +100,7 @@ Takes what was written lately in the places a person's own material lands: the s
 
 ```console
 $ rigger tray done
-Sorted the tray of WA-4130: 3 entries moved to C:\...\trays\WA-4130\sorted\2026-09-25; the filled form went with them, and the tray's is blank again
+Sorted the tray of ACME-7310: 3 entries moved to C:\...\trays\ACME-7310\sorted\2026-09-25; the filled form went with them, and the tray's is blank again
 ```
 
 Sorting is over: everything in the tray moves into `sorted/<day>/` beside it - the card's archive - a filled form goes with it, and the tray's form is blank again, ready for the next round. The day is the local one. A second round on the same day lands beside the first, with ` (2)` added to a name that is taken: nothing is overwritten. Run it once the material has been read and what mattered has been written against the card - it is a move, and the archive is where to look afterwards.
@@ -109,8 +109,8 @@ Sorting is over: everything in the tray moves into `sorted/<day>/` beside it - t
 
 ```console
 $ rigger tray list
-WA-4130  2 files, the form filled   rtf files are not supported
-WA-5     1 file                     Export drops the footer
+ACME-7310  2 files, the form filled   rtf files are not supported
+ACME-5     1 file                     Export drops the footer
 ```
 
 Every tray with something waiting in it: a file, or a form with an answer. A tray whose folder names no card is listed as such.
@@ -125,10 +125,10 @@ A card with a tray says so on its [screen and in its packet](/rigger/reference/t
 
 ```json
 {
-  "card": { "key": "WA-4130", "title": "rtf files are not supported" },
+  "card": { "key": "ACME-7310", "title": "rtf files are not supported" },
   "made": false,
-  "path": "C:\\...\\trays\\WA-4130",
-  "form": { "path": "C:\\...\\trays\\WA-4130\\incoming.md", "filled": true },
+  "path": "C:\\...\\trays\\ACME-7310",
+  "form": { "path": "C:\\...\\trays\\ACME-7310\\incoming.md", "filled": true },
   "files": [{ "path": "logs/app.log", "bytes": 49152, "modified": "2026-09-25T17:22:29Z" }],
   "sorted": [{ "day": "2026-09-20", "files": 5 }]
 }
