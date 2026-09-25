@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.25.0] - 2026-09-25
+
+### Breaking Changes
+
+- **Read tickets from kasl's inbox, and give each card a tray**
+`profile add/set --inbox` is now `--trays`; a config
+that says `inbox =` is read as `trays` and written back under it.
+
+### Features
+- Read tickets from kasl's inbox, and give each card a tray
+
+### Testing
+- Use made-up ticket ids in examples and tests
+
 ## [0.24.0] - 2026-09-23
 
 ### Features
