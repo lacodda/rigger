@@ -7,8 +7,8 @@ description: One binary, several ways of working - each with a record of its own
 rigger profile list [--json]
 rigger profile show [<NAME>] [--json]
 rigger profile use <NAME>
-rigger profile add <NAME> [--kind line|tickets] [--root <DIR>]... [--hubs <DIR>] [--id-pattern <REGEX>] [--inbox <DIR>] [--use]
-rigger profile set [<NAME>] [--root <DIR>]... [--hubs <DIR>] [--id-pattern <REGEX>] [--inbox <DIR>]
+rigger profile add <NAME> [--kind line|tickets] [--root <DIR>]... [--hubs <DIR>] [--id-pattern <REGEX>] [--trays <DIR>] [--use]
+rigger profile set [<NAME>] [--root <DIR>]... [--hubs <DIR>] [--id-pattern <REGEX>] [--trays <DIR>]
 ```
 
 At home a project is a repository with a plan, and the unit of work is a version that ends in a tag. At work the unit is a ticket: one id, a branch in each of several repositories, an inbox the tickets arrive in. None of it belongs in the same record as the line. A profile is what tells the two apart - its own database, its own roots, its own way of naming work - and every command reads the current one without being told.
@@ -35,7 +35,7 @@ hubs = "C:\\notes\\Projects"
 kind = "tickets"
 roots = ["C:\\work"]
 id_pattern = "[A-Z]{2,8}-\\d+"
-inbox = "C:\\work\\inbox"
+trays = "C:\\work\\trays"
 ```
 
 | Field | What it is for |
@@ -44,9 +44,9 @@ inbox = "C:\\work\\inbox"
 | `roots` | directories whose children are repositories; what [`adopt`](/rigger/reference/adopt/) walks when told nothing |
 | `hubs` | the directory whose children are hubs, one per project name; `adopt`'s `--hubs` when told nothing |
 | `id_pattern` | how a ticket id is spelt, as a regular expression |
-| `inbox` | where incoming material lands, for the ticket profile |
+| `trays` | where the cards' [trays](/rigger/reference/tray/) are kept - the material that arrives for a task; `trays/` in the profile's directory when it is not said. Read under its first name, `inbox`, too, and written back as `trays` |
 
-`id_pattern` and `inbox` are recorded now and read by the task commands of the releases that follow; `kind` says which way of working the profile is, and the rest of the surface grows around it. The profile is configuration, not a branch of the code.
+`id_pattern` is recorded now and read by the task commands of the releases that follow; `trays` is read by [`tray`](/rigger/reference/tray/) since v0.25.0; `kind` says which way of working the profile is, and the rest of the surface grows around it. The profile is configuration, not a branch of the code.
 
 ## Which profile
 

@@ -63,9 +63,13 @@ pub struct Profile {
     /// How a ticket id is spelt, as a regular expression: `[A-Z]{2,8}-\d+`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id_pattern: Option<String>,
-    /// Where incoming material lands, for the ticket profile.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inbox: Option<PathBuf>,
+    /// Where the trays of the cards are: the material that arrives for a
+    /// task. `trays/` in the profile's directory when it is not said.
+    ///
+    /// Read under its first name, `inbox`, too, and written back under this
+    /// one: in rigger the inbox is the queue of questions for the owner.
+    #[serde(default, alias = "inbox", skip_serializing_if = "Option::is_none")]
+    pub trays: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,12 +202,23 @@ mod tests {
 
     #[test]
     fn a_ticket_profile_keeps_its_fields() {
-        let text = "current = \"work\"\n\n[profiles.work]\nkind = \"tickets\"\nroots = [\"C:\\\\work\"]\nid_pattern = \"[A-Z]{2,8}-\\\\d+\"\ninbox = \"C:\\\\work\\\\inbox\"\n";
+        let text = "current = \"work\"\n\n[profiles.work]\nkind = \"tickets\"\nroots = [\"C:\\\\work\"]\nid_pattern = \"[A-Z]{2,8}-\\\\d+\"\ntrays = \"C:\\\\work\\\\trays\"\n";
         let config: Config = toml::from_str(text).unwrap();
         let work = &config.profiles["work"];
         assert_eq!(work.kind, Kind::Tickets);
         assert_eq!(work.roots, vec![PathBuf::from("C:\\work")]);
         assert_eq!(work.id_pattern.as_deref(), Some("[A-Z]{2,8}-\\d+"));
+        assert_eq!(work.trays, Some(PathBuf::from("C:\\work\\trays")));
         assert!(work.hubs.is_none());
+    }
+
+    #[test]
+    fn the_first_name_of_the_trays_is_read_and_written_back_as_trays() {
+        let text = "current = \"work\"\n\n[profiles.work]\nkind = \"tickets\"\ninbox = \"C:\\\\work\\\\inbox\"\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.profiles["work"].trays, Some(PathBuf::from("C:\\work\\inbox")));
+        let written = toml::to_string_pretty(&config).unwrap();
+        assert!(written.contains("trays = "), "{written}");
+        assert!(!written.contains("inbox ="), "{written}");
     }
 }

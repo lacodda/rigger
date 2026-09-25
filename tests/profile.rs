@@ -96,8 +96,8 @@ fn a_profile_has_a_database_of_its_own_and_use_switches_every_command() {
             "C:\\work",
             "--id-pattern",
             "[A-Z]{2,8}-\\d+",
-            "--inbox",
-            "C:\\work\\inbox",
+            "--trays",
+            "C:\\work\\trays",
         ],
     );
     assert!(out.contains("Added the 'work' profile (tickets)"), "{out}");
@@ -111,6 +111,7 @@ fn a_profile_has_a_database_of_its_own_and_use_switches_every_command() {
     assert!(list.contains("No projects yet"), "the work profile has a record of its own: {list}");
     let show = output(data.path(), &["profile", "show"]);
     assert!(show.starts_with("work\n") && show.contains("ids:       [A-Z]{2,8}-\\d+"), "{show}");
+    assert!(show.contains("trays:     C:\\work\\trays"), "{show}");
 
     output(data.path(), &["profile", "use", "line"]);
     let list = output(data.path(), &["project", "list"]);

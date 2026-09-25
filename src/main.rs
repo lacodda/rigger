@@ -36,6 +36,7 @@ mod show;
 mod skill;
 mod sync;
 mod toast;
+mod tray;
 mod week;
 
 use std::path::{Path, PathBuf};
@@ -84,10 +85,15 @@ enum Command {
         #[command(subcommand)]
         command: ProfileCommand,
     },
-    /// Give a task a status
+    /// Task cards: make, find and show them, take them from kasl's inbox, give a task a status
     Task {
         #[command(subcommand)]
         command: TaskCommand,
+    },
+    /// A card's tray: the material that arrives for a task, and where it goes once sorted
+    Tray {
+        #[command(subcommand)]
+        command: TrayCommand,
     },
     /// Record every repository under a directory, with its hub and its tags
     Adopt {
@@ -634,9 +640,9 @@ enum ProfileCommand {
         /// How a ticket id is spelt, as a regular expression
         #[arg(long, value_name = "REGEX")]
         id_pattern: Option<String>,
-        /// Where incoming material lands
+        /// Where the trays of the cards are kept; `trays/` in the profile's directory when omitted
         #[arg(long, value_name = "DIR")]
-        inbox: Option<PathBuf>,
+        trays: Option<PathBuf>,
         /// Switch to it right away
         #[arg(long)]
         r#use: bool,
@@ -654,9 +660,9 @@ enum ProfileCommand {
         /// How a ticket id is spelt, as a regular expression
         #[arg(long, value_name = "REGEX")]
         id_pattern: Option<String>,
-        /// Where incoming material lands
+        /// Where the trays of the cards are kept; `trays/` in the profile's directory when omitted
         #[arg(long, value_name = "DIR")]
-        inbox: Option<PathBuf>,
+        trays: Option<PathBuf>,
     },
 }
 
@@ -784,6 +790,91 @@ enum TaskCommand {
         task: String,
         /// The status
         status: String,
+    },
+    /// The tickets in kasl's inbox that have no card, and the cards whose ticket has gone
+    Incoming {
+        /// Every ticket without a card, not only the first ones
+        #[arg(long)]
+        all: bool,
+        /// Print as JSON: every ticket, with its card
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make a card from a ticket in kasl's inbox: its key and title come from there
+    Take {
+        /// The ticket's key, such as WA-4130
+        key: String,
+        /// A project the task is worked in; may be given more than once
+        #[arg(long = "project", value_name = "NAME")]
+        projects: Vec<String>,
+        /// The branch it is worked on, in every project given
+        #[arg(long)]
+        branch: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrayCommand {
+    /// The tray of a card: its form and its files; made, with a blank form, the first time
+    Show {
+        /// Card key, alias or id; the card in hand when omitted
+        task: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open the tray's form in $EDITOR
+    Edit {
+        /// Card key, alias or id; the card in hand when omitted
+        task: Option<String>,
+    },
+    /// Copy a folder's files - a tester's, a share's - into the tray
+    Fetch {
+        /// Card key, alias or id; the card in hand when omitted
+        task: Option<String>,
+        /// The folder or file to copy; may be given more than once. The folders the form lists under "Links to files" when omitted
+        #[arg(long = "from", value_name = "PATH")]
+        from: Vec<PathBuf>,
+        /// Leave behind files larger than this, in megabytes
+        #[arg(long, value_name = "MB", default_value_t = tray::MAX_MB)]
+        max_mb: u64,
+        /// Take recordings too; they are listed and left where they are otherwise
+        #[arg(long)]
+        video: bool,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take the screenshots, downloads and desktop files written lately
+    Intake {
+        /// Card key, alias or id; the card in hand when omitted
+        task: Option<String>,
+        /// How far back: 4h, 90m, 1d, or a number of hours
+        #[arg(long, default_value = "4h")]
+        since: String,
+        /// Leave behind files larger than this, in megabytes
+        #[arg(long, value_name = "MB", default_value_t = tray::MAX_MB)]
+        max_mb: u64,
+        /// Take recordings too; they are listed and left where they are otherwise
+        #[arg(long)]
+        video: bool,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sorting is over: the material goes to the card's archive, and the form back to blank
+    Done {
+        /// Card key, alias or id; the card in hand when omitted
+        task: Option<String>,
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Every tray with something waiting in it
+    List {
+        /// Print as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1141,7 +1232,7 @@ fn run(cli: Cli) -> Result<()> {
                 roots,
                 hubs,
                 id_pattern,
-                inbox,
+                trays,
                 r#use,
             } => profile_add(
                 &name,
@@ -1150,7 +1241,7 @@ fn run(cli: Cli) -> Result<()> {
                     roots,
                     hubs,
                     id_pattern,
-                    inbox,
+                    trays,
                 },
                 r#use,
             ),
@@ -1159,8 +1250,8 @@ fn run(cli: Cli) -> Result<()> {
                 roots,
                 hubs,
                 id_pattern,
-                inbox,
-            } => profile_set(name.as_deref(), roots, hubs, id_pattern, inbox),
+                trays,
+            } => profile_set(name.as_deref(), roots, hubs, id_pattern, trays),
         },
         Command::Task { command } => match command {
             TaskCommand::New {
@@ -1184,6 +1275,28 @@ fn run(cli: Cli) -> Result<()> {
             TaskCommand::Summary { task, text } => task_summary(&task, &text),
             TaskCommand::Note { task, text, kind } => note_on_card(&task, kind.as_str(), &text),
             TaskCommand::Status { task, status } => task_status(&task, &status),
+            TaskCommand::Incoming { all, json } => task_incoming(all, json),
+            TaskCommand::Take { key, projects, branch } => task_take(&key, &projects, branch.as_deref()),
+        },
+        Command::Tray { command } => match command {
+            TrayCommand::Show { task, json } => tray_show(task.as_deref(), json),
+            TrayCommand::Edit { task } => tray_edit(task.as_deref()),
+            TrayCommand::Fetch {
+                task,
+                from,
+                max_mb,
+                video,
+                json,
+            } => tray_fetch(task.as_deref(), &from, tray_rules(max_mb, video), json),
+            TrayCommand::Intake {
+                task,
+                since,
+                max_mb,
+                video,
+                json,
+            } => tray_intake(task.as_deref(), &since, tray_rules(max_mb, video), json),
+            TrayCommand::Done { task, json } => tray_done(task.as_deref(), json),
+            TrayCommand::List { json } => tray_list(json),
         },
         Command::Adopt { root, hubs, check, json } => adopt_root(root.as_deref(), hubs.as_deref(), check, json),
         Command::Skill {
@@ -3070,8 +3183,9 @@ fn profile_show(name: Option<&str>, json: bool) -> Result<()> {
     if let Some(pattern) = &p.id_pattern {
         println!("  ids:       {pattern}");
     }
-    if let Some(inbox) = &p.inbox {
-        println!("  inbox:     {}", inbox.display());
+    match &p.trays {
+        Some(trays) => println!("  trays:     {}", trays.display()),
+        None => println!("  trays:     {}", profile::dir(&name)?.join("trays").display()),
     }
     println!("  config:    {}", profile::Config::path()?.display());
     Ok(())
@@ -3125,14 +3239,14 @@ fn profile_add(name: &str, p: profile::Profile, use_it: bool) -> Result<()> {
 /// Changes what a profile says about itself. Only the fields given change;
 /// the roots given replace the roots it had, because a list appended to
 /// can never be shortened.
-fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, id_pattern: Option<String>, inbox: Option<PathBuf>) -> Result<()> {
+fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, id_pattern: Option<String>, trays: Option<PathBuf>) -> Result<()> {
     let mut config = profile::Config::load()?;
     let name = name.map(str::to_string).unwrap_or_else(|| config.current_name());
     let Some(p) = config.profiles.get_mut(&name) else {
         bail!("no profile named '{name}'; see `rigger profile list`");
     };
-    if roots.is_empty() && hubs.is_none() && id_pattern.is_none() && inbox.is_none() {
-        bail!("nothing to set; give --root, --hubs, --id-pattern or --inbox");
+    if roots.is_empty() && hubs.is_none() && id_pattern.is_none() && trays.is_none() {
+        bail!("nothing to set; give --root, --hubs, --id-pattern or --trays");
     }
     if !roots.is_empty() {
         p.roots = roots;
@@ -3143,8 +3257,8 @@ fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, i
     if let Some(pattern) = id_pattern {
         p.id_pattern = Some(pattern);
     }
-    if let Some(inbox) = inbox {
-        p.inbox = Some(inbox);
+    if let Some(trays) = trays {
+        p.trays = Some(trays);
     }
     config.save()?;
     println!("Profile '{name}' updated");
@@ -3200,19 +3314,24 @@ fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[Stri
     if let Some(summary) = summary {
         db.set_card_summary(card.id, summary)?;
     }
-    for name in projects {
-        let project = open_project(&db, name)?;
-        db.link_card(card.id, project.id, branch, None)?;
-    }
-    // The card just made is the one in hand: nobody makes a card for a
-    // task they are not about to work on.
-    db.set_setting(ACTIVE_CARD, Some(&card.id.to_string()))?;
-    db.set_setting(ACTIVE_SINCE, Some(&db::now()))?;
+    link_and_hold(&db, &card, projects, branch)?;
     println!("Made card {} and opened it: {}", card.key, card.title);
     if key.is_none() {
         println!("  a local key; `rigger task rename {} <ID>` when the tracker names it", card.key);
     }
     print_links(&db, card.id)?;
+    Ok(())
+}
+
+/// Links a card to the projects given and puts it in hand: nobody makes a
+/// card for a task they are not about to work on.
+fn link_and_hold(db: &Db, card: &card::Card, projects: &[String], branch: Option<&str>) -> Result<()> {
+    for name in projects {
+        let project = open_project(db, name)?;
+        db.link_card(card.id, project.id, branch, None)?;
+    }
+    db.set_setting(ACTIVE_CARD, Some(&card.id.to_string()))?;
+    db.set_setting(ACTIVE_SINCE, Some(&db::now()))?;
     Ok(())
 }
 
@@ -3312,15 +3431,21 @@ fn task_active(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// The card named, or the one in hand when none is; `command` is what to
+/// name one with when neither is there.
+fn card_or_in_hand(db: &Db, task: Option<&str>, command: &str) -> Result<card::Card> {
+    match task {
+        Some(text) => find_card(db, text),
+        None => match active_card(db)? {
+            Some(card) => Ok(card),
+            None => bail!("no card is in hand; name one: rigger {command} <KEY>"),
+        },
+    }
+}
+
 fn task_close(task: Option<&str>, status: &str) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let card = match task {
-        Some(text) => find_card(&db, text)?,
-        None => match active_card(&db)? {
-            Some(card) => card,
-            None => bail!("no card is in hand; name one: rigger task close <KEY>"),
-        },
-    };
+    let card = card_or_in_hand(&db, task, "task close")?;
     let desk = db.desk_project()?;
     let (title, was) = db.set_task_status(desk.id, card.id, status)?;
     if db.setting(ACTIVE_CARD)?.as_deref() == Some(&card.id.to_string()) {
@@ -3338,6 +3463,8 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     let events = db.task_events(card.id)?;
     let activity = db.card_activity(card.id)?;
     let idle = idle_days(&activity);
+    let ticket = kasl::ticket_of(&card, &kasl::inbox());
+    let tray = tray::read(&tray::locate(&tray::root()?, &card)?)?;
     if json {
         println!(
             "{}",
@@ -3347,6 +3474,8 @@ fn task_show(task: &str, json: bool) -> Result<()> {
                 "activity": activity,
                 "idle_days": idle,
                 "events": events.len(),
+                "ticket": ticket,
+                "tray": tray,
             }))?
         );
         return Ok(());
@@ -3359,6 +3488,12 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     println!("  since:    {}", card.created_at);
     if let Some(summary) = &card.summary {
         println!("  summary:  {summary}");
+    }
+    if let Some(ticket) = &ticket {
+        println!("  ticket:   {} (kasl)", ticket.facts());
+        if let Some(url) = &ticket.url {
+            println!("            {url}");
+        }
     }
     if !links.is_empty() {
         println!("  worked in:");
@@ -3386,7 +3521,23 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     } else if !links.is_empty() {
         println!("  in git:   nothing yet - `rigger sync` reads branches and commits that carry the key");
     }
+    if let Some(tray) = &tray {
+        println!("  tray:     {} - {}", tray.path, tray_state(tray));
+    }
     Ok(())
+}
+
+/// A tray in half a line: the form, what waits, what was sorted.
+fn tray_state(tray: &tray::Tray) -> String {
+    let mut parts = vec![if tray.form.filled { "the form filled" } else { "the form blank" }.to_string()];
+    parts.push(match tray.files.len() {
+        0 => "nothing waiting".to_string(),
+        n => format!("{} waiting", plural(n, "file", "files")),
+    });
+    if let Some(last) = tray.sorted.last() {
+        parts.push(format!("sorted {}", last.day));
+    }
+    parts.join(", ")
 }
 
 /// Whole days since a card last moved in any repository: the newest of its
@@ -3448,6 +3599,16 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
     if let Some(summary) = &card.summary {
         out.push_str(&format!("\n{summary}\n"));
     }
+    if let Some(ticket) = kasl::ticket_of(card, &kasl::inbox()) {
+        out.push_str("\n## Ticket\n");
+        let facts = ticket.facts();
+        if !facts.is_empty() {
+            out.push_str(&format!("{facts}\n"));
+        }
+        if let Some(url) = &ticket.url {
+            out.push_str(&format!("{url}\n"));
+        }
+    }
     if !links.is_empty() {
         out.push_str("\n## Worked in\n");
         for link in &links {
@@ -3465,6 +3626,9 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
         if let Some(days) = idle_days(&activity) {
             out.push_str(&format!("- {}\n", describe_idle(days)));
         }
+    }
+    if let Some(tray) = tray::read(&tray::locate(&tray::root()?, card)?)? {
+        out.push_str(&tray_section(&tray));
     }
     if let Some(next) = events.iter().rev().find(|e| e.kind == "next") {
         out.push_str(&format!("\n## Next step\n{}\n", next.body.trim()));
@@ -3501,6 +3665,40 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
         out.push_str(&format!("\n({left_out} older events left out by the budget)\n"));
     }
     Ok(out)
+}
+
+/// How many of a tray's files the packet names; the rest are counted.
+const TRAY_FILES_NAMED: usize = 10;
+
+/// The tray in a card's packet: where it is, whether the form says
+/// anything, and what waits - the material a sitting starts by reading.
+fn tray_section(tray: &tray::Tray) -> String {
+    let mut out = format!("\n## Tray\n{}\n", tray.path);
+    match tray.form.filled {
+        true => out.push_str(&format!("- the form is filled; read it first: {}\n", tray.form.path)),
+        false => out.push_str("- the form is blank\n"),
+    }
+    if !tray.files.is_empty() {
+        let mut named: Vec<String> = tray
+            .files
+            .iter()
+            .take(TRAY_FILES_NAMED)
+            .map(|f| format!("{} ({})", f.path, tray::size(f.bytes)))
+            .collect();
+        if tray.files.len() > TRAY_FILES_NAMED {
+            named.push(format!("and {} more", tray.files.len() - TRAY_FILES_NAMED));
+        }
+        out.push_str(&format!("- {} waiting: {}\n", plural(tray.files.len(), "file", "files"), named.join(", ")));
+    }
+    if !tray.sorted.is_empty() {
+        let rounds: Vec<String> = tray
+            .sorted
+            .iter()
+            .map(|r| format!("{} ({})", r.day, plural(r.files, "file", "files")))
+            .collect();
+        out.push_str(&format!("- sorted before: {}\n", rounds.join(", ")));
+    }
+    out
 }
 
 fn task_context(task: &str, budget: usize) -> Result<()> {
@@ -3561,6 +3759,366 @@ fn task_summary(task: &str, text: &str) -> Result<()> {
     let card = find_card(&db, task)?;
     db.set_card_summary(card.id, text)?;
     println!("{} summarised", card.key);
+    Ok(())
+}
+
+/// kasl's inbox, or why it cannot be read: the commands that ask for it
+/// by name are told, where a card's screen stays silent. `otherwise` is
+/// what the person can do without it.
+fn read_kasl_inbox(otherwise: Option<&str>) -> Result<Vec<kasl::Issue>> {
+    let otherwise = otherwise.map(|o| format!("\n  {o}")).unwrap_or_default();
+    match kasl::inbox() {
+        kasl::Inbox::Read(issues) => Ok(issues),
+        kasl::Inbox::Absent => bail!("no kasl here to read tickets from; rigger reads them from kasl's inbox (`kasl inbox list --json`){otherwise}"),
+        kasl::Inbox::Refused(why) => bail!(
+            "kasl did not list its inbox ({why})\n  rigger reads `kasl inbox list --all --snoozed --json`; a kasl without `--json` on its inbox cannot answer it yet{otherwise}"
+        ),
+    }
+}
+
+/// The card a ticket is, by its key or an alias.
+fn card_of<'a>(cards: &'a [card::Card], issue: &kasl::Issue) -> Option<&'a card::Card> {
+    cards
+        .iter()
+        .find(|c| c.key.eq_ignore_ascii_case(&issue.key) || c.aliases.iter().any(|a| a.eq_ignore_ascii_case(&issue.key)))
+}
+
+/// How many tickets without a card are named before the rest are counted.
+const INCOMING_NAMED: usize = 10;
+
+/// The tickets kasl holds that the desk has not taken, and the cards whose
+/// ticket has gone - the two things the inbox says that a card does not.
+fn task_incoming(all: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let issues = read_kasl_inbox(None)?;
+    let cards = db.cards(None)?;
+    if json {
+        let rows: Vec<serde_json::Value> = issues
+            .iter()
+            .map(|issue| {
+                let mut row = serde_json::to_value(issue).unwrap_or_default();
+                row["card"] = match card_of(&cards, issue) {
+                    Some(c) => serde_json::json!({ "key": c.key, "title": c.title, "status": c.status }),
+                    None => serde_json::Value::Null,
+                };
+                row
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "source": "kasl", "issues": rows }))?);
+        return Ok(());
+    }
+
+    // Taken in kasl first: the person has already said those are theirs.
+    let mut without: Vec<&kasl::Issue> = issues
+        .iter()
+        .filter(|i| !i.is_gone() && !i.is_asleep() && card_of(&cards, i).is_none())
+        .collect();
+    without.sort_by_key(|i| i.taken_at.is_none());
+    let gone: Vec<(&kasl::Issue, &card::Card)> = issues
+        .iter()
+        .filter(|i| i.is_gone())
+        .filter_map(|i| card_of(&cards, i).map(|c| (i, c)))
+        .filter(|(_, c)| db::is_open_status(&c.status))
+        .collect();
+
+    let present = issues.iter().filter(|i| !i.is_gone()).count();
+    println!(
+        "kasl's inbox: {} - {} without a card, {} gone with the card still open",
+        plural(present, "ticket", "tickets"),
+        without.len(),
+        gone.len()
+    );
+    if without.is_empty() && gone.is_empty() {
+        println!("Every ticket in it has a card, and no open card's ticket has gone.");
+        return Ok(());
+    }
+    if !without.is_empty() {
+        println!("\nWithout a card:");
+        let shown = if all { without.len() } else { without.len().min(INCOMING_NAMED) };
+        let width = without.iter().map(|i| i.key.len()).max().unwrap_or(0);
+        for issue in &without[..shown] {
+            let taken = if issue.taken_at.is_some() { "taken" } else { "" };
+            let status = issue.status.as_deref().unwrap_or("");
+            println!("  {:width$}  {taken:<5}  {status:<14} {}", issue.key, issue.summary);
+        }
+        if shown < without.len() {
+            println!("  and {} more: rigger task incoming --all", without.len() - shown);
+        }
+        println!("Take one with: rigger task take <KEY>");
+    }
+    if !gone.is_empty() {
+        println!("\nThe ticket has gone - closed or reassigned - and the card is open:");
+        let width = gone.iter().map(|(_, c)| c.key.len()).max().unwrap_or(0);
+        for (issue, card) in &gone {
+            let when = issue.gone_at.as_deref().map(kasl::day).unwrap_or("");
+            println!("  {:width$}  {:<16} gone {when}  {}", card.key, card.status, card.title);
+        }
+        println!("Close one with: rigger task close <KEY>");
+    }
+    Ok(())
+}
+
+/// Makes a card from a ticket in kasl's inbox: the key and the title are
+/// the tracker's, so nobody types them twice. A ticket that already has a
+/// card is put in hand instead - taking is what the person meant.
+fn task_take(key: &str, projects: &[String], branch: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    if let Some(card) = db.card_by_ref(key)? {
+        link_and_hold(&db, &card, projects, branch)?;
+        println!("{} already has a card; it is in hand: {}", card.key, card.title);
+        print_links(&db, card.id)?;
+        return Ok(());
+    }
+    let by_hand = format!("`rigger task new \"<title>\" --id {key}` makes the card by hand");
+    let issues = read_kasl_inbox(Some(&by_hand))?;
+    let Some(issue) = issues.iter().find(|i| i.key.eq_ignore_ascii_case(key.trim())) else {
+        bail!("kasl's inbox does not know {key}; `rigger task new \"<title>\" --id {key}` makes the card by hand");
+    };
+    let card = db.new_card(Some(&issue.key), &issue.summary, &[])?;
+    link_and_hold(&db, &card, projects, branch)?;
+    println!("Made card {} from kasl's inbox and opened it: {}", card.key, card.title);
+    let facts = issue.facts();
+    if !facts.is_empty() {
+        println!("  ticket: {facts}");
+    }
+    if let Some(url) = &issue.url {
+        println!("          {url}");
+    }
+    print_links(&db, card.id)?;
+    Ok(())
+}
+
+fn tray_rules(max_mb: u64, video: bool) -> tray::Rules {
+    tray::Rules {
+        max_bytes: max_mb.saturating_mul(1024 * 1024),
+        video,
+    }
+}
+
+/// The card, and its tray made if it is not there yet.
+fn open_tray(task: Option<&str>, command: &str) -> Result<(card::Card, PathBuf, bool)> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = card_or_in_hand(&db, task, command)?;
+    let dir = tray::locate(&tray::root()?, &card)?;
+    let made = tray::ensure(&dir, &card)?;
+    Ok((card, dir, made))
+}
+
+fn tray_show(task: Option<&str>, json: bool) -> Result<()> {
+    let (card, dir, made) = open_tray(task, "tray show")?;
+    let tray = tray::read(&dir)?.context("the tray just made is not there")?;
+    if json {
+        let mut value = serde_json::to_value(&tray)?;
+        value["card"] = serde_json::json!({ "key": card.key, "title": card.title });
+        value["made"] = serde_json::Value::Bool(made);
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    println!("{} · {}", card.key, card.title);
+    if made {
+        println!("  made the tray, with a blank form to fill in");
+    }
+    println!("  tray:  {}", tray.path);
+    println!("  form:  {} ({})", tray.form.path, if tray.form.filled { "filled" } else { "blank" });
+    if tray.files.is_empty() {
+        println!("  nothing waits in it");
+    } else {
+        println!("  {} waiting:", plural(tray.files.len(), "file", "files"));
+        let width = tray.files.iter().map(|f| f.path.chars().count()).max().unwrap_or(0);
+        for f in &tray.files {
+            let when = f.modified.as_deref().map(tray::local_minute).unwrap_or_default();
+            println!("    {:width$}  {:>9}  {when}", f.path, tray::size(f.bytes));
+        }
+    }
+    if !tray.sorted.is_empty() {
+        let rounds: Vec<String> = tray
+            .sorted
+            .iter()
+            .map(|r| format!("{} ({})", r.day, plural(r.files, "file", "files")))
+            .collect();
+        println!("  sorted before: {}", rounds.join(", "));
+    }
+    Ok(())
+}
+
+fn tray_edit(task: Option<&str>) -> Result<()> {
+    let (card, dir, _) = open_tray(task, "tray edit")?;
+    let form = dir.join(tray::FORM);
+    doc::edit_file(&form)?;
+    let filled = std::fs::read_to_string(&form).map(|t| tray::is_filled(&t)).unwrap_or(false);
+    println!("The form of {} is {}: {}", card.key, if filled { "filled" } else { "blank" }, form.display());
+    Ok(())
+}
+
+fn tray_fetch(task: Option<&str>, from: &[PathBuf], rules: tray::Rules, json: bool) -> Result<()> {
+    let (card, dir, _) = open_tray(task, "tray fetch")?;
+    let sources = match from.is_empty() {
+        false => from.to_vec(),
+        true => {
+            let form = dir.join(tray::FORM);
+            let linked = tray::linked_sources(&std::fs::read_to_string(&form).unwrap_or_default());
+            if linked.is_empty() {
+                bail!(
+                    "nothing to fetch from: give --from <PATH>, or list the folders under \"Links to files\" in the form\n  {}",
+                    form.display()
+                );
+            }
+            linked
+        }
+    };
+    if !json {
+        println!(
+            "Into the tray of {} from {}:",
+            card.key,
+            sources.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    let taken = tray::fetch(&dir, &sources, rules, &mut |item| print_taken(item, json))?;
+    report_taken(&card, &dir, &taken, json)
+}
+
+fn tray_intake(task: Option<&str>, since: &str, rules: tray::Rules, json: bool) -> Result<()> {
+    let seconds = tray::parse_window(since)?;
+    let (card, dir, _) = open_tray(task, "tray intake")?;
+    let folders = tray::intake_dirs();
+    if folders.is_empty() {
+        bail!("no folders to take from: the platform names none, and {} is not set", tray::INTAKE_ENV);
+    }
+    if !json {
+        println!(
+            "Into the tray of {}, what was written in the last {since} in {}:",
+            card.key,
+            folders.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    let taken = tray::intake(&dir, seconds, rules, &mut |item| print_taken(item, json))?;
+    report_taken(&card, &dir, &taken, json)
+}
+
+/// A file as it lands, so a slow copy from a share is seen to be moving.
+fn print_taken(item: &tray::Item, json: bool) {
+    if !json {
+        println!("  took {}  {}", item.path, tray::size(item.bytes));
+    }
+}
+
+fn report_taken(card: &card::Card, dir: &Path, taken: &tray::Taken, json: bool) -> Result<()> {
+    if json {
+        let mut value = serde_json::to_value(taken)?;
+        value["card"] = serde_json::Value::String(card.key.clone());
+        value["path"] = serde_json::Value::String(dir.display().to_string());
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    // What was already there is the quiet case - a second fetch of the same
+    // folder - and is counted rather than listed.
+    let present = taken.skipped.iter().filter(|s| s.why == tray::Why::Present).count();
+    for s in taken.skipped.iter().filter(|s| s.why != tray::Why::Present) {
+        println!("  left {} ({}): {}", s.path, tray::size(s.bytes), s.why.describe());
+    }
+    let bytes: u64 = taken.taken.iter().map(|i| i.bytes).sum();
+    let mut line = match taken.taken.len() {
+        0 => "Took nothing".to_string(),
+        n => format!("Took {} ({})", plural(n, "file", "files"), tray::size(bytes)),
+    };
+    if present > 0 {
+        line.push_str(&format!("; {} already in the tray", plural(present, "was", "were")));
+    }
+    let left = taken.skipped.len() - present;
+    if left > 0 {
+        line.push_str(&format!(
+            "; left {} where {}",
+            plural(left, "file", "files"),
+            if left == 1 { "it is" } else { "they are" }
+        ));
+    }
+    println!("{line}\n  tray: {}", dir.display());
+    Ok(())
+}
+
+fn tray_done(task: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = card_or_in_hand(&db, task, "tray done")?;
+    let dir = tray::locate(&tray::root()?, &card)?;
+    let Some(before) = tray::read(&dir)? else {
+        bail!("{} has no tray; `rigger tray show {}` makes one", card.key, card.key);
+    };
+    if !before.holds_anything() {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "card": card.key, "moved": 0, "archive": null, "form": false }))?
+            );
+        } else {
+            println!("Nothing waits in the tray of {}; nothing to sort", card.key);
+        }
+        return Ok(());
+    }
+    let done = tray::done(&dir, &card, &jiff::Zoned::now().date().to_string())?;
+    if json {
+        let mut value = serde_json::to_value(&done)?;
+        value["card"] = serde_json::Value::String(card.key.clone());
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    let form = if done.form {
+        "; the filled form went with them, and the tray's is blank again"
+    } else {
+        ""
+    };
+    println!(
+        "Sorted the tray of {}: {} moved to {}{form}",
+        card.key,
+        plural(done.moved, "entry", "entries"),
+        done.archive
+    );
+    Ok(())
+}
+
+fn tray_list(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let root = tray::root()?;
+    let mut rows = Vec::new();
+    for (name, tray) in tray::all(&root)? {
+        if !tray.holds_anything() {
+            continue;
+        }
+        let card = db.card_by_ref(&name)?;
+        rows.push((name, card, tray));
+    }
+    if json {
+        let out: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(name, card, tray)| {
+                serde_json::json!({
+                    "key": name,
+                    "title": card.as_ref().map(|c| &c.title),
+                    "status": card.as_ref().map(|c| &c.status),
+                    "path": tray.path,
+                    "files": tray.files.len(),
+                    "form_filled": tray.form.filled,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    if rows.is_empty() {
+        println!("Nothing waits in any tray ({})", root.display());
+        return Ok(());
+    }
+    let width = rows.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);
+    for (name, card, tray) in &rows {
+        let mut what = Vec::new();
+        if !tray.files.is_empty() {
+            what.push(plural(tray.files.len(), "file", "files"));
+        }
+        if tray.form.filled {
+            what.push("the form filled".to_string());
+        }
+        let title = card.as_ref().map(|c| c.title.as_str()).unwrap_or("(no card of that name)");
+        println!("{name:width$}  {:<24} {title}", what.join(", "));
+    }
     Ok(())
 }
 

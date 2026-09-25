@@ -12,7 +12,8 @@ rigger serves both with one binary and one model. What differs is a **profile**:
 | Unit of work | a version, closed by a tag | a task, tracked by branches |
 | Id pattern | none | `[A-Z]{2,8}-\d+`, with aliases when a ticket moves |
 | Roots | repositories and the notes hub | repositories and the task cards folder |
-| Incoming material | - | a tray per task: screenshots, exports, files from testers |
+| Incoming tickets | - | read from kasl's inbox, not asked of the tracker a second time: [`task incoming`](/rigger/reference/task/#tickets-from-kasls-inbox) |
+| Incoming material | - | a [tray](/rigger/reference/tray/) per task: screenshots, exports, files from testers |
 | Database | its own | its own |
 
 `rigger profile use <name>` switches; every command reads the active profile. A profile is a configuration file, never a code path, so a fix for one is a fix for both.
