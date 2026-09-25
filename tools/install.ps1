@@ -31,6 +31,30 @@ $dir = if ($env:RIGGER_INSTALL_DIR) { $env:RIGGER_INSTALL_DIR } else { Join-Path
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "rigger-install-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
+# A rigger that is running holds its file - most often the MCP server an
+# assistant keeps open for the whole session - and Windows will not
+# overwrite a running program, but it will rename one. So the old file is
+# moved aside under a name of its own, the new one takes its place, and the
+# running process carries on from the old bytes until it exits. What was
+# moved aside is removed by the next install, once nothing holds it. Three
+# releases in a row were installed by renaming the old file by hand.
+function Move-Aside([string]$path) {
+    if (-not (Test-Path $path)) { return }
+    try {
+        Remove-Item $path -Force -ErrorAction Stop
+    } catch {
+        $stem = [IO.Path]::GetFileNameWithoutExtension($path)
+        $aside = Join-Path (Split-Path $path) "$stem.$([guid]::NewGuid().ToString('N').Substring(0, 8)).old.exe"
+        Move-Item $path $aside -Force
+        Write-Host "$stem.exe is in use; the old one is moved aside, and the next install removes it. Restart the assistant to have its MCP server run the new one."
+    }
+}
+
+function Clear-Aside([string]$dir) {
+    Get-ChildItem $dir -Filter "*.old.exe" -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
 try {
     Write-Host "Downloading $url"
     Invoke-WebRequest $url -OutFile (Join-Path $tmp "rigger.zip")
@@ -40,7 +64,9 @@ try {
     New-Item -ItemType Directory -Force $dir | Out-Null
     $exe = Get-ChildItem $tmp -Recurse -Filter "rigger.exe" | Select-Object -First 1
     if (-not $exe) { throw "rigger.exe not found in the downloaded archive" }
-    Copy-Item $exe.FullName $dir -Force
+    Clear-Aside $dir
+    Move-Aside (Join-Path $dir "rigger.exe")
+    Copy-Item $exe.FullName (Join-Path $dir "rigger.exe") -Force
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -55,8 +81,9 @@ $alias = Join-Path $dir "rgr.exe"
 if (-not $env:RIGGER_NO_ALIAS) {
     $existing = Get-Command rgr -ErrorAction SilentlyContinue
     if (-not $existing -or $existing.Source -eq $alias) {
-        # A link cannot be created over an existing name.
-        Remove-Item $alias -Force -ErrorAction SilentlyContinue
+        # A link cannot be created over an existing name, and a running `rgr`
+        # holds its name the way a running `rigger` does.
+        Move-Aside $alias
         try {
             New-Item -ItemType HardLink -Path $alias -Target (Join-Path $dir "rigger.exe") -ErrorAction Stop | Out-Null
             Write-Host "Alias rgr -> rigger"
