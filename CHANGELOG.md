@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.26.0] - 2026-09-30
+
+### Bug Fixes
+- Move a rigger in use aside instead of failing
+
+### Features
+- Snooze, freeze and hand a task over
+
+### Testing
+- Sort a tray that holds material beside the handoff
+
 ## [0.25.0] - 2026-09-25
 
 ### Breaking Changes
