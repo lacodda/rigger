@@ -28,7 +28,10 @@ trays/ACME-7310/
   shot-142229.png      what waits to be sorted
   logs/app.log
   sorted/2026-09-20/   a round sorted before, with the form as it was filled
+  handoff/             the texts the card was handed over with
 ```
+
+`handoff/` is what went out rather than what came in - the forms and texts of [`task handoff`](/rigger/reference/task/#handing-a-card-over) - so it is neither listed as waiting nor moved by `tray done`.
 
 ## `tray show`
 

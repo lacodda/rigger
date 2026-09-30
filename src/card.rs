@@ -29,6 +29,8 @@ pub struct Card {
     pub summary: Option<String>,
     pub created_at: String,
     pub updated_at: Option<String>,
+    /// The day it sleeps until, while that day has not come.
+    pub snoozed_until: Option<String>,
 }
 
 /// A card's link to a repository.
@@ -303,6 +305,7 @@ mod tests {
             summary: None,
             created_at: String::new(),
             updated_at: None,
+            snoozed_until: None,
         }
     }
 

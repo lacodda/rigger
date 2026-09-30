@@ -53,6 +53,8 @@ pub struct Stage {
     pub version: String,
     pub title: Option<String>,
     pub tasks: Vec<Task>,
+    pub asleep: Vec<Task>,
+    pub set_aside: Vec<crate::db::SetAside>,
 }
 
 pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen> {
@@ -61,6 +63,8 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         version: s.version,
         title: s.title,
         tasks: s.tasks,
+        asleep: s.asleep,
+        set_aside: s.set_aside,
     });
     Ok(Screen {
         name: project.name.clone(),
@@ -151,6 +155,9 @@ pub fn render(screen: &Screen) -> String {
             // paragraph with the point in its opening clause.
             let first = task.title.lines().next().unwrap_or("").trim();
             let _ = writeln!(out, "  {} {}", mark(&task.status), trim_to(first, 96));
+        }
+        for line in crate::context::put_down_lines(&stage.asleep, &stage.set_aside) {
+            let _ = writeln!(out, "  ({line})");
         }
     }
 

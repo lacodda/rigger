@@ -33,7 +33,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger adopt`](/rigger/reference/adopt/) | v0.15.0 | Record every repository under a directory, with its hub and its tags |
 | [`rigger skill`](/rigger/reference/skill/) | v0.15.0 | Write a thin project skill from a template and the record |
 | [`rigger profile`](/rigger/reference/profile/) | v0.17.0 | Switch, list and add profiles, each with a record of its own |
-| [`rigger task`](/rigger/reference/task/) | v0.17.0 | Task cards: find, make, open, link, write against, close; a status for any task (v0.18.0); tickets from kasl's inbox, `incoming` and `take` (v0.25.0) |
+| [`rigger task`](/rigger/reference/task/) | v0.17.0 | Task cards: find, make, open, link, write against, close; a status for any task (v0.18.0); tickets from kasl's inbox, `incoming` and `take` (v0.25.0); `snooze`, `unsnooze`, `freeze` and `handoff` (v0.26.0) |
 | [`rigger doc`](/rigger/reference/doc/) | v0.19.0 | The handwritten texts of a project: vision, rituals, research; skeletons by kind |
 | [`rigger rules`](/rigger/reference/rules/) | v0.20.0 | How the work is done: the rituals of the line, and of one project |
 | [`rigger gate`](/rigger/reference/gate/) | v0.20.0 | Run the command that says a project is fit to commit, and record how it went |

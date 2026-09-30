@@ -56,6 +56,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `doc_show` | Reads a handwritten text - the vision, the rituals, a research note; lists them without a slug |
 | `doc_write` | Writes one into the record: a research note made on request, or a correction to the vision |
 | `set_task_status` | Gives a task a [status](/rigger/reference/task/): new, active, waiting-handoff, frozen or done |
+| `snooze_task` | Puts a task [to sleep](/rigger/reference/task/#putting-work-down) until a day (`until`: `2026-10-05`, `monday`, `3d`, `2w`), or wakes it when `until` is left out |
 | `task_find` | Finds the [card](/rigger/reference/task/) a line of text means, and says whether to take it, ask, or make a new one |
 | `task_context` | Where a card stands: what it is, where it is worked, everything written against it |
 | `record_plan` | A step of the plan of edits, against a card |

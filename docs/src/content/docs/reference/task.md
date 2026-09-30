@@ -12,12 +12,16 @@ rigger task close [<CARD>] [--status <STATUS>]
 rigger task show <CARD> [--json]
 rigger task context <CARD> [--budget <TOKENS>]
 rigger task link <CARD> <PROJECT> [--branch <BRANCH>] [--role <TEXT>]
-rigger task list [--status open|all|<STATUS>] [--json]
+rigger task list [--status open|all|<STATUS>] [--snoozed] [--json]
 rigger task rename <CARD> <KEY>
 rigger task alias <CARD> <TEXT>
 rigger task summary <CARD> <TEXT>
 rigger task note <CARD> <TEXT> [--kind <KIND>]
 rigger task status <TASK> <STATUS>
+rigger task snooze <TASK> --until <DAY>
+rigger task unsnooze <TASK>
+rigger task freeze <TASK> [--why <TEXT>]
+rigger task handoff [<CARD>] --to <WHO> [--json]
 rigger task incoming [--all] [--json]
 rigger task take <KEY> [--project <NAME>]... [--branch <BRANCH>]
 ```
@@ -166,7 +170,7 @@ This is a contract: a git client that makes a worktree per task reads the branch
 
 ```json
 {
-  "card": { "id": 1, "key": "ACME-7310", "title": "...", "status": "active", "aliases": [], "summary": null, "created_at": "...", "updated_at": "..." },
+  "card": { "id": 1, "key": "ACME-7310", "title": "...", "status": "active", "aliases": [], "summary": null, "created_at": "...", "updated_at": "...", "snoozed_until": null },
   "links": [{ "project": "webapp", "path": "C:\\work\\webapp", "branch": "fix/ACME-7310-rtf", "role": null }],
   "activity": [{
     "project": "webapp",
@@ -182,13 +186,14 @@ This is a contract: a git client that makes a worktree per task reads the branch
     "form": { "path": "C:\\...\\trays\\ACME-7310\\incoming.md", "filled": true },
     "files": [{ "path": "shot.png", "bytes": 217088, "modified": "2026-09-25T17:22:29Z" }],
     "sorted": [{ "day": "2026-09-20", "files": 5 }]
-  }
+  },
+  "handoffs": [{ "to": "alerts-api", "day": "2026-09-26", "sent": true, "title": "...", "path": "C:\\...\\trays\\ACME-7310\\handoff\\alerts-api-2026-09-26.form.md" }]
 }
 ```
 
 | Field | What it holds |
 | --- | --- |
-| `card` | the card: `id`, `key`, `title`, `status`, `aliases`, `summary`, `created_at`, `updated_at` |
+| `card` | the card: `id`, `key`, `title`, `status`, `aliases`, `summary`, `created_at`, `updated_at`, and `snoozed_until` - the day it [sleeps](#putting-work-down) until, `null` when it is awake |
 | `links` | the repositories it is worked in: `project`, `path`, `branch` (the one a worktree is made from), `role` |
 | `activity` | what git said, per `project`: its `branches`, how many `commits` name the card, and the `last_commit` |
 | `branches` | `name` as it is checked out; `remote` when the branch is only on that remote, `null` when it is local; `tip` and `tip_at`, the tip commit and its moment in UTC |
@@ -197,6 +202,7 @@ This is a contract: a git client that makes a worktree per task reads the branch
 | `events` | how many events are written against the card |
 | `ticket` | the ticket in kasl's inbox the card is, by its key or an alias, in [the shape rigger reads](#the-shape-rigger-reads-from-kasl); `null` when kasl is not there or does not know it |
 | `tray` | the card's [tray](/rigger/reference/tray/), `null` when it has none: its `path`; the `form` - its `path` and whether it is `filled`; the `files` waiting, each with its `path` in the tray, `bytes` and `modified` (UTC); and the rounds `sorted` before, each a `day` and how many `files` |
+| `handoffs` | the card's [handoffs](#handing-a-card-over), oldest first: who it went `to`, the `day` the form was begun, whether the texts were made (`sent`), the `title` they went out under, and the `path` of the form |
 
 ### What waits in the tray
 
@@ -252,6 +258,68 @@ A task's status is a word from a vocabulary rather than one of two:
 | `dropped` | struck from the hub; given by [`import`](/rigger/reference/import/), never by hand |
 
 Everything before `done` is open work, and is counted as such by the [context packet](/rigger/reference/context/); the packet and the `plan` tool mark any word but `new` beside the task. `task status` takes a card's key or the id a project's packet lists; over MCP it is `set_task_status`, and `close_task` is `done` in one word. A hub's box does not overrule the word: reading a hub again leaves an active task active, and the export writes the box empty for anything short of `done`.
+
+## Putting work down
+
+Two ways, and they answer different questions. **Asleep** says *when* to come back to a task; **frozen** says it is set aside and *why*, with no day.
+
+```console
+$ rigger task snooze 1204 --until 2w
+Task 1204 sleeps until 2026-10-14: do the thing
+  out of the packet, the list and the hand until then; `rigger task unsnooze 1204` wakes it sooner
+
+$ rigger task freeze ACME-7310 --why "waits for the alerts API"
+Task ACME-7310 is frozen (was active): Archived alerts look live
+  `rigger task status ACME-7310 active` takes it up again
+```
+
+`--until` takes a day as the rest of rigger does - `2026-10-05`, `tomorrow`, `monday` - or a span from today as kasl spells how long an issue sleeps: `3d`, `2w`, with or without the `+`. The day must be still to come. Sleep sits beside the status rather than replacing it, so a task keeps its status while it sleeps and wakes into it; nothing has to wake it on time - on its day it is simply back. `unsnooze` wakes it sooner.
+
+A task asleep is out of sight, not out of mind:
+
+- the project's [packet](/rigger/reference/context/) leaves it out of the stage and counts it in its place - `(1 task asleep until 2026-10-14)`; the `plan` tool still lists it, with its day, because that is where the id to wake it comes from;
+- `task list` leaves sleeping cards out and says how many - `--snoozed` shows them with their day;
+- a card asleep is not in hand, and putting the card in hand to sleep lets go of it, as freezing does.
+
+`freeze` is `task status <TASK> frozen` with its reason recorded against the task as a decision - `Set aside: waits for the alerts API` - because a frozen task that does not say why is a question for whoever finds it.
+
+**A stage whose every open task is frozen or asleep is not the stage being built.** The packet, `plan`, [`version show`](/rigger/reference/version/) and the digest all move on to the next planned version, and the packet names the one passed over: `(set aside: v0.15.0 · Pairing (1 frozen))`. A stage with nothing open at all is different - it is finished and waits for its tag, and stays current. When every planned version is set aside, the first stays current, since there is nothing else to be on.
+
+## Handing a card over
+
+When the cause lies outside the code in hand - a server, a desktop client, a neighbour's API - the work is to tell the team that owns it, and the text has a shape: what is asked, how it is now, what is needed, why, where it was seen. `task handoff` keeps that shape as a form in the card's [tray](/rigger/reference/tray/) and makes the texts from it.
+
+```console
+$ rigger task handoff ACME-7310 --to alerts-api
+Wrote the form for a handoff of ACME-7310 to alerts-api:
+  C:\...\trays\ACME-7310\handoff\alerts-api-2026-09-26.form.md
+Fill it in, then run `rigger task handoff ACME-7310 --to alerts-api` again to make the texts.
+```
+
+The form has a section each for the **Title**, a **TL;DR**, the **Ask**, how it is **Now**, what is **Needed**, **Why**, an **Example** and where it was **Checked on**. The record fills in what it knows - the card's title, `Related task: ACME-7310.`, and under *From the record (not sent)* the summary, findings, decisions and pitfalls written against the card, to write from. As in the tray's form, lines starting with `>` are the form and are left out; inside a fenced code block every line is kept. Nothing is added to the text but what is written in the form, so it goes out in the language the other team reads.
+
+Run again once it is filled:
+
+```console
+$ rigger task handoff ACME-7310 --to alerts-api
+### Archived alerts look live
+
+Please return whether an alert is archived in the alert list.
+
+The client does not get the flag and **guesses**.
+...
+Made the texts for alerts-api:
+  C:\...\trays\ACME-7310\handoff\alerts-api-2026-09-26.md
+  C:\...\trays\ACME-7310\handoff\alerts-api-2026-09-26.jira.txt
+ACME-7310 is now waiting-handoff (was active); nothing was sent - that is yours to do.
+```
+
+- **Both texts come from one form.** `.md` for a chat or a mail, `.jira.txt` in Jira's markup - `h3.` for the title, `*bold*`, `_italic_`, `{{code}}`, `{code:lang}` blocks, `*`/`#` lists, `[text|url]` links. A correction is made in the form and the command run again; the two cannot drift apart.
+- **What is refused.** A form with any of Title, Ask, Now, Needed or Why empty, naming them; and a text running past fifteen lines (a long line counted as the lines it wraps into, a hundred characters each) without a TL;DR - a reader decides from the first lines whether a task is theirs.
+- **What it records.** The card becomes `waiting-handoff`, and a change is written against it: `Handed over to alerts-api: Archived alerts look live (handoff/alerts-api-2026-09-26.md)`. Nothing is sent anywhere and no ticket is made: the text is yours to send.
+- **Where it stays.** `handoff/` is what went out, not material that came in: the tray's list of waiting files leaves it out and `tray done` does not sort it. The card's screen names each handoff on a `handoff:` line and its packet under `## Handed over`, with whether the texts were made or the form is still being written.
+
+`--to` is one word naming a product or a team; it is made fit for a file name (`Alerts API` is `alerts-api`). A form begun on another day and not yet made into texts is the same handoff - the next run finishes it rather than starting a blank one. `--json` prints `state` (`form` or `sent`), the three `files`, and, once sent, the `status` and the `text`.
 
 ## Related
 

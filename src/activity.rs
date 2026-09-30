@@ -229,6 +229,7 @@ mod tests {
             summary: None,
             created_at: String::new(),
             updated_at: None,
+            snoozed_until: None,
         }
     }
 

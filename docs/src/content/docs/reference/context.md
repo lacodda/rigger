@@ -43,6 +43,19 @@ The packet has a token budget - 3000 by default, `--budget` to change it - and h
 
 That line is the point of the budget. A packet that quietly ended its list would look like a project where nothing else ever happened.
 
+## Work put down
+
+A task [asleep](/rigger/reference/task/#putting-work-down) until a day is left out of the stage and counted in its place, and a stage whose every open task is frozen or asleep is passed over for the next planned version and named:
+
+```
+## Current stage: v0.4.0 · Export
+- write the exporter
+(1 task asleep until 2026-10-14)
+(set aside: v0.3.0 · Search (1 frozen))
+```
+
+Counted rather than dropped for the same reason the budget says what it left out: a stage that silently lost a task reads as a stage with less to do.
+
 The two numbers are different facts and are counted apart. The first is what the budget refused. The second is what is older than the window the packet looks at - two hundred events - which no budget would have reached anyway and which [`find`](/rigger/reference/find/) is for. Adding them made a project with four hundred events of history look as though a session had been denied four hundred of them.
 
 Long events are summarised rather than truncated at a fixed width: the packet keeps the heading and the first sentence of the reasoning, then says how many characters remain. A decision in a real hub runs to fifteen hundred characters, and three of them at full length would crowd out a dozen others.

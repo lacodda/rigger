@@ -16,6 +16,7 @@ mod delivery;
 mod doc;
 mod export;
 mod gate;
+mod handoff;
 mod hub;
 mod ics;
 mod import;
@@ -749,6 +750,9 @@ enum TaskCommand {
         /// open (the default), all, or one status
         #[arg(long, default_value = "open")]
         status: String,
+        /// Include the cards that are asleep, each with the day it is due back
+        #[arg(long)]
+        snoozed: bool,
         /// Print as JSON
         #[arg(long)]
         json: bool,
@@ -790,6 +794,38 @@ enum TaskCommand {
         task: String,
         /// The status
         status: String,
+    },
+    /// Put a task out of sight until a day: out of the packet, the list and the hand
+    Snooze {
+        /// Card key, alias, or the id the packet or `plan` lists
+        task: String,
+        /// The day it comes back: 2026-10-05, monday, +3d, 3d, 2w
+        #[arg(long, value_name = "DAY")]
+        until: String,
+    },
+    /// Wake a sleeping task now
+    Unsnooze {
+        /// Card key, alias, or the id the packet or `plan` lists
+        task: String,
+    },
+    /// Set a task aside on purpose, saying why; `task status <task> active` takes it up again
+    Freeze {
+        /// Card key, alias, or the id the packet or `plan` lists
+        task: String,
+        /// Why it is set aside; recorded as a decision against it
+        #[arg(long, value_name = "TEXT")]
+        why: Option<String>,
+    },
+    /// Write a text for the team that owns the fix, and hand the card over to it
+    Handoff {
+        /// Card key, alias or id; the open card when omitted
+        task: Option<String>,
+        /// Who it goes to: a product or a team, as one word
+        #[arg(long, value_name = "WHO")]
+        to: String,
+        /// Print the text as JSON, with the paths of both files
+        #[arg(long)]
+        json: bool,
     },
     /// The tickets in kasl's inbox that have no card, and the cards whose ticket has gone
     Incoming {
@@ -1269,12 +1305,16 @@ fn run(cli: Cli) -> Result<()> {
             TaskCommand::Show { task, json } => task_show(&task, json),
             TaskCommand::Context { task, budget } => task_context(&task, budget),
             TaskCommand::Link { task, project, branch, role } => task_link(&task, &project, branch.as_deref(), role.as_deref()),
-            TaskCommand::List { status, json } => task_list(&status, json),
+            TaskCommand::List { status, snoozed, json } => task_list(&status, snoozed, json),
             TaskCommand::Rename { task, key } => task_rename(&task, &key),
             TaskCommand::Alias { task, alias } => task_alias(&task, &alias),
             TaskCommand::Summary { task, text } => task_summary(&task, &text),
             TaskCommand::Note { task, text, kind } => note_on_card(&task, kind.as_str(), &text),
             TaskCommand::Status { task, status } => task_status(&task, &status),
+            TaskCommand::Snooze { task, until } => task_snooze(&task, Some(&until)),
+            TaskCommand::Unsnooze { task } => task_snooze(&task, None),
+            TaskCommand::Freeze { task, why } => task_freeze(&task, why.as_deref()),
+            TaskCommand::Handoff { task, to, json } => task_handoff(task.as_deref(), &to, json),
             TaskCommand::Incoming { all, json } => task_incoming(all, json),
             TaskCommand::Take { key, projects, branch } => task_take(&key, &projects, branch.as_deref()),
         },
@@ -3305,6 +3345,133 @@ fn task_status(task: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+/// Lets go of the card in hand if it is this task: work put down is not
+/// work in hand.
+fn let_go_of(db: &Db, task_id: i64) -> Result<()> {
+    if db.setting(ACTIVE_CARD)?.as_deref() == Some(&task_id.to_string()) {
+        db.set_setting(ACTIVE_CARD, None)?;
+        db.set_setting(ACTIVE_SINCE, None)?;
+    }
+    Ok(())
+}
+
+/// Puts a task to sleep until a day, or wakes it when `until` is `None`.
+fn task_snooze(task: &str, until: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let (project_id, id) = find_task(&db, task)?;
+    let today = db::today();
+    let day = match until {
+        Some(text) => {
+            let day = db::parse_day(text, &today)?;
+            if day <= today {
+                bail!("{day} is not after today; a task sleeps until a day still to come");
+            }
+            Some(day)
+        }
+        None => None,
+    };
+    let (title, _, was) = db.set_snooze(project_id, id, day.as_deref())?;
+    match (&day, was) {
+        (Some(day), _) => {
+            let_go_of(&db, id)?;
+            println!("Task {task} sleeps until {day}: {title}");
+            println!("  out of the packet, the list and the hand until then; `rigger task unsnooze {task}` wakes it sooner");
+        }
+        (None, Some(was)) => println!("Task {task} is awake (it slept until {was}): {title}"),
+        (None, None) => println!("Task {task} was not asleep: {title}"),
+    }
+    Ok(())
+}
+
+/// Sets a task aside on purpose. The reason is the point: a frozen task
+/// that does not say why is a question for whoever finds it.
+fn task_freeze(task: &str, why: Option<&str>) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let (project_id, id) = find_task(&db, task)?;
+    let (title, was) = db.set_task_status(project_id, id, "frozen")?;
+    if let Some(why) = why.map(str::trim).filter(|w| !w.is_empty()) {
+        db.record_task_event(project_id, id, "decision", &format!("Set aside: {why}"), &db::now(), "assistant")?;
+    }
+    let_go_of(&db, id)?;
+    match was.as_str() {
+        "frozen" => println!("Task {task} was already frozen: {title}"),
+        _ => println!("Task {task} is frozen (was {was}): {title}"),
+    }
+    println!("  `rigger task status {task} active` takes it up again");
+    Ok(())
+}
+
+/// Hands a card over to the team that owns the fix. The first run writes
+/// the form into the card's tray; the run after it is filled makes both
+/// texts, marks the card as waiting on that team, and says so on the card.
+fn task_handoff(task: Option<&str>, to: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let card = card_or_in_hand(&db, task, "task handoff")?;
+    let to = handoff::slug(to);
+    if to.is_empty() {
+        bail!("say who it goes to with --to: a product or a team, such as alerts-api");
+    }
+    let tray = tray::locate(&tray::root()?, &card)?;
+    let files = handoff::files_for(&tray, &to, &db::today())?;
+    if !files.form.is_file() {
+        let material: Vec<String> = card
+            .summary
+            .iter()
+            .map(|s| format!("summary: {s}"))
+            .chain(
+                db.task_events(card.id)?
+                    .iter()
+                    .filter(|e| matches!(e.kind.as_str(), "finding" | "decision" | "pitfall"))
+                    .map(|e| format!("{} · {}: {}", e.date, e.kind, e.body.trim())),
+            )
+            .collect();
+        handoff::ensure_form(&files, &handoff::blank_form(&card, &to, &material))?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "state": "form", "files": files }))?);
+            return Ok(());
+        }
+        println!("Wrote the form for a handoff of {} to {to}:", card.key);
+        println!("  {}", files.form.display());
+        println!("Fill it in, then run `rigger task handoff {} --to {to}` again to make the texts.", card.key);
+        return Ok(());
+    }
+    let (parts, text) = handoff::send(&files)?;
+    let desk = db.desk_project()?;
+    let (_, was) = db.set_task_status(desk.id, card.id, "waiting-handoff")?;
+    let rel = files
+        .markdown
+        .strip_prefix(&tray)
+        .unwrap_or(&files.markdown)
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    db.record_task_event(
+        desk.id,
+        card.id,
+        "change",
+        &format!("Handed over to {to}: {} ({rel})", parts.title().unwrap_or_default()),
+        &db::now(),
+        "assistant",
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "state": "sent", "files": files, "status": "waiting-handoff", "text": text }))?
+        );
+        return Ok(());
+    }
+    print!("{text}");
+    println!();
+    println!("Made the texts for {to}:");
+    println!("  {}", files.markdown.display());
+    println!("  {}", files.jira.display());
+    match was.as_str() {
+        "waiting-handoff" => println!("{} was already waiting on a handoff.", card.key),
+        _ => println!("{} is now waiting-handoff (was {was}); nothing was sent - that is yours to do.", card.key),
+    }
+    Ok(())
+}
+
 fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[String], branch: Option<&str>, summary: Option<&str>) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     if title.trim().is_empty() {
@@ -3405,7 +3572,9 @@ fn active_card(db: &Db) -> Result<Option<card::Card>> {
     {
         return Ok(None);
     }
-    db.card(id.parse().unwrap_or_default())
+    // A card asleep is not in hand, even if it was put to sleep by
+    // another tool than `task snooze`.
+    Ok(db.card(id.parse().unwrap_or_default())?.filter(|c| c.snoozed_until.is_none()))
 }
 
 fn task_open(task: &str) -> Result<()> {
@@ -3448,10 +3617,7 @@ fn task_close(task: Option<&str>, status: &str) -> Result<()> {
     let card = card_or_in_hand(&db, task, "task close")?;
     let desk = db.desk_project()?;
     let (title, was) = db.set_task_status(desk.id, card.id, status)?;
-    if db.setting(ACTIVE_CARD)?.as_deref() == Some(&card.id.to_string()) {
-        db.set_setting(ACTIVE_CARD, None)?;
-        db.set_setting(ACTIVE_SINCE, None)?;
-    }
+    let_go_of(&db, card.id)?;
     println!("Closed {} as {status} (was {was}): {title}", card.key);
     Ok(())
 }
@@ -3464,7 +3630,9 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     let activity = db.card_activity(card.id)?;
     let idle = idle_days(&activity);
     let ticket = kasl::ticket_of(&card, &kasl::inbox());
-    let tray = tray::read(&tray::locate(&tray::root()?, &card)?)?;
+    let tray_dir = tray::locate(&tray::root()?, &card)?;
+    let tray = tray::read(&tray_dir)?;
+    let handoffs = handoff::list(&tray_dir)?;
     if json {
         println!(
             "{}",
@@ -3476,12 +3644,16 @@ fn task_show(task: &str, json: bool) -> Result<()> {
                 "events": events.len(),
                 "ticket": ticket,
                 "tray": tray,
+                "handoffs": handoffs,
             }))?
         );
         return Ok(());
     }
     println!("{} · {}", card.key, card.title);
     println!("  status:   {}", card.status);
+    if let Some(day) = &card.snoozed_until {
+        println!("  asleep:   until {day}");
+    }
     if !card.aliases.is_empty() {
         println!("  aliases:  {}", card.aliases.join(", "));
     }
@@ -3523,6 +3695,9 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     }
     if let Some(tray) = &tray {
         println!("  tray:     {} - {}", tray.path, tray_state(tray));
+    }
+    for line in handoff_lines(&handoffs) {
+        println!("  handoff:  {line}");
     }
     Ok(())
 }
@@ -3592,6 +3767,9 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
     let events = db.task_events(card.id)?;
     let mut out = format!("# {} · {}\n\n", card.key, card.title);
     out.push_str(&format!("Status: {}", card.status));
+    if let Some(day) = &card.snoozed_until {
+        out.push_str(&format!(" · asleep until {day}"));
+    }
     if !card.aliases.is_empty() {
         out.push_str(&format!(" · also {}", card.aliases.join(", ")));
     }
@@ -3627,8 +3805,16 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
             out.push_str(&format!("- {}\n", describe_idle(days)));
         }
     }
-    if let Some(tray) = tray::read(&tray::locate(&tray::root()?, card)?)? {
+    let tray_dir = tray::locate(&tray::root()?, card)?;
+    if let Some(tray) = tray::read(&tray_dir)? {
         out.push_str(&tray_section(&tray));
+    }
+    let handoffs = handoff_lines(&handoff::list(&tray_dir)?);
+    if !handoffs.is_empty() {
+        out.push_str("\n## Handed over\n");
+        for line in handoffs {
+            out.push_str(&format!("- {line}\n"));
+        }
     }
     if let Some(next) = events.iter().rev().find(|e| e.kind == "next") {
         out.push_str(&format!("\n## Next step\n{}\n", next.body.trim()));
@@ -3665,6 +3851,18 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
         out.push_str(&format!("\n({left_out} older events left out by the budget)\n"));
     }
     Ok(out)
+}
+
+/// A card's handoffs, a line each: to whom, when, and whether the texts
+/// were made or the form is still being written.
+fn handoff_lines(handoffs: &[handoff::Handed]) -> Vec<String> {
+    handoffs
+        .iter()
+        .map(|h| match (&h.title, h.sent) {
+            (Some(title), true) => format!("to {} on {}: {title} ({})", h.to, h.day, h.path),
+            _ => format!("to {}: the form begun {}, not made into texts yet ({})", h.to, h.day, h.path),
+        })
+        .collect()
 }
 
 /// How many of a tray's files the packet names; the rest are counted.
@@ -3717,23 +3915,31 @@ fn task_link(task: &str, project: &str, branch: Option<&str>, role: Option<&str>
     print_links(&db, card.id)
 }
 
-fn task_list(status: &str, json: bool) -> Result<()> {
+fn task_list(status: &str, snoozed: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let cards = db.cards(Some(status))?;
+    let (cards, asleep): (Vec<card::Card>, Vec<card::Card>) = db.cards(Some(status))?.into_iter().partition(|c| snoozed || c.snoozed_until.is_none());
     if json {
         println!("{}", serde_json::to_string_pretty(&cards)?);
         return Ok(());
     }
-    if cards.is_empty() {
+    // Every card asleep is not "no cards": the line below says what there is.
+    if cards.is_empty() && asleep.is_empty() {
         println!(
             "No cards{}.",
             if status == "all" { "" } else { " that are " }.to_string() + if status == "all" { "" } else { status }
         );
-        return Ok(());
     }
     let width = cards.iter().map(|c| c.key.len()).max().unwrap_or(0);
     for c in &cards {
-        println!("{:width$}  {:<16} {}", c.key, c.status, c.title);
+        let zzz = c.snoozed_until.as_deref().map(|d| format!("  (asleep until {d})")).unwrap_or_default();
+        println!("{:width$}  {:<16} {}{zzz}", c.key, c.status, c.title);
+    }
+    if !asleep.is_empty() {
+        println!(
+            "{} asleep; `rigger task list --snoozed` shows {}",
+            plural(asleep.len(), "card", "cards"),
+            if asleep.len() == 1 { "it" } else { "them" }
+        );
     }
     Ok(())
 }

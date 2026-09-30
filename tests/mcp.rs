@@ -178,6 +178,39 @@ fn the_plan_hands_out_the_ids_close_task_takes() {
     server.finish();
 }
 
+/// A task put to sleep leaves the packet, stays in the plan with its day -
+/// the plan is where the id to wake it comes from - and wakes on the same
+/// tool without a day.
+#[test]
+fn a_task_is_put_to_sleep_and_woken_through_the_same_door() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    let mut server = Server::start(data.path());
+
+    let plan = server.call(1, "plan", json!({ "project": "proj" }));
+    let id: i64 = plan
+        .lines()
+        .find(|l| l.contains("first task"))
+        .and_then(|l| l.split(['[', ']']).nth(1).map(str::to_string))
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let slept = server.call(2, "snooze_task", json!({ "project": "proj", "task": id, "until": "2w" }));
+    assert!(slept.contains("sleeps until"), "{slept}");
+    let packet = server.call(3, "context", json!({ "project": "proj" }));
+    assert!(!packet.contains("first task") && packet.contains("(1 task asleep until "), "{packet}");
+    let plan = server.call(4, "plan", json!({ "project": "proj" }));
+    assert!(plan.contains(&format!("[{id}] first task (asleep until ")), "{plan}");
+
+    let woken = server.call(5, "snooze_task", json!({ "project": "proj", "task": id }));
+    assert!(woken.contains("is awake"), "{woken}");
+    let packet = server.call(6, "context", json!({ "project": "proj" }));
+    assert!(packet.contains("- first task\n"), "{packet}");
+
+    server.finish();
+}
+
 #[test]
 fn the_packet_is_served_as_a_prompt_and_as_a_resource() {
     let data = tempfile::tempdir().unwrap();

@@ -505,6 +505,13 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (task_id, project_id, hash)
     );
     ",
+    // v27: the day a task sleeps until. Beside the status rather than one
+    // of its words: the status says what state the work is in, sleep says
+    // when to come back to it, and a status of `snoozed` would have erased
+    // the one it replaced - nobody could say what a woken task goes back
+    // to. A day rather than a moment: a task is put down until Monday, not
+    // until 09:14.
+    "ALTER TABLE tasks ADD COLUMN snoozed_until TEXT;",
 ];
 
 /// What one read of a repository added to a card.
@@ -701,7 +708,23 @@ pub enum Change {
 pub struct CurrentStage {
     pub version: String,
     pub title: Option<String>,
+    /// The open tasks that are awake.
     pub tasks: Vec<Task>,
+    /// The open tasks put to sleep, each with its day.
+    pub asleep: Vec<Task>,
+    /// Earlier versions passed over because every task still open in them
+    /// is frozen or asleep, lowest first.
+    pub set_aside: Vec<SetAside>,
+}
+
+/// A version whose open work was all put down on purpose: it is not the
+/// stage being built, and it is not shipped either.
+#[derive(Debug, Clone, Serialize)]
+pub struct SetAside {
+    pub version: String,
+    pub title: Option<String>,
+    pub frozen: u32,
+    pub asleep: u32,
 }
 
 /// A task as the plan holds it. The id travels with the title because an
@@ -713,6 +736,22 @@ pub struct Task {
     pub title: String,
     /// One of `TASK_STATUSES`; `new` is the one a plan's box means.
     pub status: String,
+    /// The day it sleeps until, while that day has not come.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<String>,
+}
+
+impl Task {
+    /// Whether the task is out of the way: frozen on purpose, or asleep.
+    fn is_put_down(&self) -> bool {
+        self.status == "frozen" || self.snoozed_until.is_some()
+    }
+}
+
+/// The day a task sleeps until, if it is still asleep today. A day that
+/// has come is the same as no day: nothing has to wake a task on time.
+pub fn asleep_until(snoozed_until: Option<String>, today: &str) -> Option<String> {
+    snoozed_until.filter(|day| day.as_str() > today)
 }
 
 /// A question waiting for the owner, and where it came from.
@@ -1642,16 +1681,9 @@ impl Db {
         )?;
         let mut stmt = self
             .conn
-            .prepare("SELECT id, title, status FROM tasks WHERE version_id = ?1 AND status <> 'dropped' ORDER BY COALESCE(position, id), id")?;
-        card.tasks = stmt
-            .query_map([id], |r| {
-                Ok(Task {
-                    id: r.get(0)?,
-                    title: r.get(1)?,
-                    status: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
+            .prepare("SELECT id, title, status, snoozed_until FROM tasks WHERE version_id = ?1 AND status <> 'dropped' ORDER BY COALESCE(position, id), id")?;
+        let today = today();
+        card.tasks = stmt.query_map([id], |r| row_to_task(r, &today))?.collect::<rusqlite::Result<_>>()?;
         Ok(Some(card))
     }
 
@@ -2429,22 +2461,76 @@ impl Db {
         })?;
         let mut planned: Vec<(i64, String, Option<String>)> = rows.collect::<rusqlite::Result<_>>()?;
         planned.sort_by_key(|(_, name, _)| version_order(name));
-        let Some((id, name, title)) = planned.into_iter().next() else {
-            return Ok(None);
-        };
+        let today = today();
         let mut stmt = self
             .conn
-            .prepare("SELECT id, title, status FROM tasks WHERE version_id = ?1 AND status NOT IN ('done', 'dropped') ORDER BY id")?;
-        let tasks = stmt
-            .query_map([id], |r| {
-                Ok(Task {
-                    id: r.get(0)?,
-                    title: r.get(1)?,
-                    status: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<Task>>>()?;
-        Ok(Some(CurrentStage { version: name, title, tasks }))
+            .prepare("SELECT id, title, status, snoozed_until FROM tasks WHERE version_id = ?1 AND status NOT IN ('done', 'dropped') ORDER BY id")?;
+        let mut set_aside = Vec::new();
+        let mut first = None;
+        for (id, name, title) in planned {
+            let open = stmt.query_map([id], |r| row_to_task(r, &today))?.collect::<rusqlite::Result<Vec<Task>>>()?;
+            // A version whose every open task was put down on purpose is not
+            // being built: holding it current would keep the packet naming
+            // a stage nobody works on while the next one is. A version with
+            // nothing open is different - it is finished and waits for its
+            // tag, which is exactly the stage to be on.
+            if !open.is_empty() && open.iter().all(Task::is_put_down) {
+                set_aside.push(SetAside {
+                    version: name.clone(),
+                    title: title.clone(),
+                    frozen: open.iter().filter(|t| t.status == "frozen").count() as u32,
+                    asleep: open.iter().filter(|t| t.status != "frozen").count() as u32,
+                });
+                first.get_or_insert((name, title, open));
+                continue;
+            }
+            let (asleep, tasks) = open.into_iter().partition(|t| t.snoozed_until.is_some());
+            return Ok(Some(CurrentStage {
+                version: name,
+                title,
+                tasks,
+                asleep,
+                set_aside,
+            }));
+        }
+        // Everything planned was put down. There is no other stage to be
+        // on, so the first of them stays current, and says why it is quiet.
+        Ok(first.map(|(version, title, open)| {
+            set_aside.remove(0);
+            let (asleep, tasks) = open.into_iter().partition(|t| t.snoozed_until.is_some());
+            CurrentStage {
+                version,
+                title,
+                tasks,
+                asleep,
+                set_aside,
+            }
+        }))
+    }
+
+    /// Puts a task to sleep until a day, or wakes it with `None`. Returns
+    /// the title, the status and the day it slept until before.
+    pub fn set_snooze(&self, project_id: i64, task_id: i64, until: Option<&str>) -> Result<(String, String, Option<String>)> {
+        let found: Option<(String, String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT title, status, snoozed_until FROM tasks WHERE id = ?1 AND project_id = ?2",
+                params![task_id, project_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((title, status, was)) = found else {
+            bail!("no task [{task_id}] in this project; `plan` lists the ids");
+        };
+        if until.is_some() && !is_open_status(&status) {
+            bail!("task [{task_id}] is {status}; only work still to do can be put to sleep: {title}");
+        }
+        self.conn
+            .execute("UPDATE tasks SET snoozed_until = ?1 WHERE id = ?2", params![until, task_id])?;
+        if self.card(task_id)?.is_some() {
+            self.touch_card(task_id)?;
+        }
+        Ok((title, status, asleep_until(was, &today())))
     }
 
     /// Gives a task a status from the vocabulary. The project is part of
@@ -2998,10 +3084,11 @@ impl Db {
             summary: r.get(5)?,
             created_at: r.get(6)?,
             updated_at: r.get(7)?,
+            snoozed_until: asleep_until(r.get(8)?, &today()),
         })
     }
 
-    const CARD_COLUMNS: &'static str = "id, key, title, status, aliases, summary, created_at, updated_at";
+    const CARD_COLUMNS: &'static str = "id, key, title, status, aliases, summary, created_at, updated_at, snoozed_until";
 
     pub fn card(&self, id: i64) -> Result<Option<crate::card::Card>> {
         Ok(self
@@ -4011,6 +4098,17 @@ fn end_from(row: &rusqlite::Row, project: usize, version: usize, shipped: usize)
     })
 }
 
+/// A task from `id, title, status, snoozed_until`, its sleep read against
+/// `today`.
+fn row_to_task(r: &rusqlite::Row, today: &str) -> rusqlite::Result<Task> {
+    Ok(Task {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        status: r.get(2)?,
+        snoozed_until: asleep_until(r.get(3)?, today),
+    })
+}
+
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
     Ok(Session {
         id: row.get(0)?,
@@ -4155,20 +4253,18 @@ pub fn is_past(day: &str, today: &str) -> bool {
 /// Reads a day the way a person writes one: `2026-09-25`, or `today`,
 /// `tomorrow`, `+3d`, `friday` - the last meaning the coming one, today
 /// included. Kept to days: a question is due on a day, not at an hour.
+///
+/// A span from today is spelt as kasl spells how long an issue sleeps -
+/// `3d`, `2w` - with or without the `+`, so that putting a ticket to sleep
+/// and putting its card to sleep take the same words.
 pub fn parse_day(text: &str, today: &str) -> Result<String> {
     let base: jiff::civil::Date = today.parse().with_context(|| format!("{today:?} is not a day"))?;
     let word = text.trim().to_ascii_lowercase();
     let day = match word.as_str() {
         "today" => base,
         "tomorrow" => base.tomorrow()?,
-        _ if word.starts_with('+') => {
-            let digits = word.trim_start_matches('+').trim_end_matches('d');
-            let n: i64 = digits
-                .parse()
-                .ok()
-                .filter(|n| *n >= 0)
-                .with_context(|| format!("{text:?} is not a number of days; write it as +3d"))?;
-            base.checked_add(jiff::Span::new().days(n))?
+        _ if word.starts_with('+') || word.starts_with(|c: char| c.is_ascii_digit()) && !word.contains('-') => {
+            base.checked_add(jiff::Span::new().days(days_in_span(&word, text)?))?
         }
         _ => match weekday(&word) {
             Some(wanted) => {
@@ -4177,10 +4273,25 @@ pub fn parse_day(text: &str, today: &str) -> Result<String> {
             }
             None => word
                 .parse()
-                .map_err(|_| anyhow::anyhow!("{text:?} is not a day; write it as 2026-09-25, today, tomorrow, +3d or a weekday"))?,
+                .map_err(|_| anyhow::anyhow!("{text:?} is not a day; write it as 2026-09-25, today, tomorrow, +3d, 2w or a weekday"))?,
         },
     };
     Ok(day.to_string())
+}
+
+/// The days in a span such as `+3d`, `3d`, `3` or `2w`.
+fn days_in_span(word: &str, text: &str) -> Result<i64> {
+    let bare = word.trim_start_matches('+');
+    let (digits, per) = match bare.strip_suffix('w') {
+        Some(digits) => (digits, 7),
+        None => (bare.strip_suffix('d').unwrap_or(bare), 1),
+    };
+    let n: i64 = digits
+        .parse()
+        .ok()
+        .filter(|n| *n >= 0)
+        .with_context(|| format!("{text:?} is not a number of days; write it as +3d or 2w"))?;
+    Ok(n * per)
 }
 
 fn weekday(word: &str) -> Option<jiff::civil::Weekday> {
@@ -4215,6 +4326,11 @@ mod tests {
         assert_eq!(parse_day("tue", today).unwrap(), "2026-09-22");
         assert_eq!(parse_day("monday", today).unwrap(), "2026-09-28");
         assert!(parse_day("soon", today).is_err());
+        // The spans kasl sleeps an issue for.
+        assert_eq!(parse_day("3d", today).unwrap(), "2026-09-25");
+        assert_eq!(parse_day("2w", today).unwrap(), "2026-10-06");
+        assert_eq!(parse_day("+1w", today).unwrap(), "2026-09-29");
+        assert!(parse_day("3x", today).is_err());
         assert!(parse_day("2026-02-30", today).is_err());
     }
 

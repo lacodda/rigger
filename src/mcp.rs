@@ -358,6 +358,16 @@ fn tools() -> Vec<Value> {
             &["project", "task", "status"],
         ),
         tool(
+            "snooze_task",
+            "Put a task out of sight until a day: it leaves the packet and the stage until then, and a stage whose every open task is frozen or asleep stops being the current one. Omit `until` to wake it now. Ids come from `plan`, which lists sleeping tasks too.",
+            json!({
+                "project": project_arg(),
+                "task": { "type": "integer", "description": "Task id, as `plan` lists it" },
+                "until": { "type": "string", "description": "The day it comes back: 2026-10-05, monday, +3d, 3d, 2w. Omit to wake it" },
+            }),
+            &["project", "task"],
+        ),
+        tool(
             "close_task",
             "Mark a task of the current stage done. Ids come from `plan`.",
             json!({
@@ -602,6 +612,29 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 None => format!("Wrote {} ({}), {} bytes", written.slug, written.kind, written.body.len()),
             })
         }
+        "snooze_task" => {
+            let project = project(db)?;
+            let Some(task) = args.get("task").and_then(Value::as_i64) else {
+                bail!("this tool needs a `task` id; `plan` lists them");
+            };
+            let today = crate::db::today();
+            let day = match args.get("until").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) {
+                Some(text) => {
+                    let day = crate::db::parse_day(text, &today)?;
+                    if day <= today {
+                        bail!("{day} is not after today; a task sleeps until a day still to come");
+                    }
+                    Some(day)
+                }
+                None => None,
+            };
+            let (title, _, was) = db.set_snooze(project.id, task, day.as_deref())?;
+            Ok(match (day, was) {
+                (Some(day), _) => format!("Task {task} sleeps until {day}: {title}"),
+                (None, Some(was)) => format!("Task {task} is awake (it slept until {was}): {title}"),
+                (None, None) => format!("Task {task} was not asleep: {title}"),
+            })
+        }
         "close_task" => {
             let project = project(db)?;
             let Some(task) = args.get("task").and_then(Value::as_i64) else {
@@ -814,14 +847,28 @@ fn render_plan(db: &Db, project: &Project) -> Result<String> {
         out.push_str(&format!(" · {title}"));
     }
     out.push('\n');
-    if stage.tasks.is_empty() {
+    if stage.tasks.is_empty() && stage.asleep.is_empty() {
         out.push_str("Every task of this stage is done.\n");
     }
-    for task in &stage.tasks {
-        match task.status.as_str() {
-            "new" => out.push_str(&format!("- [{}] {}\n", task.id, task.title)),
-            status => out.push_str(&format!("- [{}] {} ({status})\n", task.id, task.title)),
+    // The plan names the sleeping tasks with their ids, where the packet
+    // only counts them: this is where the id to wake one comes from.
+    for task in stage.tasks.iter().chain(&stage.asleep) {
+        let mut marks = Vec::new();
+        if task.status != "new" {
+            marks.push(task.status.clone());
         }
+        if let Some(day) = &task.snoozed_until {
+            marks.push(format!("asleep until {day}"));
+        }
+        let marks = if marks.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", marks.join(", "))
+        };
+        out.push_str(&format!("- [{}] {}{marks}\n", task.id, task.title));
+    }
+    for line in crate::context::put_down_lines(&[], &stage.set_aside) {
+        out.push_str(&format!("({line})\n"));
     }
     Ok(out)
 }
@@ -951,6 +998,7 @@ mod tests {
             "resolve",
             "close_task",
             "set_task_status",
+            "snooze_task",
             "principles",
             "why_principle",
             "link",

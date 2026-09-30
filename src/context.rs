@@ -133,6 +133,48 @@ pub struct Stage {
     pub version: String,
     pub title: Option<String>,
     pub tasks: Vec<Task>,
+    /// Open tasks asleep until a day; counted in the packet, not listed.
+    pub asleep: Vec<Task>,
+    /// Earlier versions whose open work was all put down.
+    pub set_aside: Vec<crate::db::SetAside>,
+}
+
+impl From<crate::db::CurrentStage> for Stage {
+    fn from(s: crate::db::CurrentStage) -> Stage {
+        Stage {
+            version: s.version,
+            title: s.title,
+            tasks: s.tasks,
+            asleep: s.asleep,
+            set_aside: s.set_aside,
+        }
+    }
+}
+
+/// What was put down, in a line each: the tasks asleep, counted with the
+/// first day one comes back, and the versions set aside. Counted and not
+/// listed, because out of sight is what sleeping is for - but not out of
+/// mind: a stage that silently lost a task reads as a stage with less to do.
+pub fn put_down_lines(asleep: &[Task], set_aside: &[crate::db::SetAside]) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(first) = asleep.iter().filter_map(|t| t.snoozed_until.as_deref()).min() {
+        out.push(match asleep.len() {
+            1 => format!("1 task asleep until {first}"),
+            n => format!("{n} tasks asleep, the first back {first}"),
+        });
+    }
+    for v in set_aside {
+        let mut why = Vec::new();
+        if v.frozen > 0 {
+            why.push(format!("{} frozen", v.frozen));
+        }
+        if v.asleep > 0 {
+            why.push(format!("{} asleep", v.asleep));
+        }
+        let title = v.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default();
+        out.push(format!("set aside: {}{title} ({})", v.version, why.join(", ")));
+    }
+    out
 }
 
 #[derive(Debug, Serialize)]
@@ -195,11 +237,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         gate: project.gate.clone(),
     };
 
-    let current = db.current_stage(project.id)?.map(|s| Stage {
-        version: s.version,
-        title: s.title,
-        tasks: s.tasks,
-    });
+    let current = db.current_stage(project.id)?.map(Stage::from);
     let questions = db
         .open_questions_of(project.id)?
         .into_iter()
@@ -535,6 +573,9 @@ fn render_stage(stage: &Stage) -> String {
             "new" => out.push_str(&format!("- {}\n", task.title)),
             status => out.push_str(&format!("- {} ({status})\n", task.title)),
         }
+    }
+    for line in put_down_lines(&stage.asleep, &stage.set_aside) {
+        out.push_str(&format!("({line})\n"));
     }
     out
 }

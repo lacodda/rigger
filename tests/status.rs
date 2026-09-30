@@ -147,6 +147,7 @@ fn an_open_task_from_before_reads_as_new() {
          ALTER TABLE versions DROP COLUMN delivery; ALTER TABLE versions DROP COLUMN registries;
          ALTER TABLE versions DROP COLUMN delivered_by;
          DROP TABLE task_branches; DROP TABLE task_commits;
+         ALTER TABLE tasks DROP COLUMN snoozed_until;
          PRAGMA user_version = 16;",
     )
     .unwrap();

@@ -13,6 +13,9 @@
 //! files. Sorting it moves everything into `sorted/<day>/` beside it - the
 //! card's archive - and sets the form back to blank, so the next round of
 //! material arrives into an empty tray and the last one is still there.
+//! The texts a card was handed over with live in `handoff/` beside them;
+//! they are what went out, not material that came in, and sorting leaves
+//! them where they are.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -197,7 +200,7 @@ pub fn read(dir: &Path) -> Result<Option<Tray>> {
     let mut files = Vec::new();
     for entry in entries(dir)? {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == FORM || name == SORTED {
+        if name == FORM || name == SORTED || name == crate::handoff::DIR {
             continue;
         }
         walk(&entry.path(), &name, &mut files)?;
@@ -502,7 +505,7 @@ pub fn done(dir: &Path, card: &Card, day: &str) -> Result<Done> {
     let mut moved = 0;
     for entry in entries(dir)? {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == FORM || name == SORTED {
+        if name == FORM || name == SORTED || name == crate::handoff::DIR {
             continue;
         }
         std::fs::create_dir_all(&archive).with_context(|| format!("cannot create {}", archive.display()))?;
@@ -575,6 +578,7 @@ mod tests {
             summary: None,
             created_at: String::new(),
             updated_at: None,
+            snoozed_until: None,
         }
     }
 
