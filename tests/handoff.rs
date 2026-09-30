@@ -103,10 +103,14 @@ fn a_card_is_handed_over_through_a_form() {
         "{packet}"
     );
 
-    // What went out is not material that came in: sorting the tray leaves it.
+    // What went out is not material that came in: sorting the tray leaves
+    // it. A screenshot waits beside it, so the sorting really happens - an
+    // empty tray is not sorted at all and would prove nothing.
+    std::fs::write(handoff_dir(data.path()).parent().unwrap().join("shot.png"), b"png").unwrap();
     let tray = output(data.path(), &["tray", "show", "ACME-7310"]);
-    assert!(!tray.contains("handoff/"), "{tray}");
-    output(data.path(), &["tray", "done", "ACME-7310"]);
+    assert!(tray.contains("shot.png") && !tray.contains("handoff/"), "{tray}");
+    let sorted = output(data.path(), &["tray", "done", "ACME-7310"]);
+    assert!(sorted.contains("1 entry moved") || sorted.contains("1 entries moved"), "{sorted}");
     assert!(path.is_file(), "the handoff stays where it is");
 
     // Run again, it makes the same texts and records nothing twice.
