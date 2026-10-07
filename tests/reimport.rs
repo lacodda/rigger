@@ -378,3 +378,31 @@ fn a_hub_that_is_not_there_is_refused_rather_than_read_as_empty() {
         .stderr(predicate::str::contains("not a hub"));
     assert_eq!(dropped(), 0, "an empty directory strikes nothing either");
 }
+
+/// `--check` promises to say what would be recorded and write nothing. It
+/// used to reach only `--answers`: a hub import under `--check` wrote the
+/// whole plan, and on a hub being renumbered that is the import the check
+/// was meant to rehearse.
+#[test]
+fn a_checked_import_writes_nothing() {
+    let data = tempfile::tempdir().unwrap();
+    let hub = project(data.path());
+    std::fs::write(hub.join("План.md"), PLAN).unwrap();
+
+    rigger(data.path())
+        .args(["import", "sample", "--check", "--hub"])
+        .arg(&hub)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing was written").and(predicate::str::contains("versions")));
+    // Nothing of the plan is in the record, and the hub was not taken for
+    // the project's own either.
+    rigger(data.path()).args(["version", "show", "sample", "v0.2.0"]).assert().failure();
+    let shown = rigger(data.path()).args(["project", "show", "sample", "--json"]).assert().success();
+    let project: serde_json::Value = serde_json::from_slice(&shown.get_output().stdout).unwrap();
+    assert!(project["hub_path"].is_null(), "a check recorded the hub: {project}");
+
+    // The same import without --check writes what the check described.
+    rigger(data.path()).args(["import", "sample", "--hub"]).arg(&hub).assert().success();
+    rigger(data.path()).args(["version", "show", "sample", "v0.2.0"]).assert().success();
+}

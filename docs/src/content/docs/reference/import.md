@@ -4,7 +4,7 @@ description: Read a notes hub into versions, tasks and events.
 ---
 
 ```
-rigger import <PROJECT> --hub <DIR> [--json]
+rigger import <PROJECT> --hub <DIR> [--check] [--json]
 ```
 
 Reads a project's notes hub - the plan, the changelog and the decision log - and records what it finds. This is how a project that has been run by hand for months arrives in the database with its history intact.
@@ -106,6 +106,19 @@ Events are dated by `answered`, so the reasoning sits among the other events of 
 
 `--check` says what would be taken and writes nothing. `--answers` and `--hub` are two sources, not two halves of one, so asking for both is refused.
 
+## Checking before importing
+
+`--check` runs the whole import and takes all of it back: the same report, and nothing in the record changed - not the plan, not the events, not the hub path the project remembers.
+
+```console
+$ rigger import sample --check --hub C:\dev\sample\hub
+sample - what an import would change; nothing was written:
+  versions   3 added, 0 updated
+  tasks      1 added, 0 updated
+```
+
+The same code path as the import itself, rolled back, rather than a second reading that describes the first: a check that guessed could say one thing while the import did another. Until v0.27.0 `--check` reached only `--answers`, and a hub import asked only to describe itself wrote everything.
+
 ## Running it twice
 
 Importing an unchanged hub again changes nothing and says so:
@@ -159,6 +172,52 @@ error: C:\dev	ypo is not there; a hub that cannot be read is not an empty hub
 ```
 
 An empty reading names no stage, and what no reading names is struck - so a mistyped path, or a shell that left a variable unexpanded, would arrive as an instruction to strike every version of the project. A hub that holds only its handwritten texts is still a hub and is read as usual.
+
+## As JSON
+
+Reading a hub prints its report.
+
+<!-- json: import -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The name of the project. |
+| `versions_added` | integer | Versions recorded for the first time. |
+| `versions_updated` | integer | Versions that changed. |
+| `versions_dropped` | integer | Planned versions struck because the hub no longer names them. |
+| `tasks_added` | integer | Tasks recorded for the first time. |
+| `tasks_updated` | integer | Tasks that changed. |
+| `tasks_dropped` | integer | Tasks struck because the plan no longer lists them. |
+| `decisions_added` | integer | Decisions recorded. |
+| `questions_added` | integer | Questions for the owner recorded. |
+| `questions_withdrawn` | integer | Questions withdrawn because the hub no longer lists them. |
+| `wishes_added` | integer | Wishes taken out of the wishes file. |
+| `diary_added` | integer | Diary entries recorded. |
+| `diary_updated` | integer | Diary entries that changed. |
+| `prose_files` | integer | Files whose between-stage prose was taken in. |
+| `documents_added` | integer | Handwritten texts taken in as documents. |
+| `documents_updated` | integer | Documents replaced by a changed file. |
+| `warnings` | array | Things the reading noticed and went on from. |
+| `warnings[]` | string | One warning. |
+
+With `--answers` it prints what was recorded.
+
+<!-- json: import -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The name of the project. |
+| `added` | integer | Decisions and wishes recorded on this run. |
+| `already_recorded` | integer | Entries that were in the record already. |
+
+With `--answers --check` it prints what would be taken.
+
+<!-- json: import -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The name of the project. |
+| `would_take` | array | The entries that would be recorded. |
+| `would_take[]` | object | One entry. |
+| `would_take[].kind` | string | `decision` or `wish`. |
+| `would_take[].body` | string | The text it would be recorded with. |
 
 ## Related
 

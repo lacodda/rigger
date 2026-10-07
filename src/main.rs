@@ -1257,7 +1257,7 @@ fn run(cli: Cli) -> Result<()> {
             json,
         } => match answers {
             Some(answers) => import_answers(&project, &answers, check, json),
-            None => import_hub(&project, &hub.expect("clap requires --hub without --answers"), json),
+            None => import_hub(&project, &hub.expect("clap requires --hub without --answers"), check, json),
         },
         Command::Profile { command } => match command {
             ProfileCommand::List { json } => profile_list(json),
@@ -1537,7 +1537,10 @@ fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result
         );
         return Ok(());
     }
-    println!("{}:", project.name);
+    match check {
+        true => println!("{} - what an import would change; nothing was written:", project.name),
+        false => println!("{}:", project.name),
+    }
     println!("  {:<10} {added} added", "answers");
     if already > 0 {
         // Reading the same page twice is ordinary - it is how a correction
@@ -1547,7 +1550,7 @@ fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result
     Ok(())
 }
 
-fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
+fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let Some(project) = db.project_by_name(project)? else {
         bail!("no project named '{project}'; see `rigger project list`");
@@ -1557,8 +1560,14 @@ fn import_hub(project: &str, hub_dir: &Path, json: bool) -> Result<()> {
     // repository path: the hubs of this line live in a notes vault. Spelt
     // the way the platform spells it, not the way the shell happened to.
     let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
-    db.set_hub_path(project.id, hub_dir)?;
-    let report = import::import(&db, project.id, &hub)?;
+    let run = |db: &Db| {
+        db.set_hub_path(project.id, hub_dir)?;
+        import::import(db, project.id, &hub)
+    };
+    let report = match check {
+        true => db.rehearse(run)?,
+        false => run(&db)?,
+    };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);

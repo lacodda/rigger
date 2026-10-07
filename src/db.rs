@@ -4059,6 +4059,90 @@ impl Db {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    /// Runs `f` against the record and takes back everything it wrote:
+    /// what a `--check` is made of. The same code path as the real run,
+    /// so a check cannot say one thing and the run do another - which is
+    /// how `import --check` came to write the whole import it was asked
+    /// only to describe.
+    pub fn rehearse<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        self.conn.execute_batch("SAVEPOINT rehearsal")?;
+        let out = f(self);
+        self.conn.execute_batch("ROLLBACK TO rehearsal; RELEASE rehearsal")?;
+        out
+    }
+
+    /// The newest event of a project - or of one of its tasks - with this
+    /// kind and this text: how a write finds the row it just made, or the
+    /// one that already held what it was asked to write.
+    pub fn event_id_by_body(&self, project_id: i64, task_id: Option<i64>, kind: &str, body: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM events WHERE project_id = ?1 AND task_id IS ?2 AND kind = ?3 AND body = ?4 ORDER BY id DESC LIMIT 1",
+                params![project_id, task_id, kind, body],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// One event whole, with its project and card named rather than
+    /// numbered: what a write prints under `--json`.
+    pub fn event_written(&self, id: i64) -> Result<Option<EventWritten>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT e.id, p.name, e.task_id, e.kind, e.body, e.created_at, e.principle, a.name, e.due
+                 FROM events e JOIN projects p ON p.id = e.project_id LEFT JOIN projects a ON a.id = e.asked_by
+                 WHERE e.id = ?1",
+                [id],
+                |r| {
+                    Ok((
+                        EventWritten {
+                            id: r.get(0)?,
+                            project: r.get(1)?,
+                            card: None,
+                            kind: r.get(3)?,
+                            body: r.get(4)?,
+                            created_at: r.get(5)?,
+                            principle: r.get(6)?,
+                            asked_by: r.get(7)?,
+                            due: r.get(8)?,
+                        },
+                        r.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((mut event, task_id)) = row else { return Ok(None) };
+        if let Some(task_id) = task_id {
+            event.card = self.card(task_id)?.map(|c| c.key);
+        }
+        Ok(Some(event))
+    }
+
+    /// One task whole - a card or a task of a plan - as a write that changed
+    /// it prints it under `--json`.
+    pub fn task_written(&self, id: i64) -> Result<Option<TaskWritten>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT t.id, t.key, p.name, t.title, t.status, t.snoozed_until
+                 FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?1",
+                [id],
+                |r| {
+                    Ok(TaskWritten {
+                        id: r.get(0)?,
+                        card: r.get(1)?,
+                        project: r.get(2)?,
+                        title: r.get(3)?,
+                        status: r.get(4)?,
+                        snoozed_until: asleep_until(r.get(5)?, &today()),
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     }
 
     /// The open wishes of a project that a neighbour asked for.
