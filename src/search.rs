@@ -58,6 +58,10 @@ impl Provider for Fts<'_> {
 pub struct Hits {
     pub events: Vec<Found>,
     pub documents: Vec<FoundDoc>,
+    /// The phrase the query was read as, when FTS5 could not parse it as
+    /// it was written; absent when it could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_as: Option<String>,
 }
 
 impl Hits {
@@ -71,13 +75,34 @@ impl Hits {
 /// Documents are asked for only when no kind was named: `--kind pitfall`
 /// is a question about events, and a vision matching the word would be an
 /// answer to a question nobody asked.
+///
+/// A query FTS5 cannot parse as written - `budget AND`, a stray quote - is
+/// asked again as one exact phrase, and the answer says so. The person was
+/// looking for something they had seen written; an error about the query
+/// language is an answer to a question they did not ask.
 pub fn look(provider: &dyn Provider, query: &str, project: Option<&str>, kind: Option<&str>, limit: u32) -> Result<Hits> {
-    let events = provider.events(query, project, kind, limit)?;
-    let documents = match kind {
-        Some(_) => Vec::new(),
-        None => provider.documents(query, project, limit)?,
+    let ask = |query: &str| -> Result<Hits> {
+        let events = provider.events(query, project, kind, limit)?;
+        let documents = match kind {
+            Some(_) => Vec::new(),
+            None => provider.documents(query, project, limit)?,
+        };
+        Ok(Hits {
+            events,
+            documents,
+            read_as: None,
+        })
     };
-    Ok(Hits { events, documents })
+    match ask(query) {
+        Ok(hits) => Ok(hits),
+        Err(first) => {
+            let phrase = format!("\"{}\"", query.trim().replace('"', "\"\""));
+            match ask(&phrase) {
+                Ok(hits) => Ok(Hits { read_as: Some(phrase), ..hits }),
+                Err(_) => Err(first),
+            }
+        }
+    }
 }
 
 /// One document, as `find` prints it.
@@ -142,18 +167,37 @@ pub fn why(db: &Db, project: &crate::db::Project, version: &str) -> Result<Why> 
 /// `миграции`, `миграцию`, `миграцией`. English loses nothing by the same
 /// rule - `budget` and `budget*` match the same events here.
 ///
+/// A word with punctuation in it - the `.` of `v0.27.0`, the `-` of
+/// `ACME-7310` or `furca-core`, the `/` of a path - is not a word to FTS5
+/// but syntax, and the search failed on exactly the strings people copy out
+/// of the record to look for. Such a word becomes an exact phrase: FTS5
+/// splits it into its pieces and wants them side by side.
+///
 /// Anything with FTS5 syntax in it - quotes, an operator, a column filter,
 /// an explicit `*` - is passed through untouched, so the full language stays
 /// available to whoever wants it.
 pub fn as_fts_query(query: &str) -> String {
     let query = query.trim();
-    let has_syntax = query.contains(['"', '*', '(', ')', ':', '^', '-']) || query.split_whitespace().any(|w| matches!(w, "AND" | "OR" | "NOT" | "NEAR"));
+    let has_syntax = query.contains(['"', '*', '(', ')', ':', '^']) || query.split_whitespace().any(|w| matches!(w, "AND" | "OR" | "NOT" | "NEAR"));
     if has_syntax || query.is_empty() {
         return query.to_string();
     }
-    // Several bare words: each becomes a prefix, and FTS5 requires all of
-    // them - which is what a person typing two words means.
-    query.split_whitespace().map(|word| format!("{word}*")).collect::<Vec<_>>().join(" ")
+    // Several words: FTS5 requires all of them - which is what a person
+    // typing two words means.
+    query
+        .split_whitespace()
+        .map(|word| match is_bareword(word) {
+            true => format!("{word}*"),
+            false => format!("\"{word}\""),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether FTS5 reads a word as it is: ASCII letters and digits, `_`, and
+/// anything outside ASCII. Every other character is its syntax.
+fn is_bareword(word: &str) -> bool {
+    word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii())
 }
 
 /// One event, as both commands print it.
@@ -287,10 +331,28 @@ mod tests {
     }
 
     #[test]
+    fn a_word_with_punctuation_becomes_an_exact_phrase() {
+        // The strings people copy out of the record: a version, a ticket,
+        // a crate, a path, a date. Each was a syntax error.
+        assert_eq!(as_fts_query("v0.27.0"), "\"v0.27.0\"");
+        assert_eq!(as_fts_query("ACME-7310"), "\"ACME-7310\"");
+        assert_eq!(as_fts_query("furca-core"), "\"furca-core\"");
+        assert_eq!(as_fts_query("inbox/intake/video"), "\"inbox/intake/video\"");
+        assert_eq!(as_fts_query("сверка 11.09"), "сверка* \"11.09\"");
+    }
+
+    #[test]
     fn a_query_that_uses_the_syntax_is_left_alone() {
         // The full FTS5 language stays available; guessing at it would turn
         // a deliberate search into a different one.
-        for query in ["\"exact phrase\"", "budget AND packet", "миграц*", "packet NOT commit", "body:decision"] {
+        for query in [
+            "\"exact phrase\"",
+            "budget AND packet",
+            "миграц*",
+            "packet NOT commit",
+            "body:decision",
+            "(budget OR packet)",
+        ] {
             assert_eq!(as_fts_query(query), query, "{query} must pass through untouched");
         }
     }

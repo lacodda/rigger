@@ -329,3 +329,52 @@ fn a_change_recorded_with_only_its_day_is_given_back_its_time() {
         "a corrected timestamp must file the change under its own release: {after}"
     );
 }
+
+/// The strings people copy out of the record to look for - a version, a
+/// ticket id, a crate's name, a path, a date - were syntax errors to FTS5.
+#[test]
+fn what_is_copied_out_of_the_record_can_be_looked_for() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("sample");
+    std::fs::create_dir_all(&root).unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    for text in [
+        "Released v0.27.0 with the contract",
+        "ACME-7310 waits for the reader",
+        "sync reads through furca-core now",
+        "the tray takes inbox/intake/video files",
+        "сверка 11.09 settled the order",
+        "budget AND packet stays the language of the index",
+    ] {
+        rigger(data.path()).args(["note", "sample", text]).assert().success();
+    }
+    for (query, found) in [
+        ("v0.27.0", "Released v0.27.0"),
+        ("ACME-7310", "ACME-7310 waits"),
+        ("furca-core", "furca-core now"),
+        ("inbox/intake/video", "inbox/intake/video files"),
+        ("сверка 11.09", "сверка 11.09"),
+    ] {
+        rigger(data.path())
+            .args(["find", query])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(found).and(predicate::str::contains("read as the phrase").not()));
+    }
+
+    // Syntax that does not parse is asked again as the phrase it is, and the
+    // answer says so - in the text and in the JSON.
+    rigger(data.path())
+        .args(["find", "budget AND"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read as the phrase \"budget AND\"").and(predicate::str::contains("budget AND packet stays")));
+    let out = rigger(data.path()).args(["find", "budget AND", "--json"]).assert().success();
+    let hits: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(hits["read_as"], "\"budget AND\"");
+    // And syntax that parses is the language it always was.
+    let out = rigger(data.path()).args(["find", "budget AND packet", "--json"]).assert().success();
+    let hits: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert!(hits.get("read_as").is_none(), "{hits}");
+}

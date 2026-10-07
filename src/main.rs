@@ -2140,6 +2140,9 @@ fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], 
 
 fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>, due: Option<&str>) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
+    if let Some(phrase) = &hits.read_as {
+        println!("(read as the phrase {phrase}: FTS5 could not parse the query as it was written)");
+    }
     let project = open_project(&db, project)?;
     // Read before anything is written, so that a day that is not a day
     // refuses the question rather than leaving it recorded without one.
