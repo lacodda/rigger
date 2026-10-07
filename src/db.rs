@@ -3028,6 +3028,45 @@ impl Db {
 
     pub fn count_versions(&self, project_id: i64, status: &str) -> Result<u64> {
         let n: i64 = self.conn.query_row(
+    /// Where the plan and the tags look one step apart: a version closed
+    /// without a tag sitting right beside a tag the plan never named.
+    ///
+    /// Either alone is ordinary - a tag not fetched yet, a release older
+    /// than the plan. Side by side they are the shape of a plan that ran a
+    /// step ahead of its tags: rhapsod's stage v0.10.0 took the tag of the
+    /// stage before it, and the record read both as true. Each pair comes
+    /// back as (closed without a tag, tagged without a stage), neighbours in
+    /// version order.
+    pub fn one_step_apart(&self, project_id: i64) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, status, shipped_source, title IS NULL AND heading IS NULL FROM versions WHERE project_id = ?1")?;
+        let mut versions: Vec<(String, bool, bool)> = stmt
+            .query_map([project_id], |r| {
+                let name: String = r.get(0)?;
+                let status: String = r.get(1)?;
+                let source: Option<String> = r.get(2)?;
+                let unnamed: bool = r.get(3)?;
+                let tagged = source.as_deref() == Some("tag");
+                // (name, closed without a tag, tagged without a stage)
+                Ok((name, status == "shipped" && !tagged, tagged && unnamed))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        versions.sort_by_key(|(name, _, _)| version_order(name));
+        let mut out = Vec::new();
+        for pair in versions.windows(2) {
+            let [(a, a_closed, a_unnamed), (b, b_closed, b_unnamed)] = pair else {
+                continue;
+            };
+            if *a_closed && *b_unnamed {
+                out.push((a.clone(), b.clone()));
+            } else if *b_closed && *a_unnamed {
+                out.push((b.clone(), a.clone()));
+            }
+        }
+        Ok(out)
+    }
+
             "SELECT COUNT(*) FROM versions WHERE project_id = ?1 AND status = ?2",
             params![project_id, status],
             |r| r.get(0),

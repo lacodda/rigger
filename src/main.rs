@@ -6687,3 +6687,22 @@ mod tests {
         assert!(!super::is_a_closed_pipe("attempt to divide by zero"));
     }
 }
+    let mut apart = Vec::new();
+        for (closed, tagged) in db.one_step_apart(project.id)? {
+            apart.push((project.name.clone(), closed, tagged));
+        }
+                "one_step_apart": apart
+                    .iter()
+                    .map(|(project, closed, tagged)| serde_json::json!({ "project": project, "closed": closed, "tagged": tagged }))
+                    .collect::<Vec<_>>(),
+    if !apart.is_empty() {
+        println!(
+            "
+the plan and the tags look one step apart ({}):",
+            apart.len()
+        );
+        for (project, closed, tagged) in &apart {
+            println!("  {project:<12} {closed} closed without a tag, beside {tagged} tagged without a stage");
+        }
+        println!("  the tags may name the stage before the one the plan gave them; renumber the plan, or tag the stage");
+    }

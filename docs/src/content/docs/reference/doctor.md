@@ -34,6 +34,52 @@ With `--json`:
 }
 ```
 
+Before `init`, only `profile`, `database` and `initialised` (false) are printed.
+
+<!-- json: doctor -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `profile` | string | The name of the profile in use. |
+| `database` | string | The database path. |
+| `initialised` | boolean | Whether the database exists. |
+| `schema_version` | integer | The schema version the database holds. |
+| `counts` | object | How many records of each kind the database holds. |
+| `counts.projects` | integer | Projects. |
+| `counts.versions` | integer | Versions. |
+| `counts.tasks` | integer | Tasks. |
+| `counts.sessions` | integer | Sessions. |
+| `counts.events` | integer | Events. |
+| `mcp` | object | What the built-in MCP server answered to a self-check. |
+| `mcp.version` | string | The server's version. |
+| `mcp.protocol` | string | The MCP protocol version it speaks. |
+| `mcp.tools` | integer | How many tools it offers. |
+| `mcp.prompts` | integer | How many prompts it offers. |
+| `backup` | object | How old the newest database copy is. |
+| `backup.newest_at` | string or null | When the newest copy was taken, in RFC 3339 UTC; null when there is none. |
+| `backup.age_days` | integer or null | Whole days since then; null when there is no copy. |
+| `backup.copies` | integer | How many copies are kept. |
+| `backup.state` | string | `fresh` (under a day), `stale` (a day or more), `old` (a week or more) or `none`. |
+| `hubs` | array or null | Hub files the record cannot vouch for; null unless `--hubs` is given. |
+| `hubs[]` | object | One such hub file. |
+| `hubs[].project` | string | The project's name. |
+| `hubs[].file` | string | The file, several joined by `, ` when kept by hand, or `-` when no hub is known. |
+| `hubs[].why` | string | The reason the file cannot be vouched for. |
+| `closed_without_a_tag` | array | Versions the plan closed that no tag confirms. |
+| `closed_without_a_tag[]` | object | One such version. |
+| `closed_without_a_tag[].project` | string | The project's name. |
+| `closed_without_a_tag[].version` | string | The version. |
+| `one_step_apart` | array | Places where the plan and the tags look one step apart. |
+| `one_step_apart[]` | object | One such place: two neighbouring versions of one project. |
+| `one_step_apart[].project` | string | The project's name. |
+| `one_step_apart[].closed` | string | The version the plan closed with no tag to show for it. |
+| `one_step_apart[].tagged` | string | Its neighbour: a tag the plan never named a stage for. |
+| `never_synced` | array | Projects `sync` has never read. |
+| `never_synced[]` | string | A project's name. |
+| `wishes_left_in_the_hub` | array | Projects with wishes waiting in `Хотелки.md`. |
+| `wishes_left_in_the_hub[]` | object | One such project. |
+| `wishes_left_in_the_hub[].project` | string | The project's name. |
+| `wishes_left_in_the_hub[].wishes` | integer | How many wishes wait. |
+
 ## How old the insurance is
 
 The record is one file. `backup:` says when the newest copy of it was taken, and how many are kept:
@@ -72,6 +118,20 @@ closed in the plan, no tag in git (1):
 ```
 
 Reported, never corrected. A missing tag is not proof a release did not happen - it may simply never have been fetched - and silently reopening a version would erase what you wrote ([ADR 0005](https://github.com/lacodda/rigger/blob/main/docs/adr/0005-facts-from-git.md)).
+
+### One step apart
+
+Either half alone is ordinary - a tag not fetched yet, a release older than the plan. Side by side they are the shape of a plan running a step ahead of its tags: a version closed without a tag, right beside a tag the plan never named a stage for. Since v0.27.0 `doctor` names each such pair:
+
+```console
+$ rigger doctor
+...
+the plan and the tags look one step apart (1):
+  sample       v0.2.0 closed without a tag, beside v0.3.0 tagged without a stage
+  the tags may name the stage before the one the plan gave them; renumber the plan, or tag the stage
+```
+
+Reported, like the list above it, and never corrected: which of the two is right is a question about the work, and the record cannot answer it. Tagging the closed stage, or renumbering the plan so its stages carry the numbers the tags gave them, settles it. Under `--json` the pairs are `one_step_apart`.
 
 A project that has never been synced is named rather than judged: without a sync there is no way to tell a claim from a fact, and `doctor` says which projects it cannot speak for.
 

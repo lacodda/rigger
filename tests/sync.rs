@@ -450,3 +450,48 @@ fn work_since_a_release_includes_a_branch_begun_before_it() {
         .success()
         .stdout(predicate::str::contains("activity   2 commits since v0.1.0"));
 }
+
+#[test]
+fn a_plan_one_step_ahead_of_its_tags_is_named_by_doctor() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("proj");
+    // The changelog closes v0.2.0, which git never tagged; git has v0.3.0,
+    // which the plan never named. Side by side, that is a plan whose stages
+    // took the numbers of the tags one step on.
+    repo_with_history(&root, &[("first", "v0.1.0"), ("second", "v0.3.0")]);
+    hub(
+        &root.join("hub"),
+        "# План\n\n## v0.4.0 · Fourth\n\n- [ ] a task\n",
+        "# Изменения\n\n## v0.2.0 · Second — выпущен 2026-01-02\n\n## v0.1.0 · First — выпущен 2026-01-01\n",
+    );
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+    rigger(data.path()).args(["sync", "proj"]).assert().success();
+
+    rigger(data.path())
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("v0.2.0 closed without a tag, beside v0.3.0 tagged without a stage"));
+    let out = rigger(data.path()).args(["doctor", "--json"]).assert().success();
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(
+        json["one_step_apart"],
+        serde_json::json!([{ "project": "proj", "closed": "v0.2.0", "tagged": "v0.3.0" }])
+    );
+
+    // Tagging the closed stage settles it: no version closed without a tag,
+    // nothing one step apart.
+    std::process::Command::new("git")
+        .args(["tag", "v0.2.0", "HEAD~1"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    rigger(data.path()).args(["sync", "proj"]).assert().success();
+    rigger(data.path())
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("one step apart").not());
+}
