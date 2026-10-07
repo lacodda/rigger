@@ -63,6 +63,30 @@ gamma  no hub
 Nothing was written. Run again without --check to record them.
 ```
 
+## JSON
+
+`adopt --json` prints an array with one row per checkout.
+
+<!-- json: adopt -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One checkout. |
+| `[].name` | string | The project's name, taken from the directory. |
+| `[].path` | string | The path of the checkout. |
+| `[].status` | string | `recorded`, `known`, `no-hub` (a hubs directory was given and holds no hub of this name) or `skipped`. |
+| `[].why` | string or null | Why a checkout was skipped; `null` for every other status. |
+| `[].hub` | string or null | The path of the hub that was found; null when there is none. |
+| `[].versions_added` | integer | Versions read from the hub. |
+| `[].tasks_added` | integer | Tasks read from the hub. |
+| `[].diary_added` | integer | Diary entries read from the hub. |
+| `[].prose_files` | integer | Files whose prose was taken in. |
+| `[].tasks_dropped` | integer | Tasks struck from the hub since it was last read. |
+| `[].versions_dropped` | integer | Versions struck from the hub since it was last read. |
+| `[].shipped` | integer | Versions a tag proved shipped. |
+| `[].changes_read` | integer | Changes read from commit messages. |
+| `[].warnings` | array | Things noticed and gone on from. |
+| `[].warnings[]` | string | One warning. |
+
 ## Related
 
 - [`project add`](/rigger/reference/project/) - one project at a time, with a name of your choosing.

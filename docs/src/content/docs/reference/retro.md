@@ -80,6 +80,57 @@ Without one, `--record` says so and names the fix rather than filing the summary
 
 The event is dated by the **window** it looked at, not by the moment it ran, so asking for the same retro twice keeps it once. A window where nothing shipped and nothing was planned is not kept at all: a retro is filed so a later one can find a conclusion, and "nothing" concludes nothing.
 
+## JSON
+
+`retro --json` prints the window and the counts as data.
+
+<!-- json: retro -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `from` | string | The first week of the window, as `2026-W34`. |
+| `to` | string | The last week of the window, as `2026-W40`. |
+| `weeks` | integer | How many weeks the window holds. |
+| `shipped` | array | Every release inside the window. |
+| `shipped[]` | object | One release and what the plan had said about it. |
+| `shipped[].project` | string | The project. |
+| `shipped[].version` | string | The version's number. |
+| `shipped[].week` | string | The week its tag is in. |
+| `shipped[].planned` | string or null | The week it was aimed at, or `null` if never aimed. |
+| `shipped[].slip` | integer or null | Weeks between the plan and the tag, positive when late; `null` when unplanned. |
+| `missed` | array | Versions aimed at a week in the window that never got a tag. |
+| `missed[]` | object | One such version. |
+| `missed[].project` | string | The project. |
+| `missed[].version` | string | The version's number. |
+| `missed[].planned` | string | The week it was aimed at. |
+| `missed[].weeks` | integer | Weeks from that week to the end of the window. |
+| `standings` | array | What each project did with the window. |
+| `standings[]` | object | One project's standing. |
+| `standings[].project` | string | The project. |
+| `standings[].tier` | string or null | Its tier: `A`, `B`, `C` or `out`; `null` when it has none. |
+| `standings[].rhythm_weeks` | integer or null | How many weeks between releases its tier asks for, or `null`. |
+| `standings[].shipped` | integer | Releases in the window. |
+| `standings[].planned_and_shipped` | integer | Of those, how many had been aimed at a week. |
+| `standings[].missed` | integer | Versions aimed at the window that never shipped. |
+| `standings[].expected` | integer or null | Releases the tier's rhythm asked for over the window, or `null`. |
+| `on_time` | integer | Releases that landed in the week they were aimed at. |
+| `slipped` | integer | Releases aimed at one week that landed in another. |
+| `unplanned` | integer | Releases nobody aimed at a week. |
+| `planned_share` | integer or null | The percentage of releases that had been planned, truncated; `null` when nothing shipped. |
+| `parted` | array | The pairs whose halves have parted company. |
+| `parted[]` | object | A pair of linked projects whose halves have parted company. |
+| `parted[].drift` | string | How they parted: `shipped-alone` (one half is tagged, the other is not) or `run-ahead` (one end moved on by several versions while the other stood still). |
+| `parted[].ahead` | object | The end that went ahead, or shipped. |
+| `parted[].ahead.project` | string | The project at that end. |
+| `parted[].ahead.version` | string or null | The version anchored on that side, or `null` when none is. |
+| `parted[].ahead.shipped` | boolean or null | Whether that version has a tag; `null` when no version is anchored. |
+| `parted[].behind` | object | The end left behind. |
+| `parted[].behind.project` | string | The project at that end. |
+| `parted[].behind.version` | string or null | The version anchored on that side, or `null` when none is. |
+| `parted[].behind.shipped` | boolean or null | Whether that version has a tag; `null` when no version is anchored. |
+| `parted[].versions` | integer or null | How many versions apart the ends are, for `run-ahead`; otherwise `null`. |
+| `parted[].note` | string or null | What the pair shares, as the link records it, or `null`. |
+| `summary` | string | The one-line summary that `--record` keeps. |
+
 ## Related
 
 - [`calendar`](/rigger/reference/calendar/) - the same facts looking forward, as a grid.

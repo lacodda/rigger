@@ -137,7 +137,71 @@ A card with a tray says so on its [screen and in its packet](/rigger/reference/t
 }
 ```
 
-`fetch` and `intake` give `card`, `path`, `from` (where they took from), `taken` (as `files` above) and `skipped` - each with its `path`, `bytes` and `why`: `video`, `too-big`, `present` or `differs`. `done` gives `card`, `moved`, `archive` and `form` (whether a filled form went with it). `list` gives, per tray, `key`, `title` and `status` of its card (`null` when no card has that name), `path`, `files` and `form_filled`.
+`edit` prints the same as `show`.
+
+<!-- json: tray show, tray edit -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `card` | object | The card the tray belongs to. |
+| `card.key` | string | The card's key. |
+| `card.title` | string | The card's title. |
+| `made` | boolean | Whether this call made the tray. |
+| `path` | string | The tray's directory. |
+| `form` | object | The tray's form. |
+| `form.path` | string | The form's path. |
+| `form.filled` | boolean | Whether any line in the form is an answer. |
+| `files` | array | What waits to be sorted, oldest first. |
+| `files[]` | object | One file in the tray. |
+| `files[].path` | string | The file's path relative to the tray, with `/` between the parts. |
+| `files[].bytes` | integer | The size in bytes. |
+| `files[].modified` | string or null | When the file was last written, in RFC 3339 UTC. |
+| `sorted` | array | The rounds sorted before, oldest first. |
+| `sorted[]` | object | One sorted round. |
+| `sorted[].day` | string | The local day the round was sorted, as `YYYY-MM-DD`. |
+| `sorted[].files` | integer | How many entries the round holds. |
+
+`fetch` and `intake` print what they took and what they left.
+
+<!-- json: tray fetch, tray intake -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `card` | string | The card's key. |
+| `path` | string | The tray's directory. |
+| `from` | array | Where the files were taken from. |
+| `from[]` | string | One directory or file. |
+| `taken` | array | The files copied into the tray. |
+| `taken[]` | object | One file copied. |
+| `taken[].path` | string | The file's path relative to the tray. |
+| `taken[].bytes` | integer | The size in bytes. |
+| `taken[].modified` | string or null | When the file was last written, in RFC 3339 UTC. |
+| `skipped` | array | The files left where they were. |
+| `skipped[]` | object | One file left. |
+| `skipped[].path` | string | Where the file is. |
+| `skipped[].bytes` | integer | The size in bytes. |
+| `skipped[].why` | string | Why it was left: `video`, `too-big`, `present` or `differs`. |
+
+`done` prints what it moved.
+
+<!-- json: tray done -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `card` | string | The card's key. |
+| `moved` | integer | How many files and folders were moved. |
+| `archive` | string or null | The `sorted/<day>` directory they went to; null when nothing waited. |
+| `form` | boolean | Whether a filled form went with them. |
+
+`list` prints an array with one element per tray.
+
+<!-- json: tray list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One tray with something waiting in it. |
+| `[].key` | string | The tray's name, which is its card's key. |
+| `[].title` | string or null | The card's title; null when no card has that name. |
+| `[].status` | string or null | The card's status; null when no card has that name. |
+| `[].path` | string | The tray's directory. |
+| `[].files` | integer | How many files wait in it. |
+| `[].form_filled` | boolean | Whether the form has an answer in it. |
 
 ## Related
 

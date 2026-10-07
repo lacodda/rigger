@@ -19,6 +19,18 @@ $ rigger export sample --hub C:\dev\sample\hub
 sample wrote 3 of 3 files.
 ```
 
+Under `--json` a hub export prints the files it produced:
+
+<!-- json: export -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project's name. |
+| `files` | array | The files the export produced, in the order it wrote them. |
+| `files[]` | object | One file. |
+| `files[].file` | string | The file's name in the hub, like `План.md`. |
+| `files[].bytes` | integer | Its size in bytes. |
+| `files[].unchanged` | boolean | Whether the file on disk already said exactly this. |
+
 ## What it writes, and what it never touches
 
 | File | Where it comes from |
@@ -138,6 +150,34 @@ Wrote ..\line\line.json - 18 products
 ```
 
 The fields come from [`project mark`](/rigger/reference/project/) and from the repository itself. A product recorded before its mark was drawn is still published, with those fields simply absent - leaving it out would make the registry disagree with the record about what exists, which is the fault this command fixes. Without `--to` the JSON goes to standard output.
+
+With `--to` and `--json`, it prints what was written instead of the registry:
+
+<!-- json: export -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `path` | string | The file named by `--to`. |
+| `product_count` | integer | How many products the registry holds. |
+| `changed` | boolean | Whether the registry differs from what the file held. |
+| `written` | boolean | Whether the file was written. |
+
+Without `--to` the registry itself is the output; its products leave out any field the record does not have (`about` among them):
+
+<!-- json: export -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `generator` | string | What wrote the registry: always `rigger`. |
+| `version` | string | The rigger version that wrote it. |
+| `products` | array | The line's products, sorted by name. |
+| `products[]` | object | One product. |
+| `products[].name` | string | The project's name. |
+| `products[].about` | string | What the product is, in one line read from its manifest; left out when none says. |
+| `products[].mark` | string | The product's monogram. |
+| `products[].accent` | string | The mark's colour, `#RRGGBB`. |
+| `products[].accent2` | string | The second colour, for a mark drawn as a pair. Absent when there is none. |
+| `products[].form` | string | What shape of thing it is: `cli`, `desktop`, `web`, `library` or `service`. |
+| `products[].repository` | string | The repository's `https://` address. |
+| `products[].docs` | string | The documentation's `https://` address. |
 
 ### What it will not publish
 

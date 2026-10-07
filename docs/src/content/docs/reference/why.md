@@ -53,6 +53,49 @@ The number is matched by value, not by text, so `v1.9`, `1.9` and `v1.9.0` all f
 
 A version the record does not have is refused, with a pointer to what it does have.
 
+## JSON
+
+Under `--json` a version prints its window: the project, the version, the version before it, then the events between them.
+
+<!-- json: why -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project's name. |
+| `version` | object | The version asked about. |
+| `version.name` | string | The version, as the record spells it. |
+| `version.title` | string | The stage's title. |
+| `version.status` | string | The version's state, such as `planned` or `shipped`. |
+| `version.shipped_at` | string | The day it shipped, `YYYY-MM-DD`. |
+| `version.shipped_ts` | string | The moment it was tagged, RFC 3339 UTC. |
+| `after` | object | The release before it, which bounds the window. |
+| `after.name` | string | That version. |
+| `after.title` | string | Its title. |
+| `after.status` | string | Its state. |
+| `after.shipped_at` | string | The day it shipped, `YYYY-MM-DD`. |
+| `after.shipped_ts` | string | The moment it was tagged, RFC 3339 UTC. |
+| `events` | array | The events recorded in the window. |
+| `events[]` | object | One event. |
+| `events[].project` | string | The project it belongs to. |
+| `events[].kind` | string | `decision`, `finding`, `pitfall`, `change`, `question` or `wish`. |
+| `events[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
+| `events[].body` | string | The event's text. |
+| `events[].from_git` | boolean | Whether it was read from a commit message. |
+| `events[].commit_hash` | string or null | The commit it came from; null for what a person wrote. |
+
+With `--principle` it prints an array of the decisions standing on that principle, oldest first. With `--principles` it prints an array of pairs, each a principle's name and the number of decisions on it.
+
+<!-- json: why -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | A decision standing on the principle, with `--principle`; a principle, with `--principles`. |
+| `[].principle` | string | With `--principles`: the principle's name, as decisions spell it. |
+| `[].decisions` | integer | With `--principles`: how many decisions stand on it. |
+| `[].project` | string | The project the decision belongs to. |
+| `[].kind` | string | The event's kind; always `decision`. |
+| `[].at` | string | When it was recorded, RFC 3339 UTC. |
+| `[].body` | string | The decision's text. |
+| `[].version` | string or null | The version it was recorded against; null when it was against none. |
+
 ## A principle, across the line
 
 A version is one window on the record. A principle is another, cut the other way: every decision that stands on one thing this line believes, from every project, oldest first.

@@ -33,6 +33,21 @@ A session on sample is already open, since 2026-09-05T09:12:44Z.
 
 An assistant that lost its place, or a hook that fired again, would otherwise orphan half its events under a session nobody ever ends.
 
+Under `--json` it prints the session and whether it was already open:
+
+<!-- json: session start -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session` | object | The open sitting. |
+| `session.id` | integer | The session's id. |
+| `session.project_id` | integer | The id of the project it belongs to. |
+| `session.started_at` | string | When it opened, an RFC 3339 UTC moment. |
+| `session.ended_at` | null | Always `null`: the sitting is open. |
+| `already_open` | boolean | `true` when a sitting was already open and this call joined it. |
+| `kasl` | object | What kasl made of being told about the sitting. |
+| `kasl.state` | string | `taken` (kasl took it), `absent` (no kasl, or one that does not know `focus`) or `refused` (kasl said no; its first line follows in `kasl.said`). |
+| `kasl.said` | string | Only when `refused`: the first line kasl said. |
+
 ### Told to kasl
 
 kasl measures the working day; rigger knows what the day was spent on. When a sitting opens, rigger tells [kasl](https://github.com/lacodda/kasl) what it is about, and when it closes, that the interval is over - so the time and the work are one truth, and kasl's report names the stage:
@@ -59,6 +74,49 @@ Write it into a diary with: rigger session end sample --diary <file>
 ```
 
 The chronicle [`sync`](/rigger/reference/sync/) reads out of commit messages is not counted: it is what git already says, and counting it would make any session that happened to run `sync` look productive.
+
+Under `--json` it prints the sitting's summary, then what came of closing it:
+
+<!-- json: session end, session draft -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session` | object | What the sitting turned out to hold. |
+| `session.project` | string | The project's name. |
+| `session.session` | integer | The session's id. |
+| `session.started_at` | string | When it opened, an RFC 3339 UTC moment. |
+| `session.ended_at` | string | When it closed (or, for a draft, the moment the draft was made), an RFC 3339 UTC moment. |
+| `session.decisions` | array | Decisions recorded during the sitting. |
+| `session.decisions[]` | string | One decision. |
+| `session.findings` | array | Findings recorded during the sitting. |
+| `session.findings[]` | string | One finding. |
+| `session.pitfalls` | array | Pitfalls recorded during the sitting. |
+| `session.pitfalls[]` | string | One pitfall. |
+| `session.changes` | array | Changes recorded during the sitting. |
+| `session.changes[]` | string | One change. |
+| `session.questions` | array | Questions raised for the owner during the sitting. |
+| `session.questions[]` | string | One question. |
+| `session.next_step` | string or null | The line the next session starts from; `null` when none was set. |
+| `session.shipped` | array | Versions whose tags landed inside the sitting. |
+| `session.shipped[]` | string | One version. |
+| `session.tasks_closed` | array | Tasks closed while the sitting was open. |
+| `session.tasks_closed[]` | string | One task title. |
+| `session.commits` | array | Commits made while the sitting was open. |
+| `session.commits[]` | string | One commit's subject line. |
+
+<!-- json: session end -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `missing` | array | What the ritual would have asked for and did not get, as sentences; empty when nothing is missing. |
+| `missing[]` | string | One reminder. |
+| `diary` | string or null | The diary file the entry was appended to with `--diary`; `null` without it. |
+| `backup` | string or null | The backup file taken at close; `null` when today's or a recent copy already exists, or the copy failed. |
+| `on_session_end` | object or null | What the project's closing command came to; `null` when the project has none. |
+| `on_session_end.command` | string | The command that ran. |
+| `on_session_end.passed` | boolean | Whether it came back green. |
+| `on_session_end.verdict` | string | How it ended, in a line. |
+| `kasl` | object | What kasl made of being told about the sitting. |
+| `kasl.state` | string | `taken` (kasl took it), `absent` (no kasl, or one that does not know `focus`) or `refused` (kasl said no; its first line follows in `kasl.said`). |
+| `kasl.said` | string | Only when `refused`: the first line kasl said. |
 
 ## What the ritual asks for
 
@@ -109,6 +167,15 @@ $ rigger session end sample --heading "v0.3.0 «Search»" --entry entry.md
 ```
 
 `--entry` takes a file, or `-` for standard input. The edited entry replaces the composed one in the record and, with `--diary`, in the file. One without a `## ` heading line gets today's. It is read before the sitting closes, so an entry that cannot be read leaves the session open to try again rather than closed without its diary.
+
+Under `--json` it prints the same `session` summary as `end`, then the entry:
+
+<!-- json: session draft -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `done` | array | What the sitting did, once each: closed tasks, changes and commits. |
+| `done[]` | string | One line of it. |
+| `entry` | string | The diary entry the sitting would leave, in Markdown, starting with a `## ` heading. |
 
 ### In the record
 

@@ -81,6 +81,26 @@ $ rigger gate rigger --json
 }
 ```
 
+A run prints this.
+
+<!-- json: gate -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The name of the project. |
+| `command` | string | The gate line that was run. |
+| `passed` | boolean | Whether the gate exited zero. |
+| `exit_code` | integer | The exit code of the gate. |
+| `seconds` | integer | How long it took, in whole seconds. |
+
+With `--check` it prints what would run.
+
+<!-- json: gate -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The name of the project. |
+| `command` | string | The gate line that would run. |
+| `dir` | string | The directory it would run in. |
+
 ## Notes
 
 The gate is a **shell line**, not a program with arguments: it is handed to `cmd /C` on Windows and `sh -c` elsewhere, so `&&` means what it means in a shell.

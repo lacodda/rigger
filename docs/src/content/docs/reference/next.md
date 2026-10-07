@@ -83,32 +83,54 @@ A project set to `out`, or with no tier at all, raises nothing.
 
 `next --json` is what a release engine reads to learn what the week is aiming at - with [`version show --json`](/rigger/reference/version/#the-json-is-a-contract), it is how `furca release plan` proposes a number and a theme from the record rather than from commits alone. Every field is named here, and the test suite fails when the JSON prints one this page does not name.
 
-| Field | What it holds |
-| --- | --- |
-| `week` | the week read, as `2026-W39` |
-| `friday` | its Friday, as `2026-09-25` |
-| `focus` | the versions aimed at this week with no tag yet |
-| `overdue` | the versions aimed at a week already gone, with no tag |
-| `lapsed` | the projects behind the rhythm of their tier |
-| `signals` | the projects whose tier asks for more |
-| `parted` | the pairs whose halves have parted company |
-
-A version in `focus` or `overdue`:
-
-| Field | What it holds |
-| --- | --- |
-| `project` | the project |
-| `tier` | its tier, `A`, `B`, `C` or `out`, or `null` |
-| `version` | the version's number |
-| `title` | the stage's title, or `null` |
-| `planned` | the week it was aimed at |
-| `overdue_weeks` | how many weeks that week is past; `null` in `focus` |
-
-A project in `lapsed`: `project`, `tier`, `rhythm_weeks` (what the tier asks), `since` (the week of its last release, or `null` for never) and `weeks` (how many weeks without one).
-
-A project in `signals`: `project`, `tier`, `signal` (`missed-cycle`, `without-focus` or `second-start`), `weeks` (for the two measured in weeks, else `null`) and `alongside` (the other project, for `second-start`, else `null`).
-
-A pair in `parted`: `drift` (`shipped-alone` or `run-ahead`), `ahead` and `behind` (each an end: `project`, `version` and `shipped`, whether that version has a tag), `versions` (how far apart, for `run-ahead`) and `note` (what the pair shares, as the link says).
+<!-- json: next -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `week` | string | The week read, as `2026-W39`. |
+| `friday` | string | Its Friday, as `2026-09-25`. |
+| `focus` | array | The versions aimed at this week with no tag yet. |
+| `focus[]` | object | A version aimed at the week that has no tag yet. |
+| `focus[].project` | string | The project. |
+| `focus[].tier` | string or null | Its tier: `A`, `B`, `C` or `out`; `null` when it has none. |
+| `focus[].version` | string | The version's number. |
+| `focus[].title` | string or null | The stage's title, or `null`. |
+| `focus[].planned` | string | The week it was aimed at, as `2026-W41`. |
+| `focus[].overdue_weeks` | integer or null | Always `null` in `focus`. |
+| `overdue` | array | The versions aimed at a week already gone, with no tag. |
+| `overdue[]` | object | A version aimed at a week already gone, with no tag. |
+| `overdue[].project` | string | The project. |
+| `overdue[].tier` | string or null | Its tier: `A`, `B`, `C` or `out`; `null` when it has none. |
+| `overdue[].version` | string | The version's number. |
+| `overdue[].title` | string or null | The stage's title, or `null`. |
+| `overdue[].planned` | string | The week it was aimed at, as `2026-W41`. |
+| `overdue[].overdue_weeks` | integer | How many weeks that week is past. |
+| `lapsed` | array | The projects behind the rhythm of their tier. |
+| `lapsed[]` | object | A project behind the rhythm its tier asks for. |
+| `lapsed[].project` | string | The project. |
+| `lapsed[].tier` | string | Its tier: `A`, `B` or `C`. |
+| `lapsed[].rhythm_weeks` | integer | How many weeks between releases its tier asks for. |
+| `lapsed[].since` | string or null | The week of its last release, as `2026-W41`; `null` if it never shipped. |
+| `lapsed[].weeks` | integer | How many weeks it has gone without a release. |
+| `signals` | array | The projects whose tier asks for more. |
+| `signals[]` | object | A project whose tier asks for more than it gives. |
+| `signals[].project` | string | The project. |
+| `signals[].tier` | string | Its tier: `A`, `B` or `C`. |
+| `signals[].signal` | string | The promise broken: `missed-cycle` (tier A), `without-focus` (tier B) or `second-start` (tier C). |
+| `signals[].weeks` | integer or null | Weeks behind, for `missed-cycle` and `without-focus`; otherwise `null`. |
+| `signals[].alongside` | string or null | The other project, for `second-start`; otherwise `null`. |
+| `parted` | array | The pairs whose halves have parted company. |
+| `parted[]` | object | A pair of linked projects whose halves have parted company. |
+| `parted[].drift` | string | How they parted: `shipped-alone` (one half is tagged, the other is not) or `run-ahead` (one end moved on by several versions while the other stood still). |
+| `parted[].ahead` | object | The end that went ahead, or shipped. |
+| `parted[].ahead.project` | string | The project at that end. |
+| `parted[].ahead.version` | string or null | The version anchored on that side, or `null` when none is. |
+| `parted[].ahead.shipped` | boolean or null | Whether that version has a tag; `null` when no version is anchored. |
+| `parted[].behind` | object | The end left behind. |
+| `parted[].behind.project` | string | The project at that end. |
+| `parted[].behind.version` | string or null | The version anchored on that side, or `null` when none is. |
+| `parted[].behind.shipped` | boolean or null | Whether that version has a tag; `null` when no version is anchored. |
+| `parted[].versions` | integer or null | How many versions apart the ends are, for `run-ahead`; otherwise `null`. |
+| `parted[].note` | string or null | What the pair shares, as the link records it, or `null`. |
 
 Fields may be added; none is renamed or removed without a major version.
 

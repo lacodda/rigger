@@ -66,6 +66,13 @@ $ rigger rules rigger --json
 }
 ```
 
+<!-- json: rules -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `line` | string or null | The rituals of the line; null when it has written none. |
+| `project` | string or null | The name of the project asked about; null when none was. |
+| `project_rules` | string or null | The rituals of that project; null when it has written none. |
+
 `project_rules` is null when that project has written none of its own, and `line` is null when the line has not.
 
 ## See also

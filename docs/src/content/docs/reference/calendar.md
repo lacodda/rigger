@@ -76,6 +76,41 @@ Only what is still ahead goes in: a version already shipped has no Friday left t
 
 Each event's `UID` is made of what it is about - `release-sample-v0.3.0@rigger`, `focus-2026-W40@rigger` - so importing a newer file updates the events it already made instead of adding copies. `-` prints the file instead of writing it. There is no server and no network: the file goes where it is told, and getting it to the phone - a synced folder, a mail to oneself - is left to the owner.
 
+## JSON
+
+With `--json`, the grid as data.
+
+<!-- json: calendar -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `from` | string | The first week of the span, as `2026-W37`. |
+| `to` | string | The last week of the span, as `2026-W41`. |
+| `now` | string | The current week, as `2026-W41`. |
+| `weeks` | array | Every week of the span. |
+| `weeks[]` | string | One week, as `2026-W37`. |
+| `projects` | array | One row per project. |
+| `projects[]` | object | One project's row. |
+| `projects[].project` | string | The project. |
+| `projects[].tier` | string or null | Its tier: `A`, `B`, `C` or `out`; `null` when it has none. |
+| `projects[].rhythm_weeks` | integer or null | How many weeks between releases its tier asks for, or `null`. |
+| `projects[].cells` | array | The versions that fall in the span. |
+| `projects[].cells[]` | object | One version in one week. |
+| `projects[].cells[].week` | string | The week it is shown in: the week of its tag once shipped, else the week it is aimed at. |
+| `projects[].cells[].version` | string | The version's number. |
+| `projects[].cells[].standing` | string | How it reads: `planned`, `shipped`, `slipped`, `overdue` or `unplanned`. |
+
+With `--ics` and `--json`, what was written.
+
+<!-- json: calendar -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `from` | string | The first week written, as `2026-W37`. |
+| `to` | string | The last week written, as `2026-W42`. |
+| `releases` | integer | How many release Fridays the file holds. |
+| `focus_weeks` | integer | How many weeks of focus the file holds. |
+| `written` | string or null | The file written; `null` when the file went to standard output. |
+| `ics` | string or null | The file's text when the target was `-`; otherwise `null`. |
+
 ## Related
 
 - [`version plan`](/rigger/reference/version/) - aim a version at a week.

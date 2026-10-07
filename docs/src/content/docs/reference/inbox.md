@@ -68,6 +68,34 @@ These are not questions and nothing is being asked of you to decide: they are wo
 
 One is taken off the list by [`rigger resolve`](/rigger/reference/resolve/), like any wish.
 
+## JSON
+
+Under `--json` it prints the three groups of the screen.
+
+<!-- json: inbox -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `waiting` | array | The open questions, oldest first within a project. |
+| `waiting[]` | object | One question. |
+| `waiting[].project` | string | The project asked. |
+| `waiting[].id` | integer | The question's id, for `rigger resolve`. |
+| `waiting[].date` | string | The day it was asked, `YYYY-MM-DD`. |
+| `waiting[].body` | string | The question's text. |
+| `waiting[].due` | string or null | The day an answer is needed by, `YYYY-MM-DD`; null when it has none. |
+| `waiting[].overdue` | boolean | Whether that day has gone by, read against today. |
+| `shared` | array | Questions spelt alike in several projects. |
+| `shared[]` | object | One group of alike questions. |
+| `shared[].subject` | string | The heading the questions share. |
+| `shared[].projects` | array | The projects that ask it. |
+| `shared[].projects[]` | string | A project name. |
+| `asked_by_neighbours` | array | Orders one product has placed with another. |
+| `asked_by_neighbours[]` | object | One order. |
+| `asked_by_neighbours[].id` | integer | The wish's id, for `rigger resolve`. |
+| `asked_by_neighbours[].body` | string | What is asked for. |
+| `asked_by_neighbours[].asked_by` | string | The project that asked. |
+| `asked_by_neighbours[].project` | string | The project being asked. |
+| `asked_by_neighbours[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
+
 ## Answering
 
 [`rigger resolve`](/rigger/reference/resolve/) takes a question off the queue, and the answer becomes a decision in the record:

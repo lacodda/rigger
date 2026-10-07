@@ -88,10 +88,20 @@ fn shell() -> (std::ffi::OsString, &'static str) {
 /// clippy failure held back until the end and then replayed is a worse
 /// version of what the terminal already does well. What the record keeps is
 /// the verdict, not the transcript.
-pub fn run(command: &str, dir: &std::path::Path) -> std::io::Result<Run> {
+///
+/// `stdout_to_stderr` is for `--json`: rigger's standard output then holds
+/// one document, and what the command prints to its own would break it, so
+/// it goes where its errors go - still on the terminal, no longer in the
+/// document.
+pub fn run(command: &str, dir: &std::path::Path, stdout_to_stderr: bool) -> std::io::Result<Run> {
     let (program, flag) = shell();
     let started = Instant::now();
-    let status = Command::new(program).arg(flag).arg(command).current_dir(dir).status()?;
+    let mut cmd = Command::new(program);
+    cmd.arg(flag).arg(command).current_dir(dir);
+    if stdout_to_stderr {
+        cmd.stdout(std::process::Stdio::from(std::io::stderr()));
+    }
+    let status = cmd.status()?;
     Ok(Run {
         code: status.code(),
         seconds: started.elapsed().as_secs(),

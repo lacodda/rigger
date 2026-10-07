@@ -48,7 +48,26 @@ A week that kept the rule shows neither line.
 
 ## `--json`
 
-The same facts as data, with `early` and `over_the_slot` as numbers, and `shipped` and `queued` as lists. `week` and [`week`'s](/rigger/reference/week/) `shipping` field read the same versions, so the two screens cannot disagree about a week.
+The same facts as data. [`week`'s](/rigger/reference/week/) `shipping` field reads the same versions, so the two screens cannot disagree about a week.
+
+<!-- json: release-day -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `week` | string | The week read, as `2026-W37`. |
+| `friday` | string | Its Friday, as `2026-09-11`. |
+| `early` | integer | How many releases went out before Friday. |
+| `over_the_slot` | integer | How many releases the week carried past its one slot. |
+| `shipped` | array | The versions whose tag is already in the week. |
+| `shipped[]` | object | A version whose tag is in the week. |
+| `shipped[].project` | string | The project. |
+| `shipped[].version` | string | The version's number. |
+| `shipped[].day` | string | The day of the tag, as `YYYY-MM-DD`. |
+| `shipped[].on_release_day` | boolean | Whether the tag landed on the Friday the week releases on. |
+| `queued` | array | The versions aimed at this week with no tag yet: the queue proper. |
+| `queued[]` | object | One queued version. |
+| `queued[].project` | string | The project. |
+| `queued[].version` | string | The version's number. |
+| `queued[].title` | string or null | The stage's title, or `null`. |
 
 ## Related
 

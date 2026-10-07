@@ -133,6 +133,40 @@ The commits since the newest tag, and when the last one landed. It answers a que
 1 commit since the last release, the last one today
 ```
 
+## JSON
+
+Under `--json` it prints an array with one report per project read.
+
+<!-- json: sync -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One project's report. |
+| `[].project` | string | The project's name. |
+| `[].shipped` | array | Versions this run recorded as shipped, because a tag proves it. |
+| `[].shipped[]` | object | One version a tag closed. |
+| `[].shipped[].version` | string | The version, as the tag spells it. |
+| `[].shipped[].date` | string | The day the tag's commit was made, `YYYY-MM-DD`. |
+| `[].shipped[].newly` | boolean | Whether this run is what closed the version. |
+| `[].unplanned` | array | Tags whose version the plan never mentioned. |
+| `[].unplanned[]` | string | A version. |
+| `[].untagged` | array | Versions the plan closed with no tag to show for it. |
+| `[].untagged[]` | string | A version. |
+| `[].commits_since_tag` | integer | Commits the newest tag cannot reach. |
+| `[].last_commit_at` | string or null | The moment of the newest commit, RFC 3339 UTC; null when there is none. |
+| `[].changes_recorded` | integer | Changes read from commit messages that the record did not have yet. |
+| `[].warnings` | array | Problems said rather than failed, such as a missing repository. |
+| `[].warnings[]` | string | One warning. |
+| `[].delivery` | object | What GitHub said about the newest shipped version; present only when it was asked. |
+| `[].delivery.version` | string | The version asked about. |
+| `[].delivery.state` | string | One of `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed`, `published`. |
+| `[].delivery.newly` | boolean | Whether this run is what learnt the state. |
+| `[].cards` | array | Cards whose keys the repository's branches or commits carry; present only when some were found. |
+| `[].cards[]` | object | One card git named. |
+| `[].cards[].key` | string | The card's key. |
+| `[].cards[].branches` | integer | How many branches carry the key. |
+| `[].cards[].new_commits` | integer | Commits with the key that this run added. |
+| `[].cards[].linked_now` | boolean | Whether this run tied the card to the repository. |
+
 ## Schema
 
 Schema version 25 (v0.23.0) adds a version's delivery, the registries it reached and who said so - the release engine or GitHub - and the day a question is due.

@@ -17,6 +17,19 @@ Kept the 10 newest, deleted 2 older copies.
 
 The copy goes through SQLite's own backup interface rather than a file copy, so it is consistent even if something else has the database open.
 
+With `--json`, taking a copy prints where it went and what rotation deleted; `--list` prints the copies.
+
+<!-- json: backup -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `backup` | string | The path of the copy just taken. |
+| `removed` | array | The older copies rotation deleted. |
+| `removed[]` | string | The path of one deleted copy. |
+| `backups` | array | The copies, newest first. |
+| `backups[]` | object | One copy. |
+| `backups[].path` | string | The copy's path. |
+| `backups[].taken_at` | string or null | The moment in the copy's name, in RFC 3339 UTC; null when the name holds none. |
+
 ## Keeping a few, not all
 
 `--keep N` sets how many copies survive; the default is 10. Rotation never deletes the copy it has just taken, so `--keep 0` still leaves one.

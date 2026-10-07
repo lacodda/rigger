@@ -34,6 +34,28 @@ sample  C:\dev\sample
 
 With `--json`, an array of the objects `project show --json` prints.
 
+<!-- json: project list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One project per element, shaped as in `project show`. |
+| `[].id` | integer | The project's id in the record. |
+| `[].name` | string | The name the project is called by. |
+| `[].path` | string | The repository's directory, or the name itself for a service project. |
+| `[].remote` | string or null | The `origin` remote from git config; null when there is none. |
+| `[].created_at` | string | When the project was recorded, in RFC 3339 UTC. |
+| `[].tier` | string or null | The release tier: `A`, `B`, `C` or `out`; null until `project tier` sets one. |
+| `[].rhythm_weeks` | integer or null | Weeks meant to go between releases; null until a tier or `--rhythm` sets it. |
+| `[].kind` | string | `repo` for a repository, `service` for a place the record keeps for itself. |
+| `[].hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
+| `[].gate` | string or null | The command that says the project is fit to commit; null when none is set. |
+| `[].mark_code` | string or null | The two-lowercase-letter code of the mark, unique across the line; null when no mark is recorded. |
+| `[].accent` | string or null | The colour the product owns, as `#RRGGBB`; null when not recorded. |
+| `[].accent2` | string or null | The second colour, as `#RRGGBB`; null when not recorded. |
+| `[].form` | string or null | What shape of thing the product is: `cli`, `desktop`, `web`, `library` or `service`; null when not recorded. |
+| `[].docs_url` | string or null | Where the documentation lives; null when there is no site. |
+| `[].on_session_end` | string or null | The command run when a sitting closes; null when none is set. |
+
+
 ## `project show`
 
 ```
@@ -60,6 +82,29 @@ $ rigger project show sample --json
 ```
 
 Timestamps are UTC in RFC 3339. `tier` and `rhythm_weeks` are null until `project tier` sets them.
+
+The commands that record or change a project - `add`, `service`, `set`, `mark` and `tier` - print the same object under `--json`.
+
+<!-- json: project add, project service, project show, project set, project mark, project tier -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | The project's id in the record. |
+| `name` | string | The name the project is called by. |
+| `path` | string | The repository's directory, or the name itself for a service project. |
+| `remote` | string or null | The `origin` remote from git config; null when there is none. |
+| `created_at` | string | When the project was recorded, in RFC 3339 UTC. |
+| `tier` | string or null | The release tier: `A`, `B`, `C` or `out`; null until `project tier` sets one. |
+| `rhythm_weeks` | integer or null | Weeks meant to go between releases; null until a tier or `--rhythm` sets it. |
+| `kind` | string | `repo` for a repository, `service` for a place the record keeps for itself. |
+| `hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
+| `gate` | string or null | The command that says the project is fit to commit; null when none is set. |
+| `mark_code` | string or null | The two-lowercase-letter code of the mark, unique across the line; null when no mark is recorded. |
+| `accent` | string or null | The colour the product owns, as `#RRGGBB`; null when not recorded. |
+| `accent2` | string or null | The second colour, as `#RRGGBB`; null when not recorded. |
+| `form` | string or null | What shape of thing the product is: `cli`, `desktop`, `web`, `library` or `service`; null when not recorded. |
+| `docs_url` | string or null | Where the documentation lives; null when there is no site. |
+| `on_session_end` | string or null | The command run when a sitting closes; null when none is set. |
+
 
 ## `project tier`
 
@@ -113,6 +158,26 @@ aside    out by decision - 4 shipped
 | `untiered` | no tier yet | the slowest tier whose rhythm the pace keeps; with nothing shipped, C if it has a plan and `out` if not |
 
 A stall moves one step and a race as far as the pace goes, on purpose: stalling is a fact about the last weeks rather than a verdict on the product, and a product shipping forty times what its tier asks is not one step away from its tier. What would move is listed first, stalls before the rest. `--json` gives each project's `verdict`, `suggested`, `current`, `rhythm_weeks`, `shipped` and `expected`.
+
+### JSON
+
+With `--suggest`, `--json` prints the window and one suggestion per project.
+
+<!-- json: project tier -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `from` | string | The first week of the window, as `YYYY-Www`. |
+| `to` | string | The last week of the window, as `YYYY-Www`. |
+| `weeks` | integer | How many weeks the window spans. |
+| `suggestions` | array | One element per project, the ones that would move first. |
+| `suggestions[]` | object | One project's suggestion. |
+| `suggestions[].project` | string | The project's name. |
+| `suggestions[].current` | string or null | The tier now: `A`, `B`, `C` or `out`; null when none is set. |
+| `suggestions[].verdict` | string | What the numbers say: `stalled`, `outgrown`, `holds`, `out` or `untiered`. |
+| `suggestions[].suggested` | string | The tier suggested: `A`, `B`, `C` or `out`. |
+| `suggestions[].rhythm_weeks` | integer or null | A rhythm to go with the tier when its own would not fit; null otherwise. |
+| `suggestions[].shipped` | integer | Versions shipped in the window. |
+| `suggestions[].expected` | integer or null | Releases the current tier asks for over the window; null when it asks for none. |
 
 ## `project set`
 

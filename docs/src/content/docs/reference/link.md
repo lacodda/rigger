@@ -85,6 +85,68 @@ $ rigger link list kasl
 
 Recording the same link twice changes nothing rather than adding a second row. A note added to a link that was recorded bare is kept, since the tie is the same tie.
 
+## JSON
+
+`link add` prints the link it recorded, and `link list` an array of them. `near` is the project that was asked about, whichever way the row was written.
+
+<!-- json: link add -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `link` | object | The link, from the side of its first project. |
+| `changed` | boolean | False when the same link was already recorded. |
+| `link.id` | integer | The id `link remove` takes. |
+| `link.kind` | string | `pair`, `consumer` or `donor`. |
+| `link.note` | string or null | The note the link was recorded with. |
+| `link.near` | object | The end of the project the link is read from. |
+| `link.near.project` | string | The name of the project at this end. |
+| `link.near.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
+| `link.near.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
+| `link.far` | object | The other end. |
+| `link.far.project` | string | The name of the project at this end. |
+| `link.far.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
+| `link.far.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
+
+<!-- json: link list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One link. |
+| `[].id` | integer | The id `link remove` takes. |
+| `[].kind` | string | `pair`, `consumer` or `donor`. |
+| `[].note` | string or null | The note the link was recorded with. |
+| `[].near` | object | The end of the project the list is read from. |
+| `[].near.project` | string | The name of the project at this end. |
+| `[].near.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
+| `[].near.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
+| `[].far` | object | The other end. |
+| `[].far.project` | string | The name of the project at this end. |
+| `[].far.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
+| `[].far.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
+
+`link drift` prints an array with one row per pair out of step.
+
+<!-- json: link drift -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One pair out of step. |
+| `[].drift` | string | `shipped-alone` when one half has a tag and the other has not, `run-ahead` when one half is two or more versions past the other. |
+| `[].ahead` | object | The end that shipped or went on ahead. |
+| `[].ahead.project` | string | The name of the project at this end. |
+| `[].ahead.version` | string | The version anchored on this end, as the record spells it; null when none is. |
+| `[].ahead.shipped` | boolean | Whether that version has a tag; null when no version is anchored. |
+| `[].behind` | object | The end left behind. |
+| `[].behind.project` | string | The name of the project at this end. |
+| `[].behind.version` | string | The version anchored on this end, as the record spells it; null when none is. |
+| `[].behind.shipped` | boolean | Whether that version has a tag; null when no version is anchored. |
+| `[].versions` | integer or null | The versions between the two ends for `run-ahead`; null for `shipped-alone`. |
+| `[].note` | string or null | The note the link was recorded with. |
+
+`link remove` prints the id it forgot.
+
+<!-- json: link remove -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `removed` | integer | The id of the link that was removed. |
+
 ## Related
 
 - [`show`](/rigger/reference/show/) - the neighbours on a project's screen.

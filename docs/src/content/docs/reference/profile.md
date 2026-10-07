@@ -71,6 +71,33 @@ line
   config:    C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml
 ```
 
+## JSON
+
+`profile list --json` prints an array with one element per profile.
+
+<!-- json: profile list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One profile. |
+| `[].name` | string | The profile's name. |
+| `[].current` | boolean | Whether this is the profile in use. |
+| `[].profile` | object | What the config says about the profile. |
+| `[].profile.kind` | string | What the unit of work is: `line` or `tickets`. |
+
+`show`, `use`, `add` and `set` print the profile they ended on. Fields the profile does not set are left out.
+
+<!-- json: profile show, profile use, profile add, profile set -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | The profile's name. |
+| `profile` | object | What the config says about the profile. |
+| `profile.kind` | string | What the unit of work is: `line` or `tickets`. |
+| `profile.roots` | array | Directories whose children are repositories; left out when none are set. |
+| `profile.roots[]` | string | One such directory. |
+| `profile.hubs` | string | The directory whose children are hubs; left out when not set. |
+| `profile.id_pattern` | string | How a ticket id is spelt, as a regular expression; left out when not set. |
+| `profile.trays` | string | Where the cards' trays are kept; left out when not set. |
+
 ## Where the database is
 
 Each profile keeps its database under `profiles/<name>/` in the data directory, and its [skill template](/rigger/reference/skill/) there too when it has one of its own. [`backup`](/rigger/reference/backup/) copies the current profile's database beside it.

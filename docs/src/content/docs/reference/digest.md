@@ -25,6 +25,32 @@ Quiet: beta, gamma
 
 The lines, in order: what shipped, what was recorded, what waits on you, what is next. A project has fewer lines when it has less to say - none of them is padding.
 
+## JSON
+
+Under `--json` it prints the window and one entry per project, moved or not. With `--md` it also says which note it wrote.
+
+<!-- json: digest -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `since` | string | The first day of the window, `YYYY-MM-DD`. |
+| `projects` | array | One entry per project. |
+| `projects[]` | object | One project's digest. |
+| `projects[].project` | string | The project's name. |
+| `projects[].facts` | object | What the window holds, as counts. |
+| `projects[].facts.shipped` | array | Versions that shipped in the window. |
+| `projects[].facts.shipped[]` | string | A version. |
+| `projects[].facts.decisions` | integer | Decisions recorded in the window. |
+| `projects[].facts.findings` | integer | Findings recorded in the window. |
+| `projects[].facts.changes` | integer | Changes recorded in the window. |
+| `projects[].facts.waiting` | integer | Questions waiting on the owner. |
+| `projects[].next` | string or null | The current stage as `version · title`, or the bare version; null when there is none. |
+| `projects[].lines` | array | The lines the text digest prints for the project. |
+| `projects[].lines[]` | string | One line. |
+| `projects[].signal` | string or null | A tier signal for the current week, such as a carrying product that stopped releasing; null when none. |
+| `note` | object | Present only with `--md`: the note that was written. |
+| `note.path` | string | The file named. |
+| `note.changed` | boolean | False when the file already held this digest. |
+
 ## Only what moved
 
 Across the whole line, a project that has shipped nothing and recorded nothing is named in one line at the end rather than given a block of its own. Seventeen projects at five lines each is not a digest, and a block that says nothing happened says it at five times the length.

@@ -54,6 +54,9 @@ use crate::db::Db;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Print what the command shows or wrote as JSON, one document on stdout
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -78,9 +81,6 @@ enum Command {
         /// Say what would be recorded, and write nothing
         #[arg(long)]
         check: bool,
-        /// Print the report as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Switch, list and add profiles: one record per way of working
     Profile {
@@ -107,9 +107,6 @@ enum Command {
         /// Say what would be recorded, and write nothing
         #[arg(long)]
         check: bool,
-        /// Print the report as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Write a thin project skill from a template and the record
     Skill {
@@ -139,17 +136,11 @@ enum Command {
     Show {
         /// Project name
         project: String,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Print what an assistant needs to start a session on a project
     Context {
         /// Project name
         project: String,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
         /// Show what each section of the packet costs
         #[arg(long)]
         explain: bool,
@@ -197,18 +188,12 @@ enum Command {
     Sync {
         /// Project name; every project when omitted
         project: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Questions waiting for your answer, across every project
     Inbox {
         /// Only this project
         #[arg(long)]
         project: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// What moved lately, five lines per project
     Digest {
@@ -218,11 +203,8 @@ enum Command {
         #[arg(long, default_value = "7d")]
         since: String,
         /// Write the digest into this markdown note - a daily note, say - instead of printing it
-        #[arg(long, value_name = "FILE", conflicts_with = "json")]
+        #[arg(long, value_name = "FILE")]
         md: Option<PathBuf>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Search the record: where was this decided, when was that fixed
     Find {
@@ -237,9 +219,6 @@ enum Command {
         /// How many results to show
         #[arg(long, default_value_t = 20)]
         limit: u32,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// The events that led to a version: what was decided, found and hit
     Why {
@@ -253,9 +232,6 @@ enum Command {
         /// List the principles the record has used
         #[arg(long)]
         principles: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Plan a version: aim it at a week of the calendar
     Version {
@@ -271,38 +247,26 @@ enum Command {
         #[arg(long, value_name = "WEEK")]
         from: Option<String>,
         /// Write release Fridays and each week's focus as an iCalendar file; `-` prints it
-        #[arg(long, value_name = "FILE", conflicts_with = "json")]
+        #[arg(long, value_name = "FILE")]
         ics: Option<PathBuf>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// This week's focus: what is aimed at it, and what is already late
     Next {
         /// Read a week other than the current one
         #[arg(long, value_name = "WEEK")]
         week: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// The Monday brief: the focus, what ships on Friday, what waits on you
     Week {
         /// Read a week other than the current one
         #[arg(long, value_name = "WEEK")]
         week: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// The shopfront queue: what has gone out this week, and what waits for Friday
     ReleaseDay {
         /// Read a week other than the current one
         #[arg(long, value_name = "WEEK")]
         week: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Look back: what the plan said, what the tags say, where they parted
     Retro {
@@ -318,9 +282,6 @@ enum Command {
         /// Write the summary into the record as an event
         #[arg(long)]
         record: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Open and close a sitting, so its events belong together
     Session {
@@ -350,9 +311,6 @@ enum Command {
         /// Also write the handwritten texts back out: vision, rituals, research
         #[arg(long)]
         docs: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
@@ -392,17 +350,11 @@ enum Command {
         /// Print what would be run, and run nothing
         #[arg(long)]
         check: bool,
-        /// Print the result as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// How the work is done: the rituals of the line, and of one project
     Rules {
         /// Project name; the line's own rituals alone when omitted
         project: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Copy the database aside, stamped with the moment and its schema
     Backup {
@@ -418,9 +370,6 @@ enum Command {
         /// Also check the hubs the record generates against what is on disk
         #[arg(long)]
         hubs: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -519,9 +468,6 @@ enum LinkCommand {
     List {
         /// Project name; every link of the record when omitted
         project: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Forget a tie, by the id `link list` prints
     Remove {
@@ -529,11 +475,7 @@ enum LinkCommand {
         id: i64,
     },
     /// The pairs whose halves have parted company
-    Drift {
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Drift {},
 }
 
 #[derive(Subcommand)]
@@ -545,9 +487,6 @@ enum DocCommand {
         /// Only this kind: vision, decisions, research, rituals, other
         #[arg(long)]
         kind: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Print a document
     Show {
@@ -555,9 +494,6 @@ enum DocCommand {
         project: String,
         /// The document's address, as `list` prints it
         slug: String,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Write a new document, in $EDITOR unless a body is given
     Add {
@@ -608,18 +544,11 @@ enum DocCommand {
 #[derive(Subcommand)]
 enum ProfileCommand {
     /// List the profiles, marking the one in use
-    List {
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    List {},
     /// Show one profile; the one in use when no name is given
     Show {
         /// Profile name
         name: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Make a profile the one every command uses
     Use {
@@ -694,9 +623,6 @@ enum TaskCommand {
     Find {
         /// The task as it was handed over: id, title, numbers, any of them
         query: String,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Make a card the open one, so that the record knows what is in hand
     Open {
@@ -704,11 +630,7 @@ enum TaskCommand {
         task: String,
     },
     /// The card in hand, if one is open
-    Active {
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    Active {},
     /// Close a card: done by default, or the status given
     Close {
         /// Card key, alias or id; the open card when omitted
@@ -721,9 +643,6 @@ enum TaskCommand {
     Show {
         /// Card key, alias or id
         task: String,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// The packet an assistant starts a task from
     Context {
@@ -754,9 +673,6 @@ enum TaskCommand {
         /// Include the cards that are asleep, each with the day it is due back
         #[arg(long)]
         snoozed: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Give a card a new key; the old one stays as an alias
     Rename {
@@ -824,18 +740,12 @@ enum TaskCommand {
         /// Who it goes to: a product or a team, as one word
         #[arg(long, value_name = "WHO")]
         to: String,
-        /// Print the text as JSON, with the paths of both files
-        #[arg(long)]
-        json: bool,
     },
     /// The tickets in kasl's inbox that have no card, and the cards whose ticket has gone
     Incoming {
         /// Every ticket without a card, not only the first ones
         #[arg(long)]
         all: bool,
-        /// Print as JSON: every ticket, with its card
-        #[arg(long)]
-        json: bool,
     },
     /// Make a card from a ticket in kasl's inbox: its key and title come from there
     Take {
@@ -856,9 +766,6 @@ enum TrayCommand {
     Show {
         /// Card key, alias or id; the card in hand when omitted
         task: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Open the tray's form in $EDITOR
     Edit {
@@ -878,9 +785,6 @@ enum TrayCommand {
         /// Take recordings too; they are listed and left where they are otherwise
         #[arg(long)]
         video: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Take the screenshots, downloads and desktop files written lately
     Intake {
@@ -895,24 +799,14 @@ enum TrayCommand {
         /// Take recordings too; they are listed and left where they are otherwise
         #[arg(long)]
         video: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Sorting is over: the material goes to the card's archive, and the form back to blank
     Done {
         /// Card key, alias or id; the card in hand when omitted
         task: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Every tray with something waiting in it
-    List {
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    List {},
 }
 
 #[derive(Subcommand)]
@@ -931,18 +825,11 @@ enum ProjectCommand {
         name: String,
     },
     /// List recorded projects
-    List {
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
+    List {},
     /// Show one project
     Show {
         /// Project name
         name: String,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Set what the record keeps about a project
     Set {
@@ -960,7 +847,6 @@ enum ProjectCommand {
         /// Forget the end-of-session command
         #[arg(long, conflicts_with = "on_session_end")]
         no_on_session_end: bool,
-    quiet_on_a_closed_pipe();
     },
     /// Record how a product looks from outside: its mark, colours, form and docs
     Mark {
@@ -975,6 +861,120 @@ enum ProjectCommand {
         /// The second colour, for a mark drawn as a pair
         #[arg(long)]
         accent2: Option<String>,
+        /// What shape of thing it is: cli, desktop, web, library, service
+        #[arg(long)]
+        form: Option<String>,
+        /// Where its documentation lives
+        #[arg(long, value_name = "URL")]
+        docs: Option<String>,
+        /// Forget the mark entirely
+        #[arg(long, conflicts_with_all = ["code", "accent", "accent2", "form", "docs"])]
+        clear: bool,
+    },
+    /// Set the tier a project sits in, and how often it should release
+    Tier {
+        /// Project name; with --suggest, only this project
+        #[arg(required_unless_present = "suggest")]
+        name: Option<String>,
+        /// A, B, C, or out for a project outside the rotation
+        #[arg(required_unless_present = "suggest", conflicts_with = "suggest")]
+        tier: Option<String>,
+        /// Weeks between releases; the tier's own rhythm when omitted
+        #[arg(long, value_name = "WEEKS", conflicts_with = "suggest")]
+        rhythm: Option<u32>,
+        /// Suggest a tier for each project from the last cycle's releases, and set nothing
+        #[arg(long)]
+        suggest: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionCommand {
+    /// Open a sitting; everything recorded until `end` belongs to it
+    Start {
+        /// Project name; the project of the working directory when omitted
+        project: Option<String>,
+    },
+    /// Close the sitting and say what it held
+    End {
+        /// Project name; the project of the working directory when omitted
+        project: Option<String>,
+        /// A title for the diary entry, if one is being written
+        #[arg(long, value_name = "TEXT")]
+        heading: Option<String>,
+        /// Append the entry to this diary file
+        #[arg(long, value_name = "FILE")]
+        diary: Option<PathBuf>,
+        /// Use this entry instead of the composed one - an edited `session draft`; `-` reads standard input
+        #[arg(long, value_name = "FILE")]
+        entry: Option<PathBuf>,
+        /// Say nothing unless something is worth saying, for a hook
+        #[arg(long)]
+        remind: bool,
+    },
+    /// Show the diary entry the open sitting would leave, to edit before `end`
+    Draft {
+        /// Project name; the project of the working directory when omitted
+        project: Option<String>,
+        /// A title for the entry
+        #[arg(long, value_name = "TEXT")]
+        heading: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum VersionCommand {
+    /// One version: its number, the week it is aimed at, how far it got, its tasks
+    Show {
+        /// Project name
+        project: String,
+        /// Version, as the record spells it; the stage being built when omitted
+        version: Option<String>,
+    },
+    /// Aim a version at a week of the calendar
+    Plan {
+        /// Project name
+        project: String,
+        /// Version, as the record spells it
+        version: String,
+        /// The week it is aimed at, as `2026-W37`
+        #[arg(long, value_name = "WEEK")]
+        week: Option<String>,
+        /// Take the version off the calendar
+        #[arg(long, conflicts_with = "week")]
+        clear: bool,
+    },
+}
+
+/// The stack the work runs on.
+///
+/// Windows gives the main thread 1 MB, and clap's derived parser walks the
+/// command tree with one frame per level. Unoptimised frames are several
+/// times fatter than optimised ones, so a tree this size overflowed that
+/// megabyte in debug builds while release was fine - `rigger --version`
+/// died before reaching any code of ours. Tests run debug binaries, so
+/// this was every test, not a corner.
+///
+/// Asking for the stack rather than flattening the commands: the tree is
+/// the product's surface, and it should be free to grow.
+const STACK: usize = 16 * 1024 * 1024;
+
+fn main() -> ExitCode {
+    quiet_on_a_closed_pipe();
+    // The default thread stack is what `main` gets; a spawned one takes
+    // the size it is given, on every platform rigger ships to.
+    match std::thread::Builder::new().stack_size(STACK).spawn(work).map(std::thread::JoinHandle::join) {
+        Ok(Ok(code)) => code,
+        // A panic has already printed itself; exiting with the code a
+        // panicking process uses keeps that unchanged.
+        Ok(Err(_)) => ExitCode::from(101),
+        Err(e) => {
+            eprintln!("error: cannot start the working thread: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// A reader that stops reading is not a failure of the writer.
 ///
 /// `rigger doctor | head -3` closes the pipe after three lines, and the next
@@ -1009,134 +1009,6 @@ fn is_a_closed_pipe(message: &str) -> bool {
         && ["(os error 32)", "(os error 109)", "(os error 232)", "(os error 233)"]
             .iter()
             .any(|code| message.ends_with(code))
-}
-
-        /// What shape of thing it is: cli, desktop, web, library, service
-        #[arg(long)]
-        form: Option<String>,
-        /// Where its documentation lives
-        #[arg(long, value_name = "URL")]
-        docs: Option<String>,
-        /// Forget the mark entirely
-        #[arg(long, conflicts_with_all = ["code", "accent", "accent2", "form", "docs"])]
-        clear: bool,
-    },
-    /// Set the tier a project sits in, and how often it should release
-    Tier {
-        /// Project name; with --suggest, only this project
-        #[arg(required_unless_present = "suggest")]
-        name: Option<String>,
-        /// A, B, C, or out for a project outside the rotation
-        #[arg(required_unless_present = "suggest", conflicts_with = "suggest")]
-        tier: Option<String>,
-        /// Weeks between releases; the tier's own rhythm when omitted
-        #[arg(long, value_name = "WEEKS", conflicts_with = "suggest")]
-        rhythm: Option<u32>,
-        /// Suggest a tier for each project from the last cycle's releases, and set nothing
-        #[arg(long)]
-        suggest: bool,
-        /// Print the suggestions as JSON
-        #[arg(long, requires = "suggest")]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum SessionCommand {
-    /// Open a sitting; everything recorded until `end` belongs to it
-    Start {
-        /// Project name; the project of the working directory when omitted
-        project: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Close the sitting and say what it held
-    End {
-        /// Project name; the project of the working directory when omitted
-        project: Option<String>,
-        /// A title for the diary entry, if one is being written
-        #[arg(long, value_name = "TEXT")]
-        heading: Option<String>,
-        /// Append the entry to this diary file
-        #[arg(long, value_name = "FILE")]
-        diary: Option<PathBuf>,
-        /// Use this entry instead of the composed one - an edited `session draft`; `-` reads standard input
-        #[arg(long, value_name = "FILE")]
-        entry: Option<PathBuf>,
-        /// Say nothing unless something is worth saying, for a hook
-        #[arg(long)]
-        remind: bool,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show the diary entry the open sitting would leave, to edit before `end`
-    Draft {
-        /// Project name; the project of the working directory when omitted
-        project: Option<String>,
-        /// A title for the entry
-        #[arg(long, value_name = "TEXT")]
-        heading: Option<String>,
-        /// Print as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum VersionCommand {
-    /// One version: its number, the week it is aimed at, how far it got, its tasks
-    Show {
-        /// Project name
-        project: String,
-        /// Version, as the record spells it; the stage being built when omitted
-        version: Option<String>,
-        /// Print as JSON; the shape is a contract, see the reference page
-        #[arg(long)]
-        json: bool,
-    },
-    /// Aim a version at a week of the calendar
-    Plan {
-        /// Project name
-        project: String,
-        /// Version, as the record spells it
-        version: String,
-        /// The week it is aimed at, as `2026-W37`
-        #[arg(long, value_name = "WEEK")]
-        week: Option<String>,
-        /// Take the version off the calendar
-        #[arg(long, conflicts_with = "week")]
-        clear: bool,
-    },
-}
-
-/// The stack the work runs on.
-///
-/// Windows gives the main thread 1 MB, and clap's derived parser walks the
-/// command tree with one frame per level. Unoptimised frames are several
-/// times fatter than optimised ones, so a tree this size overflowed that
-/// megabyte in debug builds while release was fine - `rigger --version`
-/// died before reaching any code of ours. Tests run debug binaries, so
-/// this was every test, not a corner.
-///
-/// Asking for the stack rather than flattening the commands: the tree is
-/// the product's surface, and it should be free to grow.
-const STACK: usize = 16 * 1024 * 1024;
-
-fn main() -> ExitCode {
-    // The default thread stack is what `main` gets; a spawned one takes
-    // the size it is given, on every platform rigger ships to.
-    match std::thread::Builder::new().stack_size(STACK).spawn(work).map(std::thread::JoinHandle::join) {
-        Ok(Ok(code)) => code,
-        // A panic has already printed itself; exiting with the code a
-        // panicking process uses keeps that unchanged.
-        Ok(Err(_)) => ExitCode::from(101),
-        Err(e) => {
-            eprintln!("error: cannot start the working thread: {e}");
-            ExitCode::FAILURE
-        }
-    }
 }
 
 fn work() -> ExitCode {
@@ -1240,20 +1112,21 @@ fn usage_error(err: clap::Error) -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let json = cli.json;
     match cli.command {
-        Command::Init => init(),
+        Command::Init => init(json),
         Command::Project { command } => match command {
-            ProjectCommand::Add { path, name } => project_add(path, name),
-            ProjectCommand::Service { name } => project_service(&name),
-            ProjectCommand::List { json } => project_list(json),
-            ProjectCommand::Show { name, json } => project_show(&name, json),
+            ProjectCommand::Add { path, name } => project_add(path, name, json),
+            ProjectCommand::Service { name } => project_service(&name, json),
+            ProjectCommand::List {} => project_list(json),
+            ProjectCommand::Show { name } => project_show(&name, json),
             ProjectCommand::Set {
                 name,
                 gate,
                 no_gate,
                 on_session_end,
                 no_on_session_end,
-            } => project_set(&name, gate.as_deref(), no_gate, on_session_end.as_deref(), no_on_session_end),
+            } => project_set(&name, gate.as_deref(), no_gate, on_session_end.as_deref(), no_on_session_end, json),
             ProjectCommand::Mark {
                 name,
                 code,
@@ -1264,42 +1137,34 @@ fn run(cli: Cli) -> Result<()> {
                 clear,
             } => project_mark(
                 &name,
-                code.as_deref(),
-                accent.as_deref(),
-                accent2.as_deref(),
-                form.as_deref(),
-                docs.as_deref(),
+                db::Mark {
+                    code,
+                    accent,
+                    accent2,
+                    form,
+                    docs_url: docs,
+                },
                 clear,
-            ),
-            ProjectCommand::Tier {
-                name,
-                tier,
-                rhythm,
-                suggest,
                 json,
-            } => match suggest {
+            ),
+            ProjectCommand::Tier { name, tier, rhythm, suggest } => match suggest {
                 true => tier_suggest(name.as_deref(), json),
                 false => project_tier(
                     &name.expect("clap requires a name without --suggest"),
                     &tier.expect("clap requires a tier without --suggest"),
                     rhythm,
+                    json,
                 ),
             },
         },
-        Command::Import {
-            project,
-            hub,
-            answers,
-            check,
-            json,
-        } => match answers {
+        Command::Import { project, hub, answers, check } => match answers {
             Some(answers) => import_answers(&project, &answers, check, json),
             None => import_hub(&project, &hub.expect("clap requires --hub without --answers"), check, json),
         },
         Command::Profile { command } => match command {
-            ProfileCommand::List { json } => profile_list(json),
-            ProfileCommand::Show { name, json } => profile_show(name.as_deref(), json),
-            ProfileCommand::Use { name } => profile_use(&name),
+            ProfileCommand::List {} => profile_list(json),
+            ProfileCommand::Show { name } => profile_show(name.as_deref(), json),
+            ProfileCommand::Use { name } => profile_use(&name, json),
             ProfileCommand::Add {
                 name,
                 kind,
@@ -1318,6 +1183,7 @@ fn run(cli: Cli) -> Result<()> {
                     trays,
                 },
                 r#use,
+                json,
             ),
             ProfileCommand::Set {
                 name,
@@ -1325,7 +1191,7 @@ fn run(cli: Cli) -> Result<()> {
                 hubs,
                 id_pattern,
                 trays,
-            } => profile_set(name.as_deref(), roots, hubs, id_pattern, trays),
+            } => profile_set(name.as_deref(), roots, hubs, id_pattern, trays, json),
         },
         Command::Task { command } => match command {
             TaskCommand::New {
@@ -1335,48 +1201,36 @@ fn run(cli: Cli) -> Result<()> {
                 projects,
                 branch,
                 summary,
-            } => task_new(&title, key.as_deref(), &aliases, &projects, branch.as_deref(), summary.as_deref()),
-            TaskCommand::Find { query, json } => task_find(&query, json),
-            TaskCommand::Open { task } => task_open(&task),
-            TaskCommand::Active { json } => task_active(json),
-            TaskCommand::Close { task, status } => task_close(task.as_deref(), &status),
-            TaskCommand::Show { task, json } => task_show(&task, json),
-            TaskCommand::Context { task, budget } => task_context(&task, budget),
-            TaskCommand::Link { task, project, branch, role } => task_link(&task, &project, branch.as_deref(), role.as_deref()),
-            TaskCommand::List { status, snoozed, json } => task_list(&status, snoozed, json),
-            TaskCommand::Rename { task, key } => task_rename(&task, &key),
-            TaskCommand::Alias { task, alias } => task_alias(&task, &alias),
-            TaskCommand::Summary { task, text } => task_summary(&task, &text),
-            TaskCommand::Note { task, text, kind } => note_on_card(&task, kind.as_str(), &text),
-            TaskCommand::Status { task, status } => task_status(&task, &status),
-            TaskCommand::Snooze { task, until } => task_snooze(&task, Some(&until)),
-            TaskCommand::Unsnooze { task } => task_snooze(&task, None),
-            TaskCommand::Freeze { task, why } => task_freeze(&task, why.as_deref()),
-            TaskCommand::Handoff { task, to, json } => task_handoff(task.as_deref(), &to, json),
-            TaskCommand::Incoming { all, json } => task_incoming(all, json),
-            TaskCommand::Take { key, projects, branch } => task_take(&key, &projects, branch.as_deref()),
+            } => task_new(&title, key.as_deref(), &aliases, &projects, branch.as_deref(), summary.as_deref(), json),
+            TaskCommand::Find { query } => task_find(&query, json),
+            TaskCommand::Open { task } => task_open(&task, json),
+            TaskCommand::Active {} => task_active(json),
+            TaskCommand::Close { task, status } => task_close(task.as_deref(), &status, json),
+            TaskCommand::Show { task } => task_show(&task, json),
+            TaskCommand::Context { task, budget } => task_context(&task, budget, json),
+            TaskCommand::Link { task, project, branch, role } => task_link(&task, &project, branch.as_deref(), role.as_deref(), json),
+            TaskCommand::List { status, snoozed } => task_list(&status, snoozed, json),
+            TaskCommand::Rename { task, key } => task_rename(&task, &key, json),
+            TaskCommand::Alias { task, alias } => task_alias(&task, &alias, json),
+            TaskCommand::Summary { task, text } => task_summary(&task, &text, json),
+            TaskCommand::Note { task, text, kind } => note_on_card(&task, kind.as_str(), &text, json),
+            TaskCommand::Status { task, status } => task_status(&task, &status, json),
+            TaskCommand::Snooze { task, until } => task_snooze(&task, Some(&until), json),
+            TaskCommand::Unsnooze { task } => task_snooze(&task, None, json),
+            TaskCommand::Freeze { task, why } => task_freeze(&task, why.as_deref(), json),
+            TaskCommand::Handoff { task, to } => task_handoff(task.as_deref(), &to, json),
+            TaskCommand::Incoming { all } => task_incoming(all, json),
+            TaskCommand::Take { key, projects, branch } => task_take(&key, &projects, branch.as_deref(), json),
         },
         Command::Tray { command } => match command {
-            TrayCommand::Show { task, json } => tray_show(task.as_deref(), json),
-            TrayCommand::Edit { task } => tray_edit(task.as_deref()),
-            TrayCommand::Fetch {
-                task,
-                from,
-                max_mb,
-                video,
-                json,
-            } => tray_fetch(task.as_deref(), &from, tray_rules(max_mb, video), json),
-            TrayCommand::Intake {
-                task,
-                since,
-                max_mb,
-                video,
-                json,
-            } => tray_intake(task.as_deref(), &since, tray_rules(max_mb, video), json),
-            TrayCommand::Done { task, json } => tray_done(task.as_deref(), json),
-            TrayCommand::List { json } => tray_list(json),
+            TrayCommand::Show { task } => tray_show(task.as_deref(), json),
+            TrayCommand::Edit { task } => tray_edit(task.as_deref(), json),
+            TrayCommand::Fetch { task, from, max_mb, video } => tray_fetch(task.as_deref(), &from, tray_rules(max_mb, video), json),
+            TrayCommand::Intake { task, since, max_mb, video } => tray_intake(task.as_deref(), &since, tray_rules(max_mb, video), json),
+            TrayCommand::Done { task } => tray_done(task.as_deref(), json),
+            TrayCommand::List {} => tray_list(json),
         },
-        Command::Adopt { root, hubs, check, json } => adopt_root(root.as_deref(), hubs.as_deref(), check, json),
+        Command::Adopt { root, hubs, check } => adopt_root(root.as_deref(), hubs.as_deref(), check, json),
         Command::Skill {
             project,
             install,
@@ -1388,19 +1242,14 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let install = install || dir.is_some();
             if line {
-                write_line_skill(install, dir.as_deref(), replace, template.as_deref(), print_template)
+                write_line_skill(install, dir.as_deref(), replace, template.as_deref(), print_template, json)
             } else {
-                write_skill(project.as_deref(), install, dir.as_deref(), replace, template.as_deref(), print_template)
+                write_skill(project.as_deref(), install, dir.as_deref(), replace, template.as_deref(), print_template, json)
             }
         }
-        Command::Show { project, json } => show_project(&project, json),
-        Command::Context {
-            project,
-            json,
-            explain,
-            budget,
-        } => show_context(&project, json, explain, budget),
-        Command::Open { project, print, budget } => open_session(&project, print, budget),
+        Command::Show { project } => show_project(&project, json),
+        Command::Context { project, explain, budget } => show_context(&project, json, explain, budget),
+        Command::Open { project, print, budget } => open_session(&project, print, budget, json),
         Command::Note {
             project,
             text,
@@ -1423,60 +1272,46 @@ fn run(cli: Cli) -> Result<()> {
             match kind {
                 NoteKind::Shipped => {
                     let tag = tag.context("a release is recorded by its tag: --tag v0.23.0")?;
-                    note_shipped(&project, &tag, release, &registries, text.as_deref())
+                    note_shipped(&project, &tag, release, &registries, text.as_deref(), json)
                 }
                 _ => {
                     let text = text.with_context(|| format!("say what the {} is", kind.as_str()))?;
-                    note(&project, kind.as_str(), &text, principle.as_deref(), None, due.as_deref())
+                    note(&project, kind.as_str(), &text, principle.as_deref(), None, due.as_deref(), json)
                 }
             }
         }
-        Command::Sync { project, json } => sync_projects(project.as_deref(), json),
-        Command::Inbox { project, json } => inbox(project.as_deref(), json),
-        Command::Digest { project, since, md, json } => digest(project.as_deref(), &since, md.as_deref(), json),
-        Command::Find {
-            query,
-            project,
-            kind,
-            limit,
-            json,
-        } => find(&query, project.as_deref(), kind.as_deref(), limit, json),
+        Command::Sync { project } => sync_projects(project.as_deref(), json),
+        Command::Inbox { project } => inbox(project.as_deref(), json),
+        Command::Digest { project, since, md } => digest(project.as_deref(), &since, md.as_deref(), json),
+        Command::Find { query, project, kind, limit } => find(&query, project.as_deref(), kind.as_deref(), limit, json),
         Command::Why {
             project,
             version,
             principle,
             principles,
-            json,
         } => why(project.as_deref(), version.as_deref(), principle.as_deref(), principles, json),
         Command::Version { command } => match command {
-            VersionCommand::Show { project, version, json } => version_show(&project, version.as_deref(), json),
-            VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear),
+            VersionCommand::Show { project, version } => version_show(&project, version.as_deref(), json),
+            VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear, json),
         },
-        Command::Calendar { weeks, from, ics, json } => match ics {
-            Some(path) => write_ics(weeks, from.as_deref(), &path),
+        Command::Calendar { weeks, from, ics } => match ics {
+            Some(path) => write_ics(weeks, from.as_deref(), &path, json),
             None => show_calendar(weeks, from.as_deref(), json),
         },
-        Command::Next { week, json } => show_next(week.as_deref(), json),
-        Command::Week { week, json } => show_week(week.as_deref(), json),
-        Command::ReleaseDay { week, json } => show_release_day(week.as_deref(), json),
-        Command::Retro {
-            cycle,
-            weeks,
-            to,
-            record,
-            json,
-        } => show_retro(cycle, weeks, to.as_deref(), record, json),
+        Command::Next { week } => show_next(week.as_deref(), json),
+        Command::Week { week } => show_week(week.as_deref(), json),
+        Command::ReleaseDay { week } => show_release_day(week.as_deref(), json),
+        Command::Retro { cycle, weeks, to, record } => show_retro(cycle, weeks, to.as_deref(), record, json),
         Command::Session { command } => match command {
-            SessionCommand::Start { project, json } => session_start(project.as_deref(), json),
+            SessionCommand::Start { project } => session_start(project.as_deref(), json),
             SessionCommand::End {
                 project,
                 heading,
                 diary,
                 entry,
                 remind,
-                json,
             } => session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), entry.as_deref(), remind, json),
-            SessionCommand::Draft { project, heading, json } => session_draft(project.as_deref(), heading.as_deref(), json),
+            SessionCommand::Draft { project, heading } => session_draft(project.as_deref(), heading.as_deref(), json),
         },
         Command::Export {
             project,
@@ -1486,9 +1321,8 @@ fn run(cli: Cli) -> Result<()> {
             check,
             adopt,
             docs,
-            json,
         } => match line {
-            true => export_line(to.as_deref(), check),
+            true => export_line(to.as_deref(), check, json),
             false => export_hub(
                 &project.expect("clap requires a project without --line"),
                 &hub.expect("clap requires --hub without --line"),
@@ -1499,32 +1333,32 @@ fn run(cli: Cli) -> Result<()> {
             ),
         },
         Command::Mcp => mcp::serve(),
-        Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref()),
-        Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref(), None),
+        Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref(), json),
+        Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref(), None, json),
         Command::Link { command } => match command {
-            LinkCommand::Add { from, to, kind, note } => link_add(&from, &to, kind, note.as_deref()),
-            LinkCommand::List { project, json } => link_list(project.as_deref(), json),
-            LinkCommand::Remove { id } => link_remove(id),
-            LinkCommand::Drift { json } => link_drift(json),
+            LinkCommand::Add { from, to, kind, note } => link_add(&from, &to, kind, note.as_deref(), json),
+            LinkCommand::List { project } => link_list(project.as_deref(), json),
+            LinkCommand::Remove { id } => link_remove(id, json),
+            LinkCommand::Drift {} => link_drift(json),
         },
         Command::Doc { command } => match command {
-            DocCommand::List { project, kind, json } => doc_list(&project, kind.as_deref(), json),
-            DocCommand::Show { project, slug, json } => doc_show(&project, &slug, json),
+            DocCommand::List { project, kind } => doc_list(&project, kind.as_deref(), json),
+            DocCommand::Show { project, slug } => doc_show(&project, &slug, json),
             DocCommand::Add {
                 project,
                 title,
                 kind,
                 slug,
                 body,
-            } => doc_add(&project, &title, &kind, slug.as_deref(), body.as_deref()),
-            DocCommand::Edit { project, slug, title, body } => doc_edit(&project, &slug, title.as_deref(), body.as_deref()),
-            DocCommand::Remove { project, slug } => doc_remove(&project, &slug),
-            DocCommand::Template { kind, write } => doc_template(&kind, write),
+            } => doc_add(&project, &title, &kind, slug.as_deref(), body.as_deref(), json),
+            DocCommand::Edit { project, slug, title, body } => doc_edit(&project, &slug, title.as_deref(), body.as_deref(), json),
+            DocCommand::Remove { project, slug } => doc_remove(&project, &slug, json),
+            DocCommand::Template { kind, write } => doc_template(&kind, write, json),
         },
-        Command::Gate { project, check, json } => gate(project.as_deref(), check, json),
-        Command::Rules { project, json } => rules(project.as_deref(), json),
-        Command::Backup { keep, list } => backup(keep, list),
-        Command::Doctor { hubs, json } => doctor(hubs, json),
+        Command::Gate { project, check } => gate(project.as_deref(), check, json),
+        Command::Rules { project } => rules(project.as_deref(), json),
+        Command::Backup { keep, list } => backup(keep, list, json),
+        Command::Doctor { hubs } => doctor(hubs, json),
     }
 }
 
@@ -1542,6 +1376,10 @@ fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result
     let at = answers.at().unwrap_or_else(db::now);
 
     if check {
+        if json {
+            let entries: Vec<serde_json::Value> = entries.iter().map(|e| serde_json::json!({ "kind": e.kind, "body": e.body })).collect();
+            return print_json(&serde_json::json!({ "project": project.name, "would_take": entries }));
+        }
         println!(
             "{} would take {} from {}:",
             project.name,
@@ -1574,10 +1412,7 @@ fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result
         );
         return Ok(());
     }
-    match check {
-        true => println!("{} - what an import would change; nothing was written:", project.name),
-        false => println!("{}:", project.name),
-    }
+    println!("{}:", project.name);
     println!("  {:<10} {added} added", "answers");
     if already > 0 {
         // Reading the same page twice is ordinary - it is how a correction
@@ -1617,7 +1452,10 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
         println!("{}: nothing changed", project.name);
         return Ok(());
     }
-    println!("{}:", project.name);
+    match check {
+        true => println!("{} - what an import would change; nothing was written:", project.name),
+        false => println!("{}:", project.name),
+    }
     let line = |label: &str, added: u32, updated: u32| {
         if added + updated > 0 {
             println!("  {label:<10} {added} added, {updated} updated");
@@ -1749,8 +1587,24 @@ fn adopt_root(root: Option<&Path>, hubs: Option<&Path>, check: bool, json: bool)
 /// will say before anything is overwritten. A file somebody wrote by hand
 /// is not replaced without `--replace`: what it holds may belong in the hub
 /// first, and the mark is how the next run knows the file is rigger's.
-fn write_skill(project: Option<&str>, install: bool, dir: Option<&Path>, replace: bool, template: Option<&Path>, print_template: bool) -> Result<()> {
+/// What a skill command did, as `--json` prints it.
+fn print_skill_json(path: Option<&Path>, action: &str, text: &str) -> Result<()> {
+    print_json(&serde_json::json!({ "path": path, "action": action, "text": text }))
+}
+
+fn write_skill(
+    project: Option<&str>,
+    install: bool,
+    dir: Option<&Path>,
+    replace: bool,
+    template: Option<&Path>,
+    print_template: bool,
+    json: bool,
+) -> Result<()> {
     if print_template {
+        if json {
+            return print_skill_json(None, "template", skill::DEFAULT_TEMPLATE);
+        }
         print!("{}", skill::DEFAULT_TEMPLATE);
         return Ok(());
     }
@@ -1773,6 +1627,9 @@ fn write_skill(project: Option<&str>, install: bool, dir: Option<&Path>, replace
         eprintln!("note: {note}");
     }
     if !install {
+        if json {
+            return print_skill_json(None, "printed", &rendered.text);
+        }
         print!("{}", rendered.text);
         return Ok(());
     }
@@ -1792,11 +1649,17 @@ Move what it says that only this project can say into the hub, then run again wi
         );
     }
     if before == rendered.text {
+        if json {
+            return print_skill_json(Some(&path), "unchanged", &rendered.text);
+        }
         println!("{} is already what the template says.", path.display());
         return Ok(());
     }
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
+    if json {
+        return print_skill_json(Some(&path), if before.is_empty() { "wrote" } else { "rewrote" }, &rendered.text);
+    }
     let what = if before.is_empty() { "Wrote" } else { "Rewrote" };
     println!("{what} {} from {source}.", path.display());
     Ok(())
@@ -1812,8 +1675,11 @@ Move what it says that only this project can say into the hub, then run again wi
 ///
 /// The name of the skill is the profile's: a line of products and a ticket
 /// desk are different ways of working and should not answer to one skill.
-fn write_line_skill(install: bool, dir: Option<&Path>, replace: bool, template: Option<&Path>, print_template: bool) -> Result<()> {
+fn write_line_skill(install: bool, dir: Option<&Path>, replace: bool, template: Option<&Path>, print_template: bool, json: bool) -> Result<()> {
     if print_template {
+        if json {
+            return print_skill_json(None, "template", skill::DEFAULT_LINE_TEMPLATE);
+        }
         print!("{}", skill::DEFAULT_LINE_TEMPLATE);
         return Ok(());
     }
@@ -1824,6 +1690,9 @@ fn write_line_skill(install: bool, dir: Option<&Path>, replace: bool, template: 
     let description = skill::line_description(&line, &listed);
     let rendered = skill::render_line(&template, &line, &description, &listed)?;
     if !install {
+        if json {
+            return print_skill_json(None, "printed", &rendered.text);
+        }
         print!("{}", rendered.text);
         return Ok(());
     }
@@ -1843,11 +1712,17 @@ Move what it says into the record, then run again with `--replace`.",
         );
     }
     if before == rendered.text {
+        if json {
+            return print_skill_json(Some(&path), "unchanged", &rendered.text);
+        }
         println!("{} is already what the template says.", path.display());
         return Ok(());
     }
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
+    if json {
+        return print_skill_json(Some(&path), if before.is_empty() { "wrote" } else { "rewrote" }, &rendered.text);
+    }
     let what = if before.is_empty() { "Wrote" } else { "Rewrote" };
     println!(
         "{what} {} from {source}: {} projects, description {} of {} characters.",
@@ -1960,11 +1835,23 @@ fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Resu
     Ok(())
 }
 
-fn open_session(project: &str, print: bool, budget: usize) -> Result<()> {
+fn open_session(project: &str, print: bool, budget: usize, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     let packet = context::build(&db, &project, budget)?;
     let message = open::first_message(&context::render(&packet));
+
+    // What would be started, and with what - the assistant is not started:
+    // a program reading JSON is not a person about to work in a terminal.
+    if json {
+        let (program, _) = open::assistant();
+        return print_json(&serde_json::json!({
+            "project": project.name,
+            "dir": project.path,
+            "program": program,
+            "message": message,
+        }));
+    }
 
     if print {
         print!("{message}");
@@ -2103,7 +1990,7 @@ fn print_sync(report: &sync::Report, many: bool) {
 }
 
 /// An event written against a card, under the desk.
-fn note_on_card(task: &str, kind: &str, text: &str) -> Result<()> {
+fn note_on_card(task: &str, kind: &str, text: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     match kind {
         "state" => bail!("a state line belongs to a project's README, not to a card"),
@@ -2113,16 +2000,23 @@ fn note_on_card(task: &str, kind: &str, text: &str) -> Result<()> {
     }
     let card = find_card(&db, task)?;
     let desk = db.desk_project()?;
-    db.record_task_event(desk.id, card.id, kind, text, &db::now(), "assistant")?;
+    let change = db.record_task_event(desk.id, card.id, kind, text, &db::now(), "assistant")?;
+    if json {
+        let id = db.event_id_by_body(desk.id, Some(card.id), kind, text)?;
+        return print_event_json(&db, id, change != db::Change::Unchanged);
+    }
     println!("Recorded a {kind} on {}", card.key);
     Ok(())
 }
 
 /// Records a release as the release engine reports it.
-fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], text: Option<&str>) -> Result<()> {
+fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], text: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     let recorded = delivery::record(&db, &project, tag, release, registries, text)?;
+    if json {
+        return print_json(&serde_json::json!({ "project": project.name, "shipped": recorded }));
+    }
     match recorded.closed {
         true => println!("{} {} shipped - {}", project.name, recorded.version, recorded.delivery.describe()),
         false => println!(
@@ -2138,11 +2032,8 @@ fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], 
     Ok(())
 }
 
-fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>, due: Option<&str>) -> Result<()> {
+fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>, due: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    if let Some(phrase) = &hits.read_as {
-        println!("(read as the phrase {phrase}: FTS5 could not parse the query as it was written)");
-    }
     let project = open_project(&db, project)?;
     // Read before anything is written, so that a day that is not a day
     // refuses the question rather than leaving it recorded without one.
@@ -2151,6 +2042,9 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
     // block, which an export writes from the record.
     if kind == "state" {
         db.add_state_line(project.id, &db::today(), text)?;
+        if json {
+            return print_json(&serde_json::json!({ "state": { "project": project.name, "day": db::today(), "body": text } }));
+        }
         println!("Added a state line for {}; `rigger export` writes it into the README", project.name);
         return Ok(());
     }
@@ -2189,6 +2083,10 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
     {
         db.set_due(id, Some(due))?;
     }
+    if json {
+        let id = db.event_id_by_body(project.id, None, kind, text)?;
+        return print_event_json(&db, id, change != db::Change::Unchanged);
+    }
     match (kind, &asker) {
         ("wish", Some(asker)) => println!("Recorded a wish for {} from {}", project.name, asker.name),
         ("question", _) => println!("Asked the owner about {}; it waits in the inbox until answered", project.name),
@@ -2206,10 +2104,15 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
     Ok(())
 }
 
-fn resolve(project: &str, id: i64, answer: Option<&str>) -> Result<()> {
+fn resolve(project: &str, id: i64, answer: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     let (kind, body) = db.resolve_event(project.id, id, answer)?;
+    if json {
+        return print_json(&serde_json::json!({
+            "resolved": { "id": id, "project": project.name, "was": kind, "body": body, "answer": answer }
+        }));
+    }
     let first_line = body.lines().next().unwrap_or(&body);
     match kind.as_str() {
         "question" => println!("Answered [{id}]: {first_line}"),
@@ -2237,6 +2140,9 @@ fn find(query: &str, project: Option<&str>, kind: Option<&str>, limit: u32, json
         println!("{}", serde_json::to_string_pretty(&hits)?);
         return Ok(());
     }
+    if let Some(phrase) = &hits.read_as {
+        println!("(read as the phrase {phrase}: FTS5 could not parse the query as it was written)");
+    }
     if hits.is_empty() {
         println!("{}", search::nothing_found(query, project, kind));
         return Ok(());
@@ -2263,6 +2169,7 @@ fn find(query: &str, project: Option<&str>, kind: Option<&str>, limit: u32, json
     if hits.events.len() as u32 == limit {
         println!("({limit} shown; --limit for more)");
     }
+
     Ok(())
 }
 
@@ -2331,8 +2238,11 @@ fn list_principles(json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let principles = db.principles()?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&principles)?);
-        return Ok(());
+        let rows: Vec<serde_json::Value> = principles
+            .iter()
+            .map(|(name, count)| serde_json::json!({ "principle": name, "decisions": count }))
+            .collect();
+        return print_json(&rows);
     }
     if principles.is_empty() {
         println!("No decision names a principle yet.");
@@ -2408,7 +2318,7 @@ fn link_side(text: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>) -> Result<()> {
+fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let (from_name, from_version) = link_side(from);
     let (to_name, to_version) = link_side(to);
@@ -2426,6 +2336,10 @@ fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>) -> Result<
         to_version,
         note,
     })?;
+    if json {
+        let link = db.links_of(from_project.id)?.into_iter().find(|l| l.id == id);
+        return print_json(&serde_json::json!({ "link": link, "changed": change == db::Change::Added }));
+    }
     let side = |name: &str, version: Option<&String>| match version {
         Some(v) => format!("{name} {v}"),
         None => name.to_string(),
@@ -2494,9 +2408,10 @@ fn render_link(found: &link::Link) -> String {
     format!("[{}] {:<9} {} {arrow} {}{note}", found.id, found.kind, side(&found.near), side(&found.far))
 }
 
-fn link_remove(id: i64) -> Result<()> {
+fn link_remove(id: i64, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     match db.remove_link(id)? {
+        true if json => print_json(&serde_json::json!({ "removed": id }))?,
         true => println!("Forgot link [{id}]"),
         false => bail!("the record has no link [{id}]; `rigger link list` prints the ids"),
     }
@@ -2720,6 +2635,7 @@ fn digest(project: Option<&str>, since: &str, md: Option<&Path>, json: bool) -> 
         reports.push((project.name.clone(), facts, next, lines, signal));
     }
 
+    let mut written = None;
     if let Some(path) = md {
         let listed: Vec<(String, Vec<String>)> = reports
             .iter()
@@ -2738,12 +2654,15 @@ fn digest(project: Option<&str>, since: &str, md: Option<&Path>, json: bool) -> 
         };
         let block = owner::digest_markdown(&from, &listed, &quiet);
         let change = owner::write_block(path, &block)?;
-        match change {
-            db::Change::Added => println!("Added the digest since {from} to {}", path.display()),
-            db::Change::Updated => println!("Replaced the digest in {} with the one since {from}", path.display()),
-            db::Change::Unchanged => println!("{} already holds this digest", path.display()),
+        if !json {
+            match change {
+                db::Change::Added => println!("Added the digest since {from} to {}", path.display()),
+                db::Change::Updated => println!("Replaced the digest in {} with the one since {from}", path.display()),
+                db::Change::Unchanged => println!("{} already holds this digest", path.display()),
+            }
+            return Ok(());
         }
-        return Ok(());
+        written = Some(serde_json::json!({ "path": path, "changed": change != db::Change::Unchanged }));
     }
 
     if json {
@@ -2751,7 +2670,12 @@ fn digest(project: Option<&str>, since: &str, md: Option<&Path>, json: bool) -> 
             .iter()
             .map(|(name, facts, next, lines, signal)| serde_json::json!({ "project": name, "facts": facts, "next": next, "lines": lines, "signal": signal }))
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "since": from, "projects": payload }))?);
+        let mut answer = serde_json::json!({ "since": from, "projects": payload });
+        // The note written, when the digest went into one.
+        if let Some(note) = written {
+            answer["note"] = note;
+        }
+        println!("{}", serde_json::to_string_pretty(&answer)?);
         return Ok(());
     }
 
@@ -2925,7 +2849,7 @@ fn doc_show(project: &str, slug: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn doc_add(project: &str, title: &str, kind: &str, slug: Option<&str>, body: Option<&str>) -> Result<()> {
+fn doc_add(project: &str, title: &str, kind: &str, slug: Option<&str>, body: Option<&str>, json: bool) -> Result<()> {
     doc::check_kind(kind)?;
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
@@ -2963,10 +2887,16 @@ fn doc_add(project: &str, title: &str, kind: &str, slug: Option<&str>, body: Opt
 
     let text = body_for(&project.name, &slug, body, &doc::template(kind, title))?;
     if text.trim().is_empty() {
+        if json {
+            return print_json(&serde_json::json!({ "document": null, "changed": false }));
+        }
         println!("Nothing was written; no document was made.");
         return Ok(());
     }
     let written = db.write_document(project.id, kind, &slug, title, &text)?;
+    if json {
+        return print_json(&serde_json::json!({ "document": written, "changed": true }));
+    }
     println!(
         "Wrote {} ({kind}, {}) to {}",
         written.slug,
@@ -2976,7 +2906,7 @@ fn doc_add(project: &str, title: &str, kind: &str, slug: Option<&str>, body: Opt
     Ok(())
 }
 
-fn doc_edit(project: &str, slug: &str, title: Option<&str>, body: Option<&str>) -> Result<()> {
+fn doc_edit(project: &str, slug: &str, title: Option<&str>, body: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     let doc = open_document(&db, &project, slug)?;
@@ -2989,6 +2919,9 @@ fn doc_edit(project: &str, slug: &str, title: Option<&str>, body: Option<&str>) 
     };
     let title = title.unwrap_or(&doc.title);
     if text == doc.body && title == doc.title {
+        if json {
+            return print_json(&serde_json::json!({ "document": doc, "changed": false }));
+        }
         println!("{} is unchanged.", doc.slug);
         return Ok(());
     }
@@ -3000,15 +2933,21 @@ fn doc_edit(project: &str, slug: &str, title: Option<&str>, body: Option<&str>) 
         );
     }
     let written = db.write_document(project.id, &doc.kind, &doc.slug, title, &text)?;
+    if json {
+        return print_json(&serde_json::json!({ "document": written, "changed": true }));
+    }
     println!("Wrote {} ({}, {})", written.slug, written.kind, plural(written.body.len(), "byte", "bytes"));
     Ok(())
 }
 
-fn doc_remove(project: &str, slug: &str) -> Result<()> {
+fn doc_remove(project: &str, slug: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     let doc = open_document(&db, &project, slug)?;
     db.delete_document(project.id, &doc.slug)?;
+    if json {
+        return print_json(&serde_json::json!({ "removed": { "project": project.name, "slug": doc.slug, "kind": doc.kind } }));
+    }
     println!("Removed {} ({}) from {}", doc.slug, doc.kind, project.name);
     Ok(())
 }
@@ -3017,11 +2956,19 @@ fn doc_remove(project: &str, slug: &str) -> Result<()> {
 ///
 /// Without this the override is a filename in a doc page: the way to change
 /// what a vision asks you should be to run the command that shows it.
-fn doc_template(kind: &str, write: bool) -> Result<()> {
+fn doc_template(kind: &str, write: bool, json: bool) -> Result<()> {
     doc::check_kind(kind)?;
     if !write {
         let paths = doc::template_paths(kind)?;
         let from = paths.iter().find(|p| p.is_file());
+        if json {
+            return print_json(&serde_json::json!({
+                "kind": kind,
+                "template": doc::template(kind, doc::TITLE_PLACEHOLDER),
+                "from": from,
+                "written": null,
+            }));
+        }
         println!("{}", doc::template(kind, doc::TITLE_PLACEHOLDER).trim_end());
         println!();
         match from {
@@ -3043,6 +2990,14 @@ fn doc_template(kind: &str, write: bool) -> Result<()> {
     // Written with the placeholder in it, so the first edit does not have to
     // discover that the title is substituted.
     std::fs::write(&path, doc::template(kind, doc::TITLE_PLACEHOLDER)).with_context(|| format!("cannot write {}", path.display()))?;
+    if json {
+        return print_json(&serde_json::json!({
+            "kind": kind,
+            "template": doc::template(kind, doc::TITLE_PLACEHOLDER),
+            "from": null,
+            "written": path,
+        }));
+    }
     println!("Wrote {}", path.display());
     println!("Edit it; `{}` in it becomes the document's title.", doc::TITLE_PLACEHOLDER);
     Ok(())
@@ -3172,10 +3127,20 @@ fn backup_state(age_days: Option<i64>) -> &'static str {
     }
 }
 
-fn backup(keep: usize, list: bool) -> Result<()> {
+fn backup(keep: usize, list: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     if list {
         let copies = db.backups()?;
+        if json {
+            let rows: Vec<serde_json::Value> = copies
+                .iter()
+                .map(|path| {
+                    let taken_at = path.file_name().and_then(|n| db::stamp_of(&n.to_string_lossy()));
+                    serde_json::json!({ "path": path, "taken_at": taken_at })
+                })
+                .collect();
+            return print_json(&serde_json::json!({ "backups": rows }));
+        }
         if copies.is_empty() {
             println!("No copies yet. Take one with: rigger backup");
             return Ok(());
@@ -3197,25 +3162,44 @@ fn backup(keep: usize, list: bool) -> Result<()> {
         return Ok(());
     }
     let target = db.backup()?;
-    println!("Copied to {}", target.display());
     let removed = db.prune_backups(keep)?;
+    if json {
+        return print_json(&serde_json::json!({ "backup": target, "removed": removed }));
+    }
+    println!("Copied to {}", target.display());
     if !removed.is_empty() {
         println!("Kept the {keep} newest, deleted {}.", plural(removed.len(), "older copy", "older copies"));
     }
     Ok(())
 }
 
-fn init() -> Result<()> {
+fn init(json: bool) -> Result<()> {
     // The config first, so that a fresh install has a profile to speak of
     // and the file a person can edit is where `doctor` says it is.
     let config_path = profile::Config::path()?;
-    if !config_path.exists() {
+    let config_created = !config_path.exists();
+    if config_created {
         profile::Config::default().save()?;
-        println!("Created {} with the '{}' profile", config_path.display(), profile::DEFAULT);
+        if !json {
+            println!("Created {} with the '{}' profile", config_path.display(), profile::DEFAULT);
+        }
     }
     let path = paths::db_path()?;
+    let answer = |db: &Db, created: bool| -> Result<()> {
+        print_json(&serde_json::json!({
+            "config": config_path,
+            "config_created": config_created,
+            "profile": profile::Config::load()?.current_name(),
+            "database": db.path(),
+            "created": created,
+            "schema": db.schema_version()?,
+        }))
+    };
     if path.exists() {
-        Db::open(&path)?;
+        let db = Db::open(&path)?;
+        if json {
+            return answer(&db, false);
+        }
         println!("Already initialised: {}", path.display());
         return Ok(());
     }
@@ -3223,6 +3207,9 @@ fn init() -> Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     }
     let db = Db::create(&path)?;
+    if json {
+        return answer(&db, true);
+    }
     println!("Created {} (schema version {})", db.path().display(), db.schema_version()?);
     println!("Next: rigger project add <path>");
     Ok(())
@@ -3281,13 +3268,16 @@ fn profile_show(name: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn profile_use(name: &str) -> Result<()> {
+fn profile_use(name: &str, json: bool) -> Result<()> {
     let mut config = profile::Config::load()?;
     if !config.profiles.contains_key(name) {
         bail!("no profile named '{name}'; see `rigger profile list`");
     }
     config.current = name.to_string();
     config.save()?;
+    if json {
+        return profile_show(Some(name), true);
+    }
     println!("Every command now uses the '{name}' profile");
     if std::env::var_os(profile::PROFILE_ENV).is_some() {
         println!("  note: {} is set and overrides this while it is", profile::PROFILE_ENV);
@@ -3298,7 +3288,7 @@ fn profile_use(name: &str) -> Result<()> {
 /// Adds a profile and its database. The database is created here rather
 /// than on first use, so that `profile list` can point at a file that is
 /// there.
-fn profile_add(name: &str, p: profile::Profile, use_it: bool) -> Result<()> {
+fn profile_add(name: &str, p: profile::Profile, use_it: bool, json: bool) -> Result<()> {
     if name.trim().is_empty() || name.contains(['/', '\\', ' ']) {
         bail!("a profile name is one word, without slashes: '{name}' is not");
     }
@@ -3318,6 +3308,9 @@ fn profile_add(name: &str, p: profile::Profile, use_it: bool) -> Result<()> {
         config.current = name.to_string();
     }
     config.save()?;
+    if json {
+        return profile_show(Some(name), true);
+    }
     println!("Added the '{name}' profile ({}) with its database at {}", p.kind.as_str(), path.display());
     match use_it {
         true => println!("Every command now uses it"),
@@ -3329,7 +3322,7 @@ fn profile_add(name: &str, p: profile::Profile, use_it: bool) -> Result<()> {
 /// Changes what a profile says about itself. Only the fields given change;
 /// the roots given replace the roots it had, because a list appended to
 /// can never be shortened.
-fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, id_pattern: Option<String>, trays: Option<PathBuf>) -> Result<()> {
+fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, id_pattern: Option<String>, trays: Option<PathBuf>, json: bool) -> Result<()> {
     let mut config = profile::Config::load()?;
     let name = name.map(str::to_string).unwrap_or_else(|| config.current_name());
     let Some(p) = config.profiles.get_mut(&name) else {
@@ -3351,6 +3344,9 @@ fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, i
         p.trays = Some(trays);
     }
     config.save()?;
+    if json {
+        return profile_show(Some(&name), true);
+    }
     println!("Profile '{name}' updated");
     profile_show(Some(&name), false)
 }
@@ -3361,6 +3357,43 @@ const ACTIVE_SINCE: &str = "active_since";
 /// A card left open this long is not in hand any more: a desk that forgot
 /// to close it yesterday must not be told today that it is.
 const STALE_HOURS: i64 = 8;
+
+/// Prints one JSON document on stdout: what `--json` promises of every
+/// command.
+fn print_json(value: &impl serde::Serialize) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+/// A card after a write, as `--json` prints it: the card as it now stands,
+/// and the repositories it is worked in.
+fn print_card_json(db: &Db, card_id: i64) -> Result<()> {
+    let card = db.card(card_id)?.context("the card just written is not in the record")?;
+    print_json(&serde_json::json!({ "card": card, "links": db.card_links(card_id)? }))
+}
+
+/// A task after a write, as `--json` prints it: a card or a task of a plan.
+fn print_task_json(db: &Db, task_id: i64) -> Result<()> {
+    let task = db.task_written(task_id)?.context("the task just written is not in the record")?;
+    print_json(&serde_json::json!({ "task": task }))
+}
+
+/// An event after a write, as `--json` prints it, with whether this write
+/// is what put it there or the record already held it.
+fn print_event_json(db: &Db, id: Option<i64>, changed: bool) -> Result<()> {
+    let event = match id {
+        Some(id) => db.event_written(id)?,
+        None => None,
+    }
+    .context("the event just written is not in the record")?;
+    print_json(&serde_json::json!({ "event": event, "changed": changed }))
+}
+
+/// A project as `project show --json` prints it, read again after a write.
+fn print_project_json(db: &Db, name: &str) -> Result<()> {
+    let project = db.project_by_name(name)?.context("the project just written is not in the record")?;
+    print_json(&project)
+}
 
 /// A card by whatever names it, or a clear refusal.
 fn find_card(db: &Db, text: &str) -> Result<card::Card> {
@@ -3384,10 +3417,13 @@ fn find_task(db: &Db, text: &str) -> Result<(i64, i64)> {
     bail!("no task named '{text}'; a card's key, or the id the packet lists")
 }
 
-fn task_status(task: &str, status: &str) -> Result<()> {
+fn task_status(task: &str, status: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let (project_id, id) = find_task(&db, task)?;
     let (title, was) = db.set_task_status(project_id, id, status)?;
+    if json {
+        return print_task_json(&db, id);
+    }
     match was == status {
         true => println!("Task {task} was already {status}: {title}"),
         false => println!("Task {task} is now {status} (was {was}): {title}"),
@@ -3406,7 +3442,7 @@ fn let_go_of(db: &Db, task_id: i64) -> Result<()> {
 }
 
 /// Puts a task to sleep until a day, or wakes it when `until` is `None`.
-fn task_snooze(task: &str, until: Option<&str>) -> Result<()> {
+fn task_snooze(task: &str, until: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let (project_id, id) = find_task(&db, task)?;
     let today = db::today();
@@ -3421,9 +3457,14 @@ fn task_snooze(task: &str, until: Option<&str>) -> Result<()> {
         None => None,
     };
     let (title, _, was) = db.set_snooze(project_id, id, day.as_deref())?;
+    if day.is_some() {
+        let_go_of(&db, id)?;
+    }
+    if json {
+        return print_task_json(&db, id);
+    }
     match (&day, was) {
         (Some(day), _) => {
-            let_go_of(&db, id)?;
             println!("Task {task} sleeps until {day}: {title}");
             println!("  out of the packet, the list and the hand until then; `rigger task unsnooze {task}` wakes it sooner");
         }
@@ -3435,7 +3476,7 @@ fn task_snooze(task: &str, until: Option<&str>) -> Result<()> {
 
 /// Sets a task aside on purpose. The reason is the point: a frozen task
 /// that does not say why is a question for whoever finds it.
-fn task_freeze(task: &str, why: Option<&str>) -> Result<()> {
+fn task_freeze(task: &str, why: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let (project_id, id) = find_task(&db, task)?;
     let (title, was) = db.set_task_status(project_id, id, "frozen")?;
@@ -3443,6 +3484,9 @@ fn task_freeze(task: &str, why: Option<&str>) -> Result<()> {
         db.record_task_event(project_id, id, "decision", &format!("Set aside: {why}"), &db::now(), "assistant")?;
     }
     let_go_of(&db, id)?;
+    if json {
+        return print_task_json(&db, id);
+    }
     match was.as_str() {
         "frozen" => println!("Task {task} was already frozen: {title}"),
         _ => println!("Task {task} is frozen (was {was}): {title}"),
@@ -3522,7 +3566,7 @@ fn task_handoff(task: Option<&str>, to: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[String], branch: Option<&str>, summary: Option<&str>) -> Result<()> {
+fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[String], branch: Option<&str>, summary: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     if title.trim().is_empty() {
         bail!("a card needs a title");
@@ -3532,6 +3576,9 @@ fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[Stri
         db.set_card_summary(card.id, summary)?;
     }
     link_and_hold(&db, &card, projects, branch)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("Made card {} and opened it: {}", card.key, card.title);
     if key.is_none() {
         println!("  a local key; `rigger task rename {} <ID>` when the tracker names it", card.key);
@@ -3627,11 +3674,14 @@ fn active_card(db: &Db) -> Result<Option<card::Card>> {
     Ok(db.card(id.parse().unwrap_or_default())?.filter(|c| c.snoozed_until.is_none()))
 }
 
-fn task_open(task: &str) -> Result<()> {
+fn task_open(task: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
     db.set_setting(ACTIVE_CARD, Some(&card.id.to_string()))?;
     db.set_setting(ACTIVE_SINCE, Some(&db::now()))?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("Card {} is in hand: {}", card.key, card.title);
     Ok(())
 }
@@ -3662,12 +3712,15 @@ fn card_or_in_hand(db: &Db, task: Option<&str>, command: &str) -> Result<card::C
     }
 }
 
-fn task_close(task: Option<&str>, status: &str) -> Result<()> {
+fn task_close(task: Option<&str>, status: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = card_or_in_hand(&db, task, "task close")?;
     let desk = db.desk_project()?;
     let (title, was) = db.set_task_status(desk.id, card.id, status)?;
     let_go_of(&db, card.id)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("Closed {} as {status} (was {was}): {title}", card.key);
     Ok(())
 }
@@ -3949,18 +4002,25 @@ fn tray_section(tray: &tray::Tray) -> String {
     out
 }
 
-fn task_context(task: &str, budget: usize) -> Result<()> {
+fn task_context(task: &str, budget: usize, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
-    print!("{}", render_card(&db, &card, budget)?);
+    let packet = render_card(&db, &card, budget)?;
+    if json {
+        return print_json(&serde_json::json!({ "card": card, "packet": packet }));
+    }
+    print!("{packet}");
     Ok(())
 }
 
-fn task_link(task: &str, project: &str, branch: Option<&str>, role: Option<&str>) -> Result<()> {
+fn task_link(task: &str, project: &str, branch: Option<&str>, role: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
     let project = open_project(&db, project)?;
     db.link_card(card.id, project.id, branch, role)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("{} is worked in:", card.key);
     print_links(&db, card.id)
 }
@@ -3994,26 +4054,35 @@ fn task_list(status: &str, snoozed: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn task_rename(task: &str, key: &str) -> Result<()> {
+fn task_rename(task: &str, key: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
     let renamed = db.rename_card(card.id, key)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("{} is now {}; {} stays as an alias", card.key, renamed.key, card.key);
     Ok(())
 }
 
-fn task_alias(task: &str, alias: &str) -> Result<()> {
+fn task_alias(task: &str, alias: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
     let card = db.add_alias(card.id, alias)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("{} also goes by: {}", card.key, card.aliases.join(", "));
     Ok(())
 }
 
-fn task_summary(task: &str, text: &str) -> Result<()> {
+fn task_summary(task: &str, text: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
     db.set_card_summary(card.id, text)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("{} summarised", card.key);
     Ok(())
 }
@@ -4117,10 +4186,13 @@ fn task_incoming(all: bool, json: bool) -> Result<()> {
 /// Makes a card from a ticket in kasl's inbox: the key and the title are
 /// the tracker's, so nobody types them twice. A ticket that already has a
 /// card is put in hand instead - taking is what the person meant.
-fn task_take(key: &str, projects: &[String], branch: Option<&str>) -> Result<()> {
+fn task_take(key: &str, projects: &[String], branch: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     if let Some(card) = db.card_by_ref(key)? {
         link_and_hold(&db, &card, projects, branch)?;
+        if json {
+            return print_card_json(&db, card.id);
+        }
         println!("{} already has a card; it is in hand: {}", card.key, card.title);
         print_links(&db, card.id)?;
         return Ok(());
@@ -4132,6 +4204,9 @@ fn task_take(key: &str, projects: &[String], branch: Option<&str>) -> Result<()>
     };
     let card = db.new_card(Some(&issue.key), &issue.summary, &[])?;
     link_and_hold(&db, &card, projects, branch)?;
+    if json {
+        return print_card_json(&db, card.id);
+    }
     println!("Made card {} from kasl's inbox and opened it: {}", card.key, card.title);
     let facts = issue.facts();
     if !facts.is_empty() {
@@ -4197,10 +4272,13 @@ fn tray_show(task: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn tray_edit(task: Option<&str>) -> Result<()> {
+fn tray_edit(task: Option<&str>, json: bool) -> Result<()> {
     let (card, dir, _) = open_tray(task, "tray edit")?;
     let form = dir.join(tray::FORM);
     doc::edit_file(&form)?;
+    if json {
+        return tray_show(Some(&card.key), true);
+    }
     let filled = std::fs::read_to_string(&form).map(|t| tray::is_filled(&t)).unwrap_or(false);
     println!("The form of {} is {}: {}", card.key, if filled { "filled" } else { "blank" }, form.display());
     Ok(())
@@ -4378,7 +4456,7 @@ fn tray_list(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn project_add(path: PathBuf, name: Option<String>) -> Result<()> {
+fn project_add(path: PathBuf, name: Option<String>, json: bool) -> Result<()> {
     let root = dunce::canonicalize(&path).with_context(|| format!("{} is not a directory rigger can read", path.display()))?;
     if !root.is_dir() {
         bail!("{} is not a directory", root.display());
@@ -4387,12 +4465,16 @@ fn project_add(path: PathBuf, name: Option<String>) -> Result<()> {
     let name = name.unwrap_or_else(|| repo::detect_name(&root));
     let remote = repo::detect_remote(&root);
     let project = db.add_project(&name, &root.to_string_lossy(), remote.as_deref(), db::Kind::Repo)?;
+    if json {
+        refresh_line_skill(&db, false)?;
+        return print_project_json(&db, &project.name);
+    }
     println!("Recorded '{}' at {}", project.name, project.path);
     match &project.remote {
         Some(url) => println!("  remote: {url}"),
         None => println!("  remote: none (no origin in .git/config)"),
     }
-    refresh_line_skill(&db)?;
+    refresh_line_skill(&db, true)?;
     Ok(())
 }
 
@@ -4403,7 +4485,9 @@ fn project_add(path: PathBuf, name: Option<String>) -> Result<()> {
 /// to work on the new project reads a skill that has never heard of it.
 /// Only when the file is already there: installing a skill is something
 /// the owner asks for once, not something `project add` decides.
-fn refresh_line_skill(db: &Db) -> Result<()> {
+/// `say` is false under `--json`, where stdout holds one document and the
+/// line about the skill would break it.
+fn refresh_line_skill(db: &Db, say: bool) -> Result<()> {
     // Only inside the directory this run was pointed at. A run with a
     // record of its own has no business rewriting the skill in the owner's
     // home - and did, until a test's fixture turned up there.
@@ -4424,7 +4508,9 @@ fn refresh_line_skill(db: &Db) -> Result<()> {
         return Ok(());
     }
     std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
-    println!("  {} now lists {} projects", path.display(), listed.len());
+    if say {
+        println!("  {} now lists {} projects", path.display(), listed.len());
+    }
     Ok(())
 }
 
@@ -4434,13 +4520,16 @@ fn refresh_line_skill(db: &Db) -> Result<()> {
 /// somewhere that is not one of them. That place has no repository and
 /// never will, so it is recorded as what it is: `sync` does not ask git
 /// about it and `doctor` does not list it as waiting to be synced.
-fn project_service(name: &str) -> Result<()> {
+fn project_service(name: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     // The path is a name, not a location: the column is unique and every
     // other project fills it with a directory, so a marker keeps the two
     // apart without pretending there is a directory to look in.
     let path = format!("service:{name}");
     let project = db.add_project(name, &path, None, db::Kind::Service)?;
+    if json {
+        return print_project_json(&db, &project.name);
+    }
     println!("Recorded '{}' as a place the record keeps for itself", project.name);
     println!("  no repository: sync will not ask git about it");
     Ok(())
@@ -4504,9 +4593,15 @@ fn project_show(name: &str, json: bool) -> Result<()> {
 /// The gate is the first of these: the command CI runs, so that "green
 /// before a commit" has one spelling per project instead of a copy in the
 /// skill file, the README and whatever an assistant remembers.
-fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Option<&str>, no_on_session_end: bool) -> Result<()> {
+fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Option<&str>, no_on_session_end: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, name)?;
+    if json {
+        // Checked and written exactly as below, then answered as the project
+        // now stands rather than line by line.
+        project_set_quietly(&db, &project, gate, no_gate, on_session_end, no_on_session_end)?;
+        return print_project_json(&db, &project.name);
+    }
 
     if !no_gate && gate.is_none() && !no_on_session_end && on_session_end.is_none() {
         // Nothing asked for is a question, not a no-op: a command that
@@ -4577,12 +4672,15 @@ fn gate(project: Option<&str>, check: bool, json: bool) -> Result<()> {
     }
 
     if check {
+        if json {
+            return print_json(&serde_json::json!({ "project": project.name, "command": command, "dir": project.path }));
+        }
         println!("{} would run, in {}:", project.name, project.path);
         println!("  {command}");
         return Ok(());
     }
 
-    let run = gate::run(&command, dir).with_context(|| format!("cannot run the gate of {}", project.name))?;
+    let run = gate::run(&command, dir, json).with_context(|| format!("cannot run the gate of {}", project.name))?;
     let body = run.event_body(&command);
     db.record_event(project.id, "gate", &body, &db::now(), "assistant")?;
 
@@ -4612,25 +4710,32 @@ fn gate(project: Option<&str>, check: bool, json: bool) -> Result<()> {
 }
 
 /// Records how a product looks from outside.
-fn project_mark(
-    name: &str,
-    code: Option<&str>,
-    accent: Option<&str>,
-    accent2: Option<&str>,
-    form: Option<&str>,
-    docs: Option<&str>,
-    clear: bool,
-) -> Result<()> {
+/// `given` holds what the command line named; a field left `None` keeps
+/// what the project had.
+fn project_mark(name: &str, given: db::Mark, clear: bool, json: bool) -> Result<()> {
+    let (code, accent, accent2, form, docs) = (
+        given.code.as_deref(),
+        given.accent.as_deref(),
+        given.accent2.as_deref(),
+        given.form.as_deref(),
+        given.docs_url.as_deref(),
+    );
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, name)?;
 
     if clear {
         db.set_mark(project.id, &db::Mark::default())?;
+        if json {
+            return print_project_json(&db, &project.name);
+        }
         println!("{} has no mark recorded now.", project.name);
         return Ok(());
     }
 
     if code.is_none() && accent.is_none() && accent2.is_none() && form.is_none() && docs.is_none() {
+        if json {
+            return print_project_json(&db, &project.name);
+        }
         // Nothing asked for is a question, not a no-op.
         match (&project.mark_code, &project.accent) {
             (None, None) => println!("{} has no mark recorded; `--code` and `--accent` start one", project.name),
@@ -4675,6 +4780,9 @@ fn project_mark(
     };
     db.set_mark(project.id, &mark)
         .with_context(|| format!("cannot record the mark of {}", project.name))?;
+    if json {
+        return print_project_json(&db, &project.name);
+    }
     println!("{}: mark recorded.", project.name);
     for (label, value) in [
         ("code", &mark.code),
@@ -4691,7 +4799,7 @@ fn project_mark(
 }
 
 /// Writes the line's public registry.
-fn export_line(to: Option<&Path>, check: bool) -> Result<()> {
+fn export_line(to: Option<&Path>, check: bool, json_out: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let registry = line::build(&db, |p| repo::detect_about(Path::new(&p.path)))?;
     // Before the file is written, every time. The one mistake this command
@@ -4709,11 +4817,25 @@ fn export_line(to: Option<&Path>, check: bool) -> Result<()> {
         return Ok(());
     };
     let before = std::fs::read_to_string(path).unwrap_or_default();
+    let answer = |changed: bool, written: bool| {
+        print_json(&serde_json::json!({
+            "path": path,
+            "product_count": registry.products.len(),
+            "changed": changed,
+            "written": written,
+        }))
+    };
     if before == json {
+        if json_out {
+            return answer(false, false);
+        }
         println!("{} is already what the record says.", path.display());
         return Ok(());
     }
     if check {
+        if json_out {
+            return answer(true, false);
+        }
         println!("{} would change: {} products", path.display(), registry.products.len());
         return Ok(());
     }
@@ -4721,12 +4843,39 @@ fn export_line(to: Option<&Path>, check: bool) -> Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     }
     std::fs::write(path, &json).with_context(|| format!("cannot write {}", path.display()))?;
+    if json_out {
+        return answer(true, true);
+    }
     let what = if before.is_empty() { "Wrote" } else { "Rewrote" };
     println!("{what} {} - {} products", path.display(), registry.products.len());
     Ok(())
 }
 
-fn project_tier(name: &str, tier: &str, rhythm: Option<u32>) -> Result<()> {
+/// The writes of `project set`, without a word: what `--json` runs before
+/// it prints the project.
+fn project_set_quietly(db: &Db, project: &db::Project, gate: Option<&str>, no_gate: bool, on_session_end: Option<&str>, no_on_session_end: bool) -> Result<()> {
+    if no_gate {
+        db.set_gate(project.id, None)?;
+    } else if let Some(gate) = gate {
+        let gate = gate.trim();
+        if gate.is_empty() {
+            bail!("an empty gate is not a gate; use --no-gate to take it off");
+        }
+        db.set_gate(project.id, Some(gate))?;
+    }
+    if no_on_session_end {
+        db.set_on_session_end(project.id, None)?;
+    } else if let Some(hook) = on_session_end {
+        let hook = hook.trim();
+        if hook.is_empty() {
+            bail!("an empty command is not a command; use --no-on-session-end to take it off");
+        }
+        db.set_on_session_end(project.id, Some(hook))?;
+    }
+    Ok(())
+}
+
+fn project_tier(name: &str, tier: &str, rhythm: Option<u32>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, name)?;
     let tier = calendar::Tier::parse(tier)?;
@@ -4739,6 +4888,9 @@ fn project_tier(name: &str, tier: &str, rhythm: Option<u32>) -> Result<()> {
         None => tier.default_rhythm(),
     };
     db.set_tier(project.id, tier.as_str(), rhythm)?;
+    if json {
+        return print_project_json(&db, &project.name);
+    }
 
     println!("{} is tier {tier} - {}", project.name, tier.describe());
     match rhythm {
@@ -4889,7 +5041,7 @@ fn tier_name(tier: Option<calendar::Tier>) -> String {
     tier.map(|t| t.to_string()).unwrap_or_else(|| "no tier".to_string())
 }
 
-fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool) -> Result<()> {
+fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     if week.is_none() && !clear {
@@ -4898,6 +5050,9 @@ fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool) -
     let week = week.map(calendar::Week::parse).transpose()?;
     let stored = week.map(|w| w.to_string());
     let change = db.set_planned_week(project.id, version, stored.as_deref())?;
+    if json {
+        return version_show(&project.name, Some(version), true);
+    }
 
     match (week, change) {
         (_, db::Change::Unchanged) => println!("{version} was already there; nothing changed"),
@@ -4913,7 +5068,7 @@ fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool) -
 /// Only what is still ahead: a version already shipped has no Friday left
 /// to be reminded of, and a phone calendar filling up with the past is a
 /// calendar nobody looks at.
-fn write_ics(weeks: u32, from: Option<&str>, path: &Path) -> Result<()> {
+fn write_ics(weeks: u32, from: Option<&str>, path: &Path, json: bool) -> Result<()> {
     if weeks == 0 {
         bail!("a calendar of 0 weeks shows nothing; ask for at least one");
     }
@@ -4954,7 +5109,21 @@ fn write_ics(weeks: u32, from: Option<&str>, path: &Path) -> Result<()> {
         .collect();
 
     let file = ics::render(&releases, &focus, &ics::stamp(jiff::Timestamp::now()));
-    if path.as_os_str() == "-" {
+    let to_stdout = path.as_os_str() == "-";
+    if json {
+        if !to_stdout {
+            std::fs::write(path, &file).with_context(|| format!("cannot write {}", path.display()))?;
+        }
+        return print_json(&serde_json::json!({
+            "from": from.to_string(),
+            "to": to.to_string(),
+            "releases": releases.len(),
+            "focus_weeks": focus.len(),
+            "written": (!to_stdout).then_some(path),
+            "ics": to_stdout.then_some(&file),
+        }));
+    }
+    if to_stdout {
         print!("{file}");
         return Ok(());
     }
@@ -5825,7 +5994,7 @@ struct HookRun {
 ///
 /// Recorded as a change, because that is what it is: something happened
 /// outside the record because a session ended.
-fn run_session_hook(db: &Db, project: &db::Project) -> Result<Option<HookRun>> {
+fn run_session_hook(db: &Db, project: &db::Project, json: bool) -> Result<Option<HookRun>> {
     let Some(command) = project.on_session_end.clone() else {
         return Ok(None);
     };
@@ -5837,7 +6006,7 @@ fn run_session_hook(db: &Db, project: &db::Project) -> Result<Option<HookRun>> {
         return Ok(None);
     }
     eprintln!("Running the end-of-session command: {command}");
-    let run = match gate::run(&command, dir) {
+    let run = match gate::run(&command, dir, json) {
         Ok(run) => run,
         Err(e) => {
             eprintln!("cannot run `{command}`: {e}");
@@ -6000,7 +6169,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     // publishes its novellas - belongs to the sitting that has just been
     // written down, and a command that ran first would publish a session
     // the record had not yet closed.
-    let hook = run_session_hook(&db, &project)?;
+    let hook = run_session_hook(&db, &project, json)?;
 
     let mut missing = summary.missing();
     if let Some(red) = red_gate_reminder(&db, &project, open.id)? {
@@ -6526,6 +6695,7 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     // cannot prove a tag's absence - it may simply not have been fetched -
     // and a silent correction would erase what the owner wrote (ADR 0005).
     let mut mismatches = Vec::new();
+    let mut apart = Vec::new();
     let mut unsynced = Vec::new();
     for project in db.projects()? {
         // Never synced is a thing to fix only for a project git can answer
@@ -6540,6 +6710,9 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
         }
         for version in db.shipped_without_a_tag(project.id)? {
             mismatches.push((project.name.clone(), version));
+        }
+        for (closed, tagged) in db.one_step_apart(project.id)? {
+            apart.push((project.name.clone(), closed, tagged));
         }
     }
 
@@ -6575,6 +6748,10 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                 "closed_without_a_tag": mismatches
                     .iter()
                     .map(|(project, version)| serde_json::json!({ "project": project, "version": version }))
+                    .collect::<Vec<_>>(),
+                "one_step_apart": apart
+                    .iter()
+                    .map(|(project, closed, tagged)| serde_json::json!({ "project": project, "closed": closed, "tagged": tagged }))
                     .collect::<Vec<_>>(),
                 "never_synced": unsynced,
                 "wishes_left_in_the_hub": hubs_with_wishes(&db)?
@@ -6639,6 +6816,17 @@ closed in the plan, no tag in git ({}):",
         }
         println!("  a tag would settle it; rigger does not change what you wrote");
     }
+    if !apart.is_empty() {
+        println!(
+            "
+the plan and the tags look one step apart ({}):",
+            apart.len()
+        );
+        for (project, closed, tagged) in &apart {
+            println!("  {project:<12} {closed} closed without a tag, beside {tagged} tagged without a stage");
+        }
+        println!("  the tags may name the stage before the one the plan gave them; renumber the plan, or tag the stage");
+    }
 
     let waiting = hubs_with_wishes(&db)?;
     if !waiting.is_empty() {
@@ -6687,22 +6875,3 @@ mod tests {
         assert!(!super::is_a_closed_pipe("attempt to divide by zero"));
     }
 }
-    let mut apart = Vec::new();
-        for (closed, tagged) in db.one_step_apart(project.id)? {
-            apart.push((project.name.clone(), closed, tagged));
-        }
-                "one_step_apart": apart
-                    .iter()
-                    .map(|(project, closed, tagged)| serde_json::json!({ "project": project, "closed": closed, "tagged": tagged }))
-                    .collect::<Vec<_>>(),
-    if !apart.is_empty() {
-        println!(
-            "
-the plan and the tags look one step apart ({}):",
-            apart.len()
-        );
-        for (project, closed, tagged) in &apart {
-            println!("  {project:<12} {closed} closed without a tag, beside {tagged} tagged without a stage");
-        }
-        println!("  the tags may name the stage before the one the plan gave them; renumber the plan, or tag the stage");
-    }

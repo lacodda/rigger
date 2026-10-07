@@ -104,6 +104,72 @@ scheda is the line's own markdown notepad, and it takes `--wait FILE`: the proce
 
 The text is edited through a file in a directory of that rigger process's own, under the temporary directory, and both are removed afterwards whether the edit succeeded or not: the file holds your prose, and leaving copies of it lying about is not something a record tool should do. Per process, because two rigger runs editing a document of the same name - two projects each with a `vision`, or two sittings at once - would otherwise share one scratch file, and whichever saved second would win.
 
+## JSON
+
+`doc list --json` prints an array with one row per document, without the bodies.
+
+<!-- json: doc list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One document. |
+| `[].slug` | string | What addresses the document. |
+| `[].kind` | string | `vision`, `decisions`, `rituals`, `research` or `other`. |
+| `[].title` | string | The title. |
+| `[].bytes` | integer | The size of the body in bytes. |
+| `[].updated_at` | string | The moment the document was last written, in RFC 3339 UTC. |
+
+`doc show --json` prints the whole row.
+
+<!-- json: doc show -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | The document's id in the record. |
+| `project_id` | integer | The id of the project it belongs to. |
+| `kind` | string | `vision`, `decisions`, `rituals`, `research` or `other`. |
+| `slug` | string | What addresses the document: made from the title once, and then unchanged. |
+| `title` | string | The title. |
+| `body` | string | The whole text. |
+| `created_at` | string | The moment the document was started, in RFC 3339 UTC. |
+| `updated_at` | string | The moment it was last written, in RFC 3339 UTC. |
+| `source_file` | string or null | The hub file the text was read from, when it came from one; null for a document written here. |
+
+`doc add` and `doc edit` print the document they wrote.
+
+<!-- json: doc add, doc edit -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `document` | object | The document as written; its fields are those of `doc show`. |
+| `changed` | boolean | Whether the record changed; false when the text was the same as before. |
+| `document.id` | integer | The document's id in the record. |
+| `document.project_id` | integer | The id of the project it belongs to. |
+| `document.kind` | string | `vision`, `decisions`, `rituals`, `research` or `other`. |
+| `document.slug` | string | What addresses the document: made from the title once, and then unchanged. |
+| `document.title` | string | The title. |
+| `document.body` | string | The whole text. |
+| `document.created_at` | string | The moment the document was started, in RFC 3339 UTC. |
+| `document.updated_at` | string | The moment it was last written, in RFC 3339 UTC. |
+| `document.source_file` | string or null | The hub file the text was read from, when it came from one; null for a document written here. |
+
+`doc remove` says what it removed.
+
+<!-- json: doc remove -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `removed` | object | The document that was removed. |
+| `removed.project` | string | The name of the project it belonged to. |
+| `removed.kind` | string | The kind it had. |
+| `removed.slug` | string | The address it had. |
+
+`doc template --json` prints the skeleton, and where it came from or went to.
+
+<!-- json: doc template -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `kind` | string | The kind the skeleton is for. |
+| `template` | string | The skeleton, with `{{title}}` still in it. |
+| `from` | string or null | The path of the file the skeleton was read from; null for the built-in one or after `--write`. |
+| `written` | string or null | The path `--write` created; null when nothing was written. |
+
 ## What belongs here, and what does not
 
 The record holds **the work on a product**: its projects, versions, tasks, events and questions, and the handwritten texts about how the product is made - the vision, the rituals, the preamble of the decisions journal, the research notes. Once they are here the hub is an export, and there is nothing in it left to edit by hand.

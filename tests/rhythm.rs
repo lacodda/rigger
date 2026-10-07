@@ -393,33 +393,11 @@ fn a_scratch_record_asks_no_github_it_did_not_name() {
 // ---------------------------------------------------------------------------
 // Contracts
 
-/// Every key of a JSON value, at every depth.
-fn keys(value: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, inner) in map {
-                out.insert(key.clone());
-                keys(inner, out);
-            }
-        }
-        serde_json::Value::Array(items) => items.iter().for_each(|item| keys(item, out)),
-        _ => {}
-    }
-}
-
-/// Holds a command's JSON to its reference page: every field it prints is
-/// named there, in backticks. A release engine reads this shape, and a field
-/// renamed in code and not on the page is a consumer broken without notice.
-fn documented(page: &str, json: &serde_json::Value) {
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/src/content/docs/reference").join(page)).unwrap();
-    let mut found = std::collections::BTreeSet::new();
-    keys(json, &mut found);
-    let missing: Vec<&String> = found.iter().filter(|k| !text.contains(&format!("`{k}`"))).collect();
-    assert!(missing.is_empty(), "{page} does not name these fields of the JSON: {missing:?}\n{json:#}");
-}
-
+/// The values of the shape furca's release engine reads. The fields
+/// themselves are held to version.md by the JSON contract gate
+/// (tests/json_contract.rs).
 #[test]
-fn version_show_json_is_the_documented_contract() {
+fn version_show_json_carries_what_the_release_engine_reads() {
     let data = tempfile::tempdir().unwrap();
     record(data.path());
     project(data.path(), "widget", &["v0.1.0 · First", "v0.2.0 · Second"], &[]);
@@ -432,13 +410,8 @@ fn version_show_json_is_the_documented_contract() {
         .assert()
         .success();
 
-    for args in [
-        ["version", "show", "widget", "v0.1.0", "--json"],
-        ["version", "show", "widget", "v0.2.0", "--json"],
-    ] {
-        let json: serde_json::Value = serde_json::from_str(&output(data.path(), &args)).unwrap();
-        documented("version.md", &json);
-    }
+    let shipped: serde_json::Value = serde_json::from_str(&output(data.path(), &["version", "show", "widget", "v0.1.0", "--json"])).unwrap();
+    assert_eq!(shipped["registries"], serde_json::json!(["crates.io"]), "{shipped}");
     let planned: serde_json::Value = serde_json::from_str(&output(data.path(), &["version", "show", "widget", "--json"])).unwrap();
     assert_eq!(planned["version"], "v0.2.0");
     assert_eq!(planned["title"], "Second");
@@ -481,7 +454,6 @@ fn next_json_is_the_documented_contract() {
             "the fixture left `{list}` empty: {json:#}"
         );
     }
-    documented("next.md", &json);
 }
 
 // ---------------------------------------------------------------------------

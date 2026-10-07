@@ -24,6 +24,8 @@ use crate::{hub, import, repo, sync};
 pub struct Adopted {
     pub name: String,
     pub path: String,
+    /// Written as two fields, `status` and `why`: see `Status`.
+    #[serde(flatten)]
     pub status: Status,
     /// Where the hub was found, when one was.
     pub hub: Option<String>,
@@ -80,8 +82,12 @@ impl Adopted {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+/// Under `--json` a status is two fields: `status` - always a word, one of
+/// `recorded`, `known`, `no-hub`, `skipped` - and `why`, the reason a
+/// checkout was skipped and `null` otherwise. One type per field: a reader
+/// that has to ask whether `status` is a string or an object this time is
+/// a reader that breaks on the rare case.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     /// Recorded on this run.
     Recorded,
@@ -89,10 +95,25 @@ pub enum Status {
     Known,
     /// Not recorded: a hubs directory was given and holds no hub of this
     /// name. A checkout beside the line's is not thereby one of the line.
-    #[serde(rename = "no-hub")]
     NoHub,
     /// Left alone, for the reason given.
     Skipped(String),
+}
+
+impl Serialize for Status {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (status, why) = match self {
+            Status::Recorded => ("recorded", None),
+            Status::Known => ("known", None),
+            Status::NoHub => ("no-hub", None),
+            Status::Skipped(why) => ("skipped", Some(why)),
+        };
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("status", status)?;
+        map.serialize_entry("why", &why)?;
+        map.end()
+    }
 }
 
 /// The checkouts directly under `root`, by name.

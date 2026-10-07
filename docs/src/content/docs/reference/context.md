@@ -101,6 +101,79 @@ The documents themselves are not in the packet: a vision runs to thousands of ch
 
 The same packet as data, for a tool that renders it or an editor that feeds it to a model. Every field of the text form is there, plus `events_omitted`, `events_beyond_window`, and `dropped` when `--explain` filled it.
 
+<!-- json: context -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project's name. |
+| `state` | object | Where the project stands. |
+| `state.path` | string | The project's directory. |
+| `state.remote` | string or null | The git remote's URL, when there is one. |
+| `state.last_shipped` | string or null | The newest shipped version. |
+| `state.last_shipped_on` | string or null | The day it shipped, `YYYY-MM-DD`. |
+| `state.delivery_short` | string | How far the newest version got past its tag, when that falls short of installable: `tag-only`, `no-assets`, `released`, `publish-running` or `publish-failed`. Absent when delivery is complete. |
+| `state.versions_planned` | integer | How many versions are planned and unshipped. |
+| `state.tasks_open` | integer | How many tasks are open. |
+| `state.days_quiet` | integer or null | Days since anything was recorded about the project. |
+| `state.commits_since_tag` | integer or null | Commits since the newest tag, as the last `sync` read them. |
+| `state.days_since_commit` | integer or null | Days since the last commit. |
+| `state.since_last_session` | object or null | What happened since the last session ended; `null` when none has. |
+| `state.since_last_session.ended_at` | string | When the last session ended, an RFC 3339 UTC moment. |
+| `state.since_last_session.days_ago` | integer or null | Days since that moment. |
+| `state.since_last_session.events` | integer | Events recorded since, not counting commits. |
+| `state.since_last_session.commits` | integer | Changes read from commit messages since. |
+| `state.gate` | string or null | The command that says the project is fit to commit. |
+| `current` | object or null | The current stage: the first planned version with open work that is not all put down; `null` when there is none. |
+| `current.version` | string | The stage's version, like `v0.3.0`. |
+| `current.title` | string | The stage's title. |
+| `current.tasks` | array | The stage's open tasks that are not put down. |
+| `current.tasks[]` | object | One task. |
+| `current.tasks[].id` | integer | The task's id. |
+| `current.tasks[].status` | string | One of `new`, `active`, `waiting-handoff`, `frozen`, `done`, `dropped`. |
+| `current.tasks[].title` | string | The task's title. |
+| `current.asleep` | array | Open tasks asleep until a day; counted in the text packet, listed here. |
+| `current.asleep[]` | object | One sleeping task. |
+| `current.asleep[].id` | integer | The task's id. |
+| `current.asleep[].status` | string | The task's status, as in `current.tasks[].status`. |
+| `current.asleep[].title` | string | The task's title. |
+| `current.asleep[].snoozed_until` | string | The day it wakes, `YYYY-MM-DD`. |
+| `current.set_aside` | array | Earlier versions whose open work is all frozen or asleep. |
+| `current.set_aside[]` | object | One version set aside. |
+| `current.set_aside[].version` | string | The version. |
+| `current.set_aside[].title` | string or null | The version's title. |
+| `current.set_aside[].frozen` | integer | How many of its open tasks are frozen. |
+| `current.set_aside[].asleep` | integer | How many of its open tasks are asleep. |
+| `questions` | array | Questions waiting for the owner. |
+| `questions[]` | object | One question. |
+| `questions[].id` | integer | The question's id. |
+| `questions[].text` | string | The question. |
+| `questions[].due` | string | The day an answer is needed by, `YYYY-MM-DD`. Absent when no day was set. |
+| `wishes` | array | Wishes not yet sorted into the plan. |
+| `wishes[]` | object | One wish. |
+| `wishes[].id` | integer | The wish's id. |
+| `wishes[].text` | string | The wish. |
+| `wishes[].asked_by` | string | The neighbour project that asked for it. Absent for the owner's own wishes. |
+| `events` | array | Recent events the budget kept, newest first. |
+| `events[]` | object | One event. |
+| `events[].kind` | string | The event's kind, such as `decision`, `finding`, `pitfall` or `change`. |
+| `events[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
+| `events[].body` | string | The event's text. |
+| `documents` | array | The handwritten texts the project has; named, not included. |
+| `documents[]` | object | One document. |
+| `documents[].kind` | string | The document's kind, such as `vision` or `rituals`. |
+| `documents[].slug` | string | The name `rigger doc show` takes. |
+| `documents[].title` | string | The document's title. |
+| `documents[].updated_at` | string | When it was last written, an RFC 3339 UTC moment. |
+| `next_step` | string or null | The line the last session left behind. |
+| `events_omitted` | integer | How many recent events the budget left out. |
+| `events_beyond_window` | integer | How many events are older than the window the packet looks at. |
+| `dropped` | array | Only with `--explain`: the events the budget left out, newest first. |
+| `dropped[]` | object | One event left out. |
+| `dropped[].kind` | string | Its kind: `decision`, `finding`, `pitfall`, `change` and the rest. |
+| `dropped[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
+| `dropped[].head` | string | Its first line, so it can be asked for by name. |
+| `dropped[].tokens` | integer | What it would have cost, in estimated tokens. |
+| `dropped[].why` | string | Why it was left out. |
+
 ## Since the last sitting
 
 When a [session](/rigger/reference/session/) has ended before, the state opens with a line saying where it stopped and what has happened since:

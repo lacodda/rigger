@@ -240,7 +240,7 @@ fn an_inbox_larger_than_a_pipe_is_read_whole() {
 }
 
 #[test]
-fn the_json_of_the_inbox_and_of_a_card_is_the_documented_contract() {
+fn a_card_taken_from_the_inbox_shows_its_ticket_and_tray_as_json() {
     let data = tempfile::tempdir().unwrap();
     desk(data.path());
     let (kasl, _) = fake_kasl(data.path(), INBOX);
@@ -250,28 +250,9 @@ fn the_json_of_the_inbox_and_of_a_card_is_the_documented_contract() {
     output(rigger(data.path()), &["tray", "done"]);
     std::fs::write(data.path().join("profiles/line/trays/ACME-2/shot.png"), "x").unwrap();
 
-    let page = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/src/content/docs/reference/task.md")).unwrap();
-    for args in [&["task", "incoming", "--json"][..], &["task", "show", "ACME-2", "--json"][..]] {
-        let json: serde_json::Value = serde_json::from_str(&output(with_kasl(data.path(), &kasl), args)).unwrap();
-        let mut found = std::collections::BTreeSet::new();
-        keys(&json, &mut found);
-        let missing: Vec<&String> = found.iter().filter(|k| !page.contains(&format!("`{k}`"))).collect();
-        assert!(missing.is_empty(), "task.md does not name these fields of {args:?}: {missing:?}\n{json:#}");
-    }
+    // The fields themselves are held to task.md by the JSON contract gate
+    // (tests/json_contract.rs); this holds the values.
     let show: serde_json::Value = serde_json::from_str(&output(with_kasl(data.path(), &kasl), &["task", "show", "ACME-2", "--json"])).unwrap();
     assert_eq!(show["ticket"]["key"], "ACME-2");
     assert_eq!(show["tray"]["files"][0]["path"], "shot.png");
-}
-
-fn keys(value: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, inner) in map {
-                out.insert(key.clone());
-                keys(inner, out);
-            }
-        }
-        serde_json::Value::Array(items) => items.iter().for_each(|item| keys(item, out)),
-        _ => {}
-    }
 }

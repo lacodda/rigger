@@ -184,29 +184,3 @@ fn an_id_that_names_no_card_makes_none() {
     assert!(list.contains("ACME-7310"), "{list}");
     assert!(!list.contains("ACME-73100"), "a ticket nobody handed over is not a card: {list}");
 }
-
-#[test]
-fn task_show_json_is_the_documented_contract() {
-    let data = tempfile::tempdir().unwrap();
-    desk(data.path());
-    rigger(data.path()).args(["sync", "webapp"]).assert().success();
-    let json = show(data.path(), "ACME-7310");
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/src/content/docs/reference/task.md")).unwrap();
-    let mut found = std::collections::BTreeSet::new();
-    keys(&json, &mut found);
-    let missing: Vec<&String> = found.iter().filter(|k| !text.contains(&format!("`{k}`"))).collect();
-    assert!(missing.is_empty(), "task.md does not name these fields of the JSON: {missing:?}\n{json:#}");
-}
-
-fn keys(value: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, inner) in map {
-                out.insert(key.clone());
-                keys(inner, out);
-            }
-        }
-        serde_json::Value::Array(items) => items.iter().for_each(|item| keys(item, out)),
-        _ => {}
-    }
-}

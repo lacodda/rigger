@@ -63,19 +63,30 @@ $ rigger version show sample --json
 }
 ```
 
-| Field | What it holds |
-| --- | --- |
-| `project` | the project, as the record names it |
-| `version` | the version's number as the record spells it; `null` when every version has shipped and none is being built |
-| `title` | the stage's title, or `null` |
-| `status` | `planned` or `shipped` |
-| `week` | the ISO week it is aimed at, as `2026-W39`, or `null` |
-| `friday` | the Friday of that week, as `2026-09-25`, or `null` |
-| `shipped_at` | the day it shipped, or `null` |
-| `delivery` | how far past its tag it got: `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed`, `published`, or `null` when nobody has said |
-| `registries` | the registries the release engine said it reached |
-| `tasks` | its tasks in plan order, each with `id`, `title` and `status` |
-| `open_tasks` | how many of those are still work to do |
+`version plan --json` answers with the same document for the version it aimed.
+
+<!-- json: version show, version plan -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project, as the record names it. |
+| `version` | string | The version's number as the record spells it. |
+| `title` | string or null | The stage's title, or `null`. |
+| `status` | string | `planned` or `shipped`. |
+| `week` | string or null | The ISO week it is aimed at, as `2026-W39`, or `null`. |
+| `friday` | string or null | The Friday of that week, as `2026-09-25`, or `null`. |
+| `shipped_at` | string or null | The day it shipped, as `YYYY-MM-DD`, or `null`. |
+| `delivery` | string or null | How far past its tag it got: `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed` or `published`; `null` when nobody has said. |
+| `registries` | array | The registries the release engine said it reached. |
+| `registries[]` | string | One registry's name. |
+| `tasks` | array | The version's tasks, in plan order. |
+| `tasks[]` | object | One task. |
+| `tasks[].id` | integer | The task's id. |
+| `tasks[].title` | string | The task's title. |
+| `tasks[].status` | string | The task's status, such as `new`, `active` or `done`. |
+| `tasks[].snoozed_until` | string | The day the task sleeps until, as `YYYY-MM-DD`; present only while it is asleep. |
+| `open_tasks` | integer | How many of the tasks are still work to do. |
+
+When every version has shipped and none is being built, `version show` prints only `project` and a `version` of `null`.
 
 Fields may be added; none is renamed or removed without a major version.
 

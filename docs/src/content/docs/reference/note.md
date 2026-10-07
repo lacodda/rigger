@@ -121,6 +121,48 @@ It is still a wish - the same row, sorted by the same `resolve`, competing for t
 
 A name the record does not have is refused: a wish recorded from a neighbour that does not exist is one nobody will ever answer.
 
+## JSON
+
+`note` and `wish` print the event they recorded.
+
+<!-- json: note, wish -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `event` | object | The event as recorded. |
+| `changed` | boolean | False when the same event was already in the record. |
+| `event.id` | integer | The id of the event, as `resolve` takes it. |
+| `event.project` | string | The name of the project it was recorded against. |
+| `event.card` | string or null | The key of the card it was written against; null for a project. |
+| `event.kind` | string | The kind of the event, for example `finding`, `decision` or `question`; a wish is `wish`. |
+| `event.body` | string | The text. |
+| `event.created_at` | string | The moment it was recorded, in RFC 3339 UTC. |
+| `event.principle` | string or null | The principle a decision stands on. |
+| `event.asked_by` | string or null | The project that asked for a wish with `--from`. |
+| `event.due` | string or null | The day a question is due, as `YYYY-MM-DD`. |
+
+With `--kind state` it prints the state line instead.
+
+<!-- json: note -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `state` | object | The state line that was added. |
+| `state.project` | string | The name of the project. |
+| `state.day` | string | The day it was written, as `YYYY-MM-DD`. |
+| `state.body` | string | The line. |
+
+With `--kind shipped` it prints the release.
+
+<!-- json: note -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The name of the project. |
+| `shipped` | object | The release as recorded. |
+| `shipped.version` | string | The version that went out. |
+| `shipped.delivery` | string | `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed` or `published`. |
+| `shipped.registries` | array | The registries the release reached. |
+| `shipped.registries[]` | string | One registry name. |
+| `shipped.closed` | boolean | Whether the version was closed by this call. |
+
 ## Related
 
 - [`context`](/rigger/reference/context/) - where these events are read back.

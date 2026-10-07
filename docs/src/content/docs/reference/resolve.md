@@ -51,6 +51,18 @@ error: [7] is a decision, not a question or a wish; only those are answered
 
 The MCP server offers the same as a `resolve` tool. An assistant should use it for a wish it has just implemented, and for a question **only when you have actually answered it** - the tool records your decision, not a guess at it.
 
+## JSON
+
+<!-- json: resolve -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `resolved` | object | The question or wish that was closed. |
+| `resolved.id` | integer | Its id. |
+| `resolved.project` | string | The name of its project. |
+| `resolved.was` | string | What it was before: `question` or `wish`. |
+| `resolved.body` | string | Its text. |
+| `resolved.answer` | string or null | The answer recorded as a decision; null for a wish. |
+
 ## Related
 
 - [`inbox`](/rigger/reference/inbox/) - the whole queue, across every project.

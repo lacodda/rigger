@@ -129,6 +129,8 @@ pub enum Tier {
     B,
     C,
     /// Worked on when asked, and deliberately not in the rotation.
+    /// Spelt `out` everywhere it is written, as the project's own tier is.
+    #[serde(rename = "out")]
     Out,
 }
 

@@ -778,6 +778,35 @@ pub struct DigestFacts {
     pub waiting: u32,
 }
 
+/// An event as a write reports it: the row, with its project, its card and
+/// the neighbour that asked named rather than numbered.
+#[derive(Debug, Clone, Serialize)]
+pub struct EventWritten {
+    pub id: i64,
+    pub project: String,
+    /// The card it was written against, when it was.
+    pub card: Option<String>,
+    pub kind: String,
+    pub body: String,
+    pub created_at: String,
+    pub principle: Option<String>,
+    pub asked_by: Option<String>,
+    pub due: Option<String>,
+}
+
+/// A task as a write that changed it reports it: a card (with its key) or
+/// a task of a plan (without one).
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskWritten {
+    pub id: i64,
+    pub card: Option<String>,
+    pub project: String,
+    pub title: String,
+    pub status: String,
+    /// The day it sleeps until, while that day has not come.
+    pub snoozed_until: Option<String>,
+}
+
 /// An event as a search returns it.
 #[derive(Debug, Clone, Serialize)]
 pub struct Found {
@@ -2999,35 +3028,6 @@ impl Db {
         Ok(names)
     }
 
-    /// What git said about the project's activity when it was last read.
-    pub fn record_activity(&self, project_id: i64, commits: u32, last_commit_at: Option<&str>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE projects SET commits_since_tag = ?1, last_commit_at = ?2, synced_at = ?3 WHERE id = ?4",
-            params![commits, last_commit_at, now(), project_id],
-        )?;
-        Ok(())
-    }
-
-    /// The activity recorded by the last sync, if there was one.
-    pub fn activity(&self, project_id: i64) -> Result<Option<Activity>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT commits_since_tag, last_commit_at, synced_at FROM projects WHERE id = ?1 AND synced_at IS NOT NULL",
-                [project_id],
-                |r| {
-                    Ok(Activity {
-                        commits_since_tag: r.get(0)?,
-                        last_commit_at: r.get(1)?,
-                        synced_at: r.get(2)?,
-                    })
-                },
-            )
-            .optional()?)
-    }
-
-    pub fn count_versions(&self, project_id: i64, status: &str) -> Result<u64> {
-        let n: i64 = self.conn.query_row(
     /// Where the plan and the tags look one step apart: a version closed
     /// without a tag sitting right beside a tag the plan never named.
     ///
@@ -3067,6 +3067,35 @@ impl Db {
         Ok(out)
     }
 
+    /// What git said about the project's activity when it was last read.
+    pub fn record_activity(&self, project_id: i64, commits: u32, last_commit_at: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE projects SET commits_since_tag = ?1, last_commit_at = ?2, synced_at = ?3 WHERE id = ?4",
+            params![commits, last_commit_at, now(), project_id],
+        )?;
+        Ok(())
+    }
+
+    /// The activity recorded by the last sync, if there was one.
+    pub fn activity(&self, project_id: i64) -> Result<Option<Activity>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT commits_since_tag, last_commit_at, synced_at FROM projects WHERE id = ?1 AND synced_at IS NOT NULL",
+                [project_id],
+                |r| {
+                    Ok(Activity {
+                        commits_since_tag: r.get(0)?,
+                        last_commit_at: r.get(1)?,
+                        synced_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn count_versions(&self, project_id: i64, status: &str) -> Result<u64> {
+        let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM versions WHERE project_id = ?1 AND status = ?2",
             params![project_id, status],
             |r| r.get(0),
@@ -4030,74 +4059,6 @@ impl Db {
         Ok(())
     }
 
-    /// The id of the event just recorded by this project, of this kind.
-    pub fn latest_event_id(&self, project_id: i64, kind: &str) -> Result<Option<i64>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id FROM events WHERE project_id = ?1 AND kind = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
-                params![project_id, kind],
-                |r| r.get(0),
-            )
-            .optional()?)
-    }
-
-    /// Every event standing on one principle, across every project.
-    ///
-    /// Ordered oldest first: a principle is read as the story of how it
-    /// came to be believed, and a story is read forwards.
-    pub fn on_principle(&self, principle: &str) -> Result<Vec<PrincipleEvent>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT p.name, e.kind, e.created_at, e.body, v.name \
-               FROM events e \
-               JOIN projects p ON p.id = e.project_id \
-          LEFT JOIN versions v ON v.id = e.version_id \
-              WHERE e.principle = ?1 COLLATE NOCASE \
-           ORDER BY e.created_at, e.id",
-        )?;
-        let rows = stmt.query_map([principle], |r| {
-            Ok(PrincipleEvent {
-                project: r.get(0)?,
-                kind: r.get(1)?,
-                at: r.get(2)?,
-                body: r.get(3)?,
-                version: r.get(4)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    /// Records which neighbour asked for a wish that was just recorded.
-    pub fn name_asker(&self, event_id: i64, asked_by: i64) -> Result<()> {
-        self.conn
-            .execute("UPDATE events SET asked_by = ?1 WHERE id = ?2", params![asked_by, event_id])?;
-        Ok(())
-    }
-
-    /// Every open wish of the record that a neighbour asked for, with the
-    /// project it was asked of.
-    ///
-    /// One query rather than one per project: the inbox is read across the
-    /// whole line, and eighteen round trips to answer one screen is how a
-    /// screen becomes slow enough that it stops being opened.
-    pub fn all_asked_wishes(&self) -> Result<Vec<AskedOf>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.body, asker.name, target.name, substr(e.created_at, 1, 10) FROM events e \
-               JOIN projects asker ON asker.id = e.asked_by \
-               JOIN projects target ON target.id = e.project_id \
-              WHERE e.kind = 'wish' \
-           ORDER BY target.name, e.created_at, e.id",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(AskedOf {
-                id: r.get(0)?,
-                body: r.get(1)?,
-                asked_by: r.get(2)?,
-                project: r.get(3)?,
-                date: r.get(4)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     /// Runs `f` against the record and takes back everything it wrote:
     /// what a `--check` is made of. The same code path as the real run,
     /// so a check cannot say one thing and the run do another - which is
@@ -4182,6 +4143,74 @@ impl Db {
             .optional()?)
     }
 
+    /// The id of the event just recorded by this project, of this kind.
+    pub fn latest_event_id(&self, project_id: i64, kind: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM events WHERE project_id = ?1 AND kind = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![project_id, kind],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Every event standing on one principle, across every project.
+    ///
+    /// Ordered oldest first: a principle is read as the story of how it
+    /// came to be believed, and a story is read forwards.
+    pub fn on_principle(&self, principle: &str) -> Result<Vec<PrincipleEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.name, e.kind, e.created_at, e.body, v.name \
+               FROM events e \
+               JOIN projects p ON p.id = e.project_id \
+          LEFT JOIN versions v ON v.id = e.version_id \
+              WHERE e.principle = ?1 COLLATE NOCASE \
+           ORDER BY e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([principle], |r| {
+            Ok(PrincipleEvent {
+                project: r.get(0)?,
+                kind: r.get(1)?,
+                at: r.get(2)?,
+                body: r.get(3)?,
+                version: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Records which neighbour asked for a wish that was just recorded.
+    pub fn name_asker(&self, event_id: i64, asked_by: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE events SET asked_by = ?1 WHERE id = ?2", params![asked_by, event_id])?;
+        Ok(())
+    }
+
+    /// Every open wish of the record that a neighbour asked for, with the
+    /// project it was asked of.
+    ///
+    /// One query rather than one per project: the inbox is read across the
+    /// whole line, and eighteen round trips to answer one screen is how a
+    /// screen becomes slow enough that it stops being opened.
+    pub fn all_asked_wishes(&self) -> Result<Vec<AskedOf>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.body, asker.name, target.name, substr(e.created_at, 1, 10) FROM events e \
+               JOIN projects asker ON asker.id = e.asked_by \
+               JOIN projects target ON target.id = e.project_id \
+              WHERE e.kind = 'wish' \
+           ORDER BY target.name, e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(AskedOf {
+                id: r.get(0)?,
+                body: r.get(1)?,
+                asked_by: r.get(2)?,
+                project: r.get(3)?,
+                date: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// The open wishes of a project that a neighbour asked for.

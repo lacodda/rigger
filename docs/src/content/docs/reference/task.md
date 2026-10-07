@@ -53,6 +53,25 @@ A duplicate card is worse than one more question, so the middle is wide on purpo
 mentioned 561207: ACME-9 - another card
 ```
 
+`task find --json` prints the verdict, the hits and the weak trail:
+
+<!-- json: task find -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `verdict` | string | What to do: `take`, `ask` or `new`. |
+| `hits` | array | The candidate cards, best first. |
+| `hits[]` | object | One candidate. |
+| `hits[].key` | string | The candidate's key. |
+| `hits[].score` | integer | How well it matches, up to 100. |
+| `hits[].status` | string | The candidate's status. |
+| `hits[].title` | string | The candidate's title. |
+| `hits[].why` | string | Why it scored: what matched. |
+| `mentions` | array | Cards whose notes mention an id or number of the query. |
+| `mentions[]` | object | One weak trail. |
+| `mentions[].key` | string | The key of the card the mention was written against. |
+| `mentions[].needle` | string | The id or number that was mentioned. |
+| `mentions[].title` | string | That card's title. |
+
 ## Making and keeping a card
 
 ```console
@@ -64,6 +83,62 @@ Made card ACME-7310 and opened it: rtf files are not supported
 Without `--id` the card gets a local key, `LOCAL-<day>-<n>`, and says so; when the tracker names the task, `task rename` gives the card the id and keeps the old key as an alias - things already refer to it. `task alias` adds another name a task goes by; `task summary` says what it is in one paragraph; `task link` names a repository it is worked in, with the branch and what the repository is to the task.
 
 The card just made is the one **in hand**. `task open` puts another there; `task active` says which; a card left in hand longer than a working day is not in hand any more, so a desk that forgot to close it yesterday is not told today that it is. `task close` closes the card in hand - or the one named - as `done`, or as the `--status` given, and leaves nothing in hand.
+
+Under `--json` the commands that write a card (`task new`, `open`, `close`, `link`, `rename`, `alias`, `summary`, `take`) print the card as it now stands and its links:
+
+<!-- json: task new, task open, task close, task link, task rename, task alias, task summary, task take -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `card` | object | The card as it now stands. |
+| `card.id` | integer | The card's numeric id. |
+| `card.key` | string | The card's key: a tracker id such as `ACME-7310`, or a local `LOCAL-<day>-<n>`. |
+| `card.title` | string | The card's title. |
+| `card.status` | string | The card's status: `new`, `active`, `waiting-handoff`, `frozen`, `done` or `dropped`. |
+| `card.aliases` | array | Other names the card goes by. |
+| `card.aliases[]` | string | One alias. |
+| `card.summary` | string or null | The one-paragraph summary, `null` when none is set. |
+| `card.created_at` | string | When the card was made, in RFC 3339 UTC. |
+| `card.updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
+| `card.snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `links` | array | The repositories the card is worked in. |
+| `links[]` | object | One repository link. |
+| `links[].project` | string | The recorded project's name. |
+| `links[].path` | string | The repository's path. |
+| `links[].branch` | string or null | The branch the card is worked on there, `null` when none is named. |
+| `links[].role` | string or null | What the repository is to the task, `null` when not said. |
+
+`task active --json` prints the card in hand as a bare card, or `null` when none is in hand:
+
+<!-- json: task active -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | The card's numeric id. |
+| `key` | string | The card's key: a tracker id such as `ACME-7310`, or a local `LOCAL-<day>-<n>`. |
+| `title` | string | The card's title. |
+| `status` | string | The card's status: `new`, `active`, `waiting-handoff`, `frozen`, `done` or `dropped`. |
+| `aliases` | array | Other names the card goes by. |
+| `aliases[]` | string | One alias. |
+| `summary` | string or null | The one-paragraph summary, `null` when none is set. |
+| `created_at` | string | When the card was made, in RFC 3339 UTC. |
+| `updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
+| `snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+
+`task list --json` prints an array of the cards listed:
+
+<!-- json: task list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `[]` | object | One card. |
+| `[].id` | integer | The card's numeric id. |
+| `[].key` | string | The card's key: a tracker id such as `ACME-7310`, or a local `LOCAL-<day>-<n>`. |
+| `[].title` | string | The card's title. |
+| `[].status` | string | The card's status: `new`, `active`, `waiting-handoff`, `frozen`, `done` or `dropped`. |
+| `[].aliases` | array | Other names the card goes by. |
+| `[].aliases[]` | string | One alias. |
+| `[].summary` | string or null | The one-paragraph summary, `null` when none is set. |
+| `[].created_at` | string | When the card was made, in RFC 3339 UTC. |
+| `[].updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
+| `[].snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
 
 ## Tickets from kasl's inbox
 
@@ -136,6 +211,30 @@ Only `key` and `summary` are required; every other field may be missing or `null
 { "source": "kasl", "issues": [{ "key": "ACME-4131", "summary": "...", "card": null }] }
 ```
 
+`task incoming --json` prints the inbox with each ticket's card:
+
+<!-- json: task incoming -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `source` | string | Where the tickets were read from: always `kasl`. |
+| `issues` | array | The tickets in kasl's inbox. |
+| `issues[]` | object | One ticket, in the shape rigger reads from kasl, plus the card it is. |
+| `issues[].key` | string | The ticket's tracker id. |
+| `issues[].summary` | string | The ticket's title in the tracker. |
+| `issues[].status` | string or null | The ticket's status in the tracker. |
+| `issues[].priority` | string or null | The ticket's priority in the tracker. |
+| `issues[].score` | number or null | The ranking value kasl sorts by, when the tracker has one. |
+| `issues[].url` | string or null | The ticket's address in the tracker. |
+| `issues[].first_seen` | string or null | When kasl first saw the ticket. |
+| `issues[].taken_at` | string or null | When the person took the ticket in kasl. |
+| `issues[].pinned` | boolean | Whether the ticket is pinned in kasl. |
+| `issues[].snoozed_until` | string or null | When a sleeping ticket is due back. |
+| `issues[].gone_at` | string or null | When the ticket stopped appearing in the tracker, `null` while it is there. |
+| `issues[].card` | object or null | The card the ticket is; `null` when the desk has none. |
+| `issues[].card.key` | string | The card's key. |
+| `issues[].card.title` | string | The card's title. |
+| `issues[].card.status` | string | The card's status. |
+
 ## What git says about a card
 
 Since v0.24.0 a card is found in git without anybody saying where it is worked. [`sync`](/rigger/reference/sync/#cards-in-git) reads the branches of every recorded repository - local ones, and a remote's where there is no local one of that name - and the newest 500 commits across all of them, and looks for the names of the cards the record holds: a card's key, and those of its aliases that are ids (`OPS-512`, the `LOCAL-...` key it had before `task rename`), never an alias that is a phrase. A name counts only as a whole word in any case: `fix/acme-7310-rtf` and `feat(ACME-7310): ...` name `ACME-7310`; `ACME-73100` does not.
@@ -191,18 +290,75 @@ This is a contract: a git client that makes a worktree per task reads the branch
 }
 ```
 
-| Field | What it holds |
-| --- | --- |
-| `card` | the card: `id`, `key`, `title`, `status`, `aliases`, `summary`, `created_at`, `updated_at`, and `snoozed_until` - the day it [sleeps](#putting-work-down) until, `null` when it is awake |
-| `links` | the repositories it is worked in: `project`, `path`, `branch` (the one a worktree is made from), `role` |
-| `activity` | what git said, per `project`: its `branches`, how many `commits` name the card, and the `last_commit` |
-| `branches` | `name` as it is checked out; `remote` when the branch is only on that remote, `null` when it is local; `tip` and `tip_at`, the tip commit and its moment in UTC |
-| `last_commit` | `hash`, `at` (UTC) and `subject` of the newest movement |
-| `idle_days` | whole days since the newest movement anywhere; `null` when git has said nothing about the card |
-| `events` | how many events are written against the card |
-| `ticket` | the ticket in kasl's inbox the card is, by its key or an alias, in [the shape rigger reads](#the-shape-rigger-reads-from-kasl); `null` when kasl is not there or does not know it |
-| `tray` | the card's [tray](/rigger/reference/tray/), `null` when it has none: its `path`; the `form` - its `path` and whether it is `filled`; the `files` waiting, each with its `path` in the tray, `bytes` and `modified` (UTC); and the rounds `sorted` before, each a `day` and how many `files` |
-| `handoffs` | the card's [handoffs](#handing-a-card-over), oldest first: who it went `to`, the `day` the form was begun, whether the texts were made (`sent`), the `title` they went out under, and the `path` of the form |
+<!-- json: task show -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `card` | object | The card. |
+| `card.id` | integer | The card's numeric id. |
+| `card.key` | string | The card's key: a tracker id such as `ACME-7310`, or a local `LOCAL-<day>-<n>`. |
+| `card.title` | string | The card's title. |
+| `card.status` | string | The card's status: `new`, `active`, `waiting-handoff`, `frozen`, `done` or `dropped`. |
+| `card.aliases` | array | Other names the card goes by. |
+| `card.aliases[]` | string | One alias. |
+| `card.summary` | string or null | The one-paragraph summary, `null` when none is set. |
+| `card.created_at` | string | When the card was made, in RFC 3339 UTC. |
+| `card.updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
+| `card.snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `links` | array | The repositories the card is worked in. |
+| `links[]` | object | One repository link. |
+| `links[].project` | string | The recorded project's name. |
+| `links[].path` | string | The repository's path. |
+| `links[].branch` | string or null | The branch the card is worked on there, `null` when none is named. |
+| `links[].role` | string or null | What the repository is to the task, `null` when not said. |
+| `activity` | array | What git says, one entry per repository the card is worked in. |
+| `activity[]` | object | One repository's activity. |
+| `activity[].project` | string | The project's name. |
+| `activity[].branches` | array | The branches that carry the card's name, local ones first. |
+| `activity[].branches[]` | object | One branch. |
+| `activity[].branches[].name` | string | The branch name as it is checked out. |
+| `activity[].branches[].remote` | string or null | The remote it is on when there is no local branch of that name, `null` when local. |
+| `activity[].branches[].tip` | string | The tip commit's hash. |
+| `activity[].branches[].tip_at` | string | When the tip was committed, in RFC 3339 UTC. |
+| `activity[].commits` | integer | How many of the commits read name the card. |
+| `activity[].last_commit` | object or null | The newest movement: the newest naming commit or branch tip. |
+| `activity[].last_commit.hash` | string | The commit's hash. |
+| `activity[].last_commit.at` | string | When it was committed, in RFC 3339 UTC. |
+| `activity[].last_commit.subject` | string | The commit's subject line. |
+| `idle_days` | integer or null | Whole days since the newest movement anywhere; `null` when git has said nothing about the card. |
+| `events` | integer | How many events are written against the card. |
+| `ticket` | object or null | The ticket in kasl's inbox the card is; `null` when kasl is absent or does not know it. |
+| `ticket.key` | string | The ticket's tracker id. |
+| `ticket.summary` | string | The ticket's title in the tracker. |
+| `ticket.status` | string or null | The ticket's status in the tracker. |
+| `ticket.priority` | string or null | The ticket's priority in the tracker. |
+| `ticket.score` | number or null | The ranking value kasl sorts by, when the tracker has one. |
+| `ticket.url` | string or null | The ticket's address in the tracker. |
+| `ticket.first_seen` | string or null | When kasl first saw the ticket. |
+| `ticket.taken_at` | string or null | When the person took the ticket in kasl. |
+| `ticket.pinned` | boolean | Whether the ticket is pinned in kasl. |
+| `ticket.snoozed_until` | string or null | When a sleeping ticket is due back. |
+| `ticket.gone_at` | string or null | When the ticket stopped appearing in the tracker, `null` while it is there. |
+| `tray` | object or null | The card's tray; `null` when it has none. |
+| `tray.path` | string | The tray's path. |
+| `tray.form` | object | The tray's form. |
+| `tray.form.path` | string | The form file's path. |
+| `tray.form.filled` | boolean | Whether the form has been filled in. |
+| `tray.files` | array | The files waiting in the tray. |
+| `tray.files[]` | object | One waiting file. |
+| `tray.files[].path` | string | The file's path inside the tray. |
+| `tray.files[].bytes` | integer | The file's size in bytes. |
+| `tray.files[].modified` | string | When the file last changed, in RFC 3339 UTC. |
+| `tray.sorted` | array | The rounds of sorting done before. |
+| `tray.sorted[]` | object | One round. |
+| `tray.sorted[].day` | string | The day of the round as `YYYY-MM-DD`. |
+| `tray.sorted[].files` | integer | How many files the round sorted. |
+| `handoffs` | array | The card's handoffs, oldest first. |
+| `handoffs[]` | object | One handoff. |
+| `handoffs[].to` | string | Who the card went to. |
+| `handoffs[].day` | string | The day the form was begun as `YYYY-MM-DD`. |
+| `handoffs[].sent` | boolean | Whether the texts were made. |
+| `handoffs[].title` | string or null | The title the texts went out under, `null` until they are made. |
+| `handoffs[].path` | string | The form file's path. |
 
 ### What waits in the tray
 
@@ -211,6 +367,23 @@ A card with a [tray](/rigger/reference/tray/) says what waits in it: on its scre
 ## Writing against a card
 
 Everything a session learns goes against the card as events: `rigger task note <CARD> <TEXT> --kind <KIND>`, or the `task` argument of the recording tools over [MCP](/rigger/reference/mcp/). The kinds a card reads by are `decision`, `finding`, `pitfall`, `plan` (a step of the plan of edits), `change`, and `next` for the line the next session starts from.
+
+`task note --json` prints the event and whether it was new:
+
+<!-- json: task note -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `event` | object | The event written. |
+| `event.id` | integer | The event's id. |
+| `event.project` | string | The project the event is recorded in (the desk). |
+| `event.card` | string or null | The key of the card it was written against. |
+| `event.kind` | string | The kind: `decision`, `finding`, `pitfall`, `plan`, `change` or `next`. |
+| `event.body` | string | The text written. |
+| `event.created_at` | string | When it was written, in RFC 3339 UTC. |
+| `event.principle` | string or null | The principle it cites, `null` when none. |
+| `event.asked_by` | string or null | Who asked, for a question; `null` otherwise. |
+| `event.due` | string or null | The day a question is due as `YYYY-MM-DD`; `null` otherwise. |
+| `changed` | boolean | Whether this write put the event there; `false` when the record already held it. |
 
 ## The packet of a card
 
@@ -243,6 +416,24 @@ Write the loader test first.
 ```
 
 What it is, its ticket as kasl sees it, where it is worked, what git and its tray hold, the next step, and everything written against it by kind, newest first - within the same token budget as a project's [packet](/rigger/reference/context/), and saying what it left out when the budget bit. Over MCP the same is `task_context`, arriving with a line of instruction in front so the assistant treats it as the state of the work.
+
+`task context --json` prints the card and its packet:
+
+<!-- json: task context -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `card` | object | The card the packet is of. |
+| `card.id` | integer | The card's numeric id. |
+| `card.key` | string | The card's key: a tracker id such as `ACME-7310`, or a local `LOCAL-<day>-<n>`. |
+| `card.title` | string | The card's title. |
+| `card.status` | string | The card's status: `new`, `active`, `waiting-handoff`, `frozen`, `done` or `dropped`. |
+| `card.aliases` | array | Other names the card goes by. |
+| `card.aliases[]` | string | One alias. |
+| `card.summary` | string or null | The one-paragraph summary, `null` when none is set. |
+| `card.created_at` | string | When the card was made, in RFC 3339 UTC. |
+| `card.updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
+| `card.snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `packet` | string | The packet as markdown text. |
 
 ## Statuses
 
@@ -285,6 +476,19 @@ A task asleep is out of sight, not out of mind:
 
 **A stage whose every open task is frozen or asleep is not the stage being built.** The packet, `plan`, [`version show`](/rigger/reference/version/) and the digest all move on to the next planned version, and the packet names the one passed over: `(set aside: v0.15.0 · Pairing (1 frozen))`. A stage with nothing open at all is different - it is finished and waits for its tag, and stays current. When every planned version is set aside, the first stays current, since there is nothing else to be on.
 
+`task status`, `snooze`, `unsnooze` and `freeze` print the task as it now stands under `--json`:
+
+<!-- json: task status, task snooze, task unsnooze, task freeze -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `task` | object | The task as it now stands. |
+| `task.id` | integer | The task's id. |
+| `task.card` | string or null | The card's key; `null` for a task of a plan. |
+| `task.project` | string | The project the task belongs to. |
+| `task.title` | string | The task's title. |
+| `task.status` | string | The task's status: `new`, `active`, `waiting-handoff`, `frozen`, `done` or `dropped`. |
+| `task.snoozed_until` | string or null | The day the task sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+
 ## Handing a card over
 
 When the cause lies outside the code in hand - a server, a desktop client, a neighbour's API - the work is to tell the team that owns it, and the text has a shape: what is asked, how it is now, what is needed, why, where it was seen. `task handoff` keeps that shape as a form in the card's [tray](/rigger/reference/tray/) and makes the texts from it.
@@ -302,6 +506,19 @@ Run again once it is filled:
 
 ```console
 $ rigger task handoff ACME-7310 --to alerts-api
+`task handoff --json` prints the state and the files:
+
+<!-- json: task handoff -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `state` | string | `form` when the form was just written, `sent` when the texts were made. |
+| `status` | string | Only once `sent`: the card's status now, `waiting-handoff`. |
+| `text` | string | Only once `sent`: the markdown text made from the form, as it was written to `files.markdown`. |
+| `files` | object | The three files of the handoff. |
+| `files.form` | string | The path of the form. |
+| `files.markdown` | string | The path of the markdown text. |
+| `files.jira` | string | The path of the Jira text. |
+
 ### Archived alerts look live
 
 Please return whether an alert is archived in the alert list.

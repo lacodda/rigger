@@ -49,5 +49,18 @@ The command surface arrives one release at a time. Each release adds its command
 - `RIGGER_DATA_DIR` overrides the data directory for every command; `RIGGER_PROFILE` names the [profile](/rigger/reference/profile/) to use over the one the config points at.
 - A record under `RIGGER_DATA_DIR` is a scratch one, and reaches nothing outside its own files - no toast, no GitHub, no kasl - unless the program is named: `RIGGER_NOTIFY` for the [week's toast](/rigger/reference/week/#the-week-as-a-toast), `RIGGER_GH` for [`sync`](/rigger/reference/sync/#releases-and-publishing), `RIGGER_KASL` for [sessions](/rigger/reference/session/#told-to-kasl) and [tickets](/rigger/reference/task/#tickets-from-kasls-inbox), `RIGGER_INTAKE_DIRS` for [`tray intake`](/rigger/reference/tray/#tray-intake).
 - The first command of a new week shows the [week as a toast](/rigger/reference/week/#the-week-as-a-toast).
-- `--json` prints the same facts as data, on the commands that show facts.
+- `--json` is taken by every command, and prints one JSON document on standard output - see [JSON output](#json-output).
 - Exit status is `0` on success and `1` on any failure, with the reason on stderr prefixed `error:`. Never `2`, including for a usage error: an assistant's `Stop` hook reads 2 as a refusal to stop, and a mistyped hook must be ignored rather than hold a session open.
+
+## JSON output
+
+`--json` is one flag on the root of the command line, so every command takes it - before the command or after it, `rigger --json next` and `rigger next --json` alike. Under it a command prints exactly one JSON document on standard output and nothing else there: what a gate or an end-of-session command prints on its own standard output goes to standard error instead, so that the document stays whole. Errors keep their form - a message on standard error and exit code `1`.
+
+What a command prints is the contract a program reading it relies on:
+
+- **A command that shows prints what it shows.** Each page has a table under the marker of its command - every field, as a path (`card.key`, `links[].project`, `[].version` for the items of a list printed whole), its type, and what it means.
+- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event and whether this write is what put it there; `version plan` with the version as `version show` prints it; `project add` and the rest with the project as `project show` prints it.
+- **One type per field.** A field is a string or a number or an object - plus `null` where it can be absent - and never one of two shapes depending on the case.
+- **Held by a test.** Every command is run with `--json` against one synthetic record; a field printed without its row in the table, a row nothing prints, or a type the table does not allow fails the build. A field is not renamed or removed without the table - and the reader - finding out.
+
+Within 1.x fields are added, never renamed or removed; a change that removes one is a new major version. `mcp` is the one command without a document of its own: it speaks JSON-RPC on standard input and output for its whole life.

@@ -40,6 +40,16 @@ This is where the project stands, from rigger. Pick up from the next step; recor
 ...
 ```
 
+Under `--json` it starts nothing and prints what it would start:
+
+<!-- json: open -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project's name. |
+| `dir` | string | The directory the assistant would be started in. |
+| `program` | string | The assistant's command: the first word of `RIGGER_ASSISTANT`, or `claude`. |
+| `message` | string | The first message the assistant would receive: the instruction and the context packet. |
+
 ## Exit status
 
 The assistant's exit status becomes rigger's, so `open` composes in a script the same way the assistant would.

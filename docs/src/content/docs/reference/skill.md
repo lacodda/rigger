@@ -57,6 +57,15 @@ A template named `skill.md` in the data directory is used for every project from
 
 `{{file:...}}` is how a project keeps a ritual of its own - a deployment that has to happen after the tag, a week of use before a version counts as shipped - without every skill of the line carrying it. The file lives in the hub, written by hand, and the skill quotes it. A file that is not there leaves the section empty and says so on stderr; a placeholder rigger does not know is an error, because a skill with a hole in it would be read by every session before anyone noticed.
 
+Under `--json` it prints what was done and the skill's text:
+
+<!-- json: skill -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `action` | string | `wrote` or `rewrote` (the file was installed), `unchanged` (it already said this), `printed` (nothing installed; the text only), or `template` (`--print-template`). |
+| `path` | string or null | The file written or checked; `null` when nothing was installed. |
+| `text` | string | The skill's text, or the template's with `--print-template`. |
+
 ## `--install`
 
 Writes the skill where the assistant reads it - `~/.claude/skills/<project>/SKILL.md` for the default one, or under `RIGGER_SKILLS_DIR`; `--dir <DIR>` names a directory for one run.
