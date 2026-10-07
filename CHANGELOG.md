@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.27.0] - 2026-10-07
+
+### Breaking Changes
+
+- **Take --json on every command and hold its fields to the docs**
+in JSON, `adopt` writes `status` as a word with the
+reason for a skip in `why`; `why --principles` lists objects
+`{principle, decisions}`; the tier `out` is lowercase everywhere;
+`export --line --to` reports `product_count`.
+
+### Bug Fixes
+- Rehearse a checked hub import instead of writing it
+- Exit quietly when the reader of stdout goes away
+- Search versions, ids and paths as exact phrases
+- Keep the launcher alive until the binary ends on Ctrl+C
+- Count one version and one task in the singular
+- Mark a release that came early as early, not slipped
+- Take a hub's wish in once, and count only what is left
+
+### Documentation
+- A first week and a move from a hub, from a live build
+
+### Features
+- Name a plan that runs one step ahead of its tags
+- Take --json on every command and hold its fields to the docs
+- Plan a stage and its tasks without a hub
+
+### Refactoring
+- Read git through furca-core instead of gix
+
 ## [0.26.0] - 2026-09-30
 
 ### Bug Fixes
