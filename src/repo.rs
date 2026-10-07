@@ -5,9 +5,8 @@
 //! monorepo - and that is the publishing name, not the one the owner uses in
 //! conversation. `--name` overrides when the directory is not it either.
 //!
-//! The remote is read from `.git/config` directly; reading history and tags
-//! arrives with the sync release and goes through gix, never through a
-//! spawned `git`.
+//! The remote is read from `.git/config` directly; history and tags are read
+//! through furca-core (see `git`), never through a spawned `git`.
 
 use std::path::Path;
 
@@ -134,7 +133,7 @@ fn workspace_description(root: &Path, text: &str) -> Option<String> {
     };
     let basename = |member: &String| member.rsplit(['/', '\\']).next().unwrap_or(member).to_string();
     for wanted in [name.clone(), format!("{name}-cli")] {
-        if let Some(about) = members.iter().find(|m| basename(m) == wanted).and_then(&described) {
+        if let Some(about) = members.iter().find(|m| basename(m) == wanted).and_then(described) {
             return Some(about);
         }
     }

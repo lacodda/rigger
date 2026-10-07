@@ -9,7 +9,7 @@ rigger sync [<PROJECT>] [--json]
 
 Reads a repository's tags and commits and writes what they prove into the record: a tag matching `v*` means that version shipped, on the date of the commit it points at, and the commits since the newest tag are the project's activity. Without a project name, every recorded project is read.
 
-Git is read in-process through [gix](https://github.com/GitoxideLabs/gitoxide); `git` is never spawned.
+Git is read in-process through [furca-core](https://crates.io/crates/furca-core), the git library of furca; `git` is never spawned. The commits since the newest tag are what that tag cannot reach - `git log <tag>..HEAD` - so a branch begun before the release and merged after it counts as new work. A project recorded at a directory inside another repository is not read as that repository.
 
 ```console
 $ rigger sync sample

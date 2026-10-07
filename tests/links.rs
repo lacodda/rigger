@@ -159,7 +159,9 @@ fn a_half_that_shipped_without_its_other_half_is_reported() {
     // And the owner's screens say it without being asked about links.
     assert!(output(data.path(), &["next"]).contains("Pairs out of step"));
     assert!(output(data.path(), &["week"]).contains("alpha v0.2.0 shipped without beta"));
-    assert!(output(data.path(), &["retro", "--weeks", "4"]).contains("Pairs out of step"));
+    // The window is pinned to the week of the release: a look back from
+    // today would lose it once the clock moved a month on.
+    assert!(output(data.path(), &["retro", "--to", "2026-W38", "--weeks", "4"]).contains("Pairs out of step"));
 
     // Both halves out is the pair working, and the warning goes.
     ship(data.path(), "beta", "v0.2.0", "2026-09-11");

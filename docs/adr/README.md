@@ -4,11 +4,12 @@ Technical decisions that shape rigger, in the order they were made. Format: Cont
 
 | # | Title | Status |
 | --- | --- | --- |
-| [0001](0001-rust.md) | Rust as the implementation language | accepted |
+| [0001](0001-rust.md) | Rust as the implementation language | accepted, amended by 0009 |
 | [0002](0002-sqlite-is-the-truth.md) | SQLite is the record; markdown is an export | accepted |
 | [0003](0003-one-binary-two-profiles.md) | One binary, profiles as configuration | accepted |
 | [0004](0004-cli-and-mcp-first.md) | CLI and an MCP server before any window | accepted |
-| [0005](0005-facts-from-git.md) | Facts from git outrank recorded claims | accepted |
+| [0005](0005-facts-from-git.md) | Facts from git outrank recorded claims | accepted, amended by 0009 |
 | [0006](0006-code-knowledge-via-nooma.md) | Code knowledge comes from nooma, not an index of our own | accepted |
 | [0007](0007-starlight-diataxis-docs.md) | Docs: Astro Starlight structured by Diátaxis | accepted |
 | [0008](0008-trusted-publishing.md) | Registry publishing via OIDC trusted publishing | accepted |
+| [0009](0009-git-through-furca-core.md) | Git is read through furca-core | accepted |

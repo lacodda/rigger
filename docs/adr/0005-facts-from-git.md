@@ -1,6 +1,6 @@
 # ADR 0005: Facts from git outrank recorded claims
 
-- Status: accepted
+- Status: accepted, amended by [0009](0009-git-through-furca-core.md): git is read through furca-core, not gix directly
 - Date: 2026-09-04
 
 ## Context

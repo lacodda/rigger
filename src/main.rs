@@ -16,6 +16,7 @@ mod delivery;
 mod doc;
 mod export;
 mod gate;
+mod git;
 mod handoff;
 mod hub;
 mod ics;

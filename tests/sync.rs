@@ -6,7 +6,7 @@
 //! real projects into the repository.
 //!
 //! The commits are made with `git` because that is what makes a fixture; the
-//! product reads them with gix and never spawns anything.
+//! product reads them through furca-core and never spawns anything.
 
 use std::path::Path;
 use std::process::Command;
@@ -353,4 +353,100 @@ fn a_run_that_changed_nothing_says_only_that() {
         .assert()
         .success()
         .stdout(predicate::str::contains("2 commits since the last release"));
+}
+
+/// A long history made in one go: `git fast-import` writes a thousand
+/// commits in the time `git commit` makes three. Commit `n` (from 1) is
+/// made at `1_700_000_000 + 60 * n`; `tags` names the commits to tag.
+fn long_history(root: &Path, commits: usize, tags: &[(usize, &str)]) {
+    std::fs::create_dir_all(root).unwrap();
+    git(root, &["init", "--quiet", "--initial-branch", "main"]);
+    let mut stream = String::new();
+    for n in 1..=commits {
+        let message = format!("chore: step {n}");
+        stream.push_str(&format!(
+            "commit refs/heads/main\nmark :{n}\ncommitter Fixture <fixture@example.com> {} +0000\ndata {}\n{message}\n",
+            1_700_000_000 + 60 * n,
+            message.len()
+        ));
+        if n > 1 {
+            stream.push_str(&format!("from :{}\n", n - 1));
+        }
+        stream.push('\n');
+    }
+    for (n, tag) in tags {
+        stream.push_str(&format!("reset refs/tags/{tag}\nfrom :{n}\n\n"));
+    }
+    let mut child = Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success(), "git fast-import failed");
+}
+
+#[test]
+fn a_tag_far_down_a_long_history_still_dates_its_release() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("proj");
+    // The first release sits under 700 later commits - past the first look
+    // at the newest few hundred, which is where a reader that gave up early
+    // would lose it.
+    long_history(&root, 701, &[(1, "v0.1.0"), (701, "v0.2.0")]);
+
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    rigger(data.path())
+        .args(["sync", "proj"])
+        .assert()
+        .success()
+        // 1_700_000_060 is 2023-11-14T22:14:20Z; commit 701 is 700 minutes on.
+        .stdout(predicate::str::contains("shipped    v0.1.0 on 2023-11-14").and(predicate::str::contains("v0.2.0 on 2023-11-15")));
+}
+
+#[test]
+fn a_directory_inside_another_repository_is_not_read_as_that_repository() {
+    let data = tempfile::tempdir().unwrap();
+    let outer = data.path().join("outer");
+    repo_with_history(&outer, &[("first", "v0.1.0")]);
+    let inner = outer.join("inner");
+    std::fs::create_dir_all(&inner).unwrap();
+
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&inner).assert().success();
+    // git would find `outer` by walking up from `inner`; its tags are
+    // somebody else's releases, and the project must not inherit them.
+    rigger(data.path())
+        .args(["sync", "inner"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("is not a git repository rigger can read").and(predicate::str::contains("v0.1.0").not()));
+}
+
+#[test]
+fn work_since_a_release_includes_a_branch_begun_before_it() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("proj");
+    repo_with_history(&root, &[("first", ""), ("second", "v0.1.0")]);
+    // A branch started before the release and merged after it brings work
+    // the release did not have, though its commit is older than the tag.
+    git(&root, &["checkout", "--quiet", "-b", "topic", "HEAD~1"]);
+    std::fs::write(root.join("topic.txt"), "topic").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "topic work"]);
+    git(&root, &["checkout", "--quiet", "main"]);
+    git(&root, &["merge", "--quiet", "--no-ff", "topic", "-m", "merge topic"]);
+
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    rigger(data.path())
+        .args(["sync", "proj"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("activity   2 commits since v0.1.0"));
 }
