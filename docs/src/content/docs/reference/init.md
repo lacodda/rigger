@@ -11,11 +11,12 @@ Creates the data directory and the database inside it, migrated to the current s
 
 ```console
 $ rigger init
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 4)
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml with the 'line' profile
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db (schema version 27)
 Next: rigger project add <path>
 
 $ rigger init
-Already initialised: C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
+Already initialised: C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db
 ```
 
 Every other command opens this database and, when it was written by an older rigger, migrates it forward on the spot. A database written by a newer rigger is refused with a message to update.

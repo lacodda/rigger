@@ -67,7 +67,7 @@ Both scripts read these environment variables:
 ```console
 $ rigger init
 Created C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml with the 'line' profile
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db (schema version 17)
+Created C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db (schema version 27)
 Next: rigger project add <path>
 ```
 
@@ -92,14 +92,22 @@ A whole directory of repositories, with their hubs and tags, is one command: [`r
 
 ```console
 $ rigger doctor
-database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 4
+profile:   line (C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml)
+database:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db
+schema:    version 27
 projects:  1
 versions:  0
 tasks:     0
 sessions:  0
 events:    0
+mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
+backup:    none - one file, no copy of it; run `rigger backup`
+
+never synced (1): sample
+  run `rigger sync` to read what git says about them
 ```
+
+A project's facts come from git, and `doctor` says which projects it has not read yet. [`rigger sync`](/rigger/reference/sync/) reads them.
 
 ## Connect your assistant
 
@@ -112,6 +120,8 @@ Added stdio MCP server rigger with command: rigger mcp to local config
 
 ## Next steps
 
+- Walk through [your first week](/rigger/guides/first-week/): a plan, a sitting, a release, and what the record answers.
+- Notes you already keep by hand: [move a hub into the record](/rigger/guides/from-a-hub/).
 - Read the [model](/rigger/concepts/model/): projects, versions, tasks, sessions and events.
 - See how the [context packet](/rigger/concepts/context-packet/) replaces reading a hub.
 - Understand [profiles](/rigger/concepts/profiles/): one binary at home and at work.

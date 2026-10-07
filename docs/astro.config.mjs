@@ -28,6 +28,13 @@ export default defineConfig({
 			sidebar: [
 				{ label: 'Getting Started', slug: 'getting-started' },
 				{
+					label: 'Guides',
+					items: [
+						{ label: 'Your first week', slug: 'guides/first-week' },
+						{ label: 'Moving a hub into the record', slug: 'guides/from-a-hub' },
+					],
+				},
+				{
 					label: 'Concepts',
 					items: [{ autogenerate: { directory: 'concepts' } }],
 				},

@@ -11,39 +11,24 @@
 
 ## Why
 
-Run more than a handful of projects and the record of them scatters: a plan in one file, a changelog in another, a session log the assistant writes for itself, a release calendar kept by hand. Three symptoms follow. You stop reading the record, because it is prose and prose cannot be filtered or summed up across projects. The assistant reads it every session at full price, and the biggest project no longer fits in a context window at all. And the facts about what actually shipped live in git, where nobody looks.
+Run more than a handful of projects and the record of them scatters: a plan in one file, a changelog in another, a session log the assistant writes for itself, a release calendar kept by hand. You stop reading it, because prose cannot be filtered or summed up across projects. The assistant reads it every session at full price. And what actually shipped lives in git, where nobody looks.
 
-rigger keeps the record as data, in a local SQLite file, and derives everything else from it: the five-line digest you read, the context packet the assistant starts from, the calendar of what ships when, and the queue of decisions waiting for you.
+rigger keeps the record as data, in one local SQLite file, and derives the rest from it: the packet an assistant starts from, the questions waiting for you, the calendar of what ships when - with git, not the plan, deciding what shipped.
 
-## A first look
+## A day with rigger
+
+Plan a stage, and write down what was decided and what only you can answer:
 
 ```console
-$ rigger init
-Created C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db (schema version 4)
-Next: rigger project add <path>
+$ rigger version add sample v0.1.0 --title "First light" --task "read a sheet" --task "write the report" --week 2026-W43
+Added v0.1.0 to sample, with 2 tasks
+  aimed at 2026-W43 - the week of 2026-10-23
 
-$ rigger project add C:\dev\sample
-Recorded 'sample' at C:\dev\sample
-  remote: https://github.com/acme/sample.git
-
-$ rigger import sample --hub C:\dev\sample\hub
-sample:
-  versions   3 added, 0 updated
-  tasks      2 added, 0 updated
-  decisions  1 added
-  questions  1 added
-
-$ rigger doctor
-database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 4
-projects:  1
-versions:  3
-tasks:     2
-sessions:  0
-events:    2
+$ rigger note sample "Which file formats come first?" --kind question
+Asked the owner about sample; it waits in the inbox until answered
 ```
 
-Years of notes arrive in one command, and running it again is quiet. Then a session starts from the packet rather than from the notes:
+A session starts from the packet - a few hundred tokens, whatever the size of the history behind it - rather than from the notes:
 
 ```console
 $ rigger context sample
@@ -51,140 +36,78 @@ $ rigger context sample
 
 C:\dev\sample
 https://github.com/acme/sample.git
-Last shipped: v0.2.0 on 2026-09-03
-1 versions planned, 2 tasks open
+Nothing shipped yet
+2 versions planned, 3 tasks open
 
-## Current stage: v0.3.0 · Search
-- full-text index
-- a query language
+## Current stage: v0.1.0 · First light
+- read a sheet
+- write the report
 
 ## Waiting for the owner
-- [2] Pick the release day.
+- [2] Which file formats come first?
 
 ## Recent
-- 2026-09-03 · decision · The record is the database — Prose cannot be filtered.
-
-## Next step
-Ship the importer next.
+- 2026-10-07 · decision · Read sheets with one library, not two
 ```
 
-That packet costs 96 tokens here and holds a 3000-token budget on a project with years of history - against tens of thousands for reading the notes it came from, which past a certain size no longer fit at all.
-
-One command hands it to your assistant and starts the session in the project:
+Through the [MCP server](https://lacodda.github.io/rigger/reference/mcp/) the assistant writes back as it works - decisions, findings, the next step. A tag is the proof a version shipped, and the commits since are the changelog:
 
 ```console
-$ rigger open sample
-Starting claude in C:\dev\sample with the packet for sample
-```
-
-The MCP server is how the assistant reads that packet and writes back to the record as it works - decisions, findings and pitfalls become events, not lines in a transcript nobody opens again. The installer registers it, along with the hook that closes a sitting when the assistant stops:
-
-```console
-$ irm https://raw.githubusercontent.com/lacodda/rigger/main/tools/install.ps1 | iex
-...
-Registered the rigger MCP server with claude.
-Added the Stop hook: a sitting now closes itself.
-```
-
-And for you, rather than for the assistant, the project's own screen - what it is, where it stands, what it has written down:
-
-```console
-$ rigger show sample
-sample
-A sample product
-
-path       C:\dev\sample
-gate       cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
-
-Last shipped v0.2.0 on 2026-09-03, 2 commits since
-1 versions planned, 2 tasks open
-
-Current stage: v0.3.0 · Search
-  > full-text index
-    a query language
-
-Written down:
-  vision    Vision of sample                   2026-09-12  rigger doc show sample vision
-
-Next step
-  Ship the importer next.
-```
-
-What actually shipped is not taken on trust. `sync` reads the repository's tags and commits in-process and writes what they prove; where the plan says a version shipped and no tag agrees, the disagreement is reported rather than corrected:
-
-```console
-$ rigger sync claimed
-claimed:
-  shipped    v0.1.0 on 2026-09-04
+$ rigger sync sample
+sample:
+  shipped    v0.1.0 on 2026-10-07
   read       2 changes from commit messages
-  no tag     v0.2.0 is closed in the plan
+
+$ rigger session end sample
+Session on sample closed, open since 2026-10-07T13:14:59Z.
+
+recorded 1 finding
+closed 2 tasks
+next: Start the charts from the report's table
+copied the database to C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.v27-20261007-131500.bak
+
+Write it into a diary with: rigger session end sample --diary <file>
 ```
 
-Those changes come out of the commit messages themselves - `feat`, `fix` and anything breaking, dated by the commit rather than by the sync - so the chronicle stays current whether or not anyone opens a session.
-
-Once there is a record, it answers questions - which is the point of keeping it as data:
-
-```console
-$ rigger find budget
-sample       2026-09-04  decision  The budget is a gate, not a suggestion.
-sample       2026-09-04  pitfall   A wide window hides what the budget dropped.
-
-$ rigger why sample v0.3.0
-v0.3.0 — shipped 2026-09-04
-the work after v0.2.0 (2026-09-04)
-
-2026-09-04  decision  The budget is a gate, not a suggestion.
-2026-09-04  pitfall   A wide window hides what the budget dropped.
-2026-09-04  change    feat: rank what a person wrote above a commit
-```
-
-And it answers the question the notes never could - what is waiting on you, across everything at once:
+And the record answers what the notes never could - what waits on you across every project, where a thing was decided, what went into a release:
 
 ```console
 $ rigger inbox
-6 questions in 3 projects
+1 question in 1 project
 
-alpha        [  1] 2026-09-04  Place in the release calendar
-             [  2] 2026-09-04  Sign the binaries?
-beta         [  3] 2026-09-04  Place in the release calendar
+sample       [  2] 2026-10-07  Which file formats come first?
 
-Asked by several projects - one answer settles each group:
-  Place in the release calendar — alpha, beta, gamma
+Answer one with: rigger resolve <project> <id> "<answer>"
+
+$ rigger resolve sample 2 "CSV and XLSX; ODS later"
+Answered [2]: Which file formats come first?
+  the answer is recorded as a decision
+
+$ rigger why sample v0.1.0
+v0.1.0 · First light — shipped 2026-10-07
+the work from the start of the record
+
+2026-10-07  decision  Read sheets with one library, not two
+2026-10-07  answered  Which file formats come first?
+2026-10-07  finding   A merged cell is read as its first cell
+2026-10-07  change    feat: read a sheet
+2026-10-07  change    feat: write the report
 ```
 
-And it lays the releases out over the weeks, comparing what you aimed at with what the tags say happened:
-
-```console
-$ rigger calendar --from 2026-W37 --weeks 5
-         2026-W37  2026-W38  2026-W39  2026-W40  2026-W41
-sample   *v0.1.0             >v0.2.0             ·v0.3.0    A
-widget             +v0.1.0   ·v0.2.0                        B
-
-+ shipped as planned   > slipped   ! overdue   * unplanned   · planned
-
-sample   v0.2.0 — aimed at 2026-W37, 2 weeks late
-```
-
-A project is named after its directory - the name you call it by, not the one its manifest publishes under - and `--name` overrides. Every command that shows facts also prints them with `--json`.
+The whole first week, command by command: [Your first week](https://lacodda.github.io/rigger/guides/first-week/).
 
 ## What you get
 
-- **Projects, versions, tasks, sessions.** A project has a map of versions; a version is a stage that ends in a tag; a task is a unit of work inside a version (at home) or a ticket across several projects and branches (at work).
-- **Facts from git.** A pushed tag means the version shipped, on that date. Commits since the last tag are activity. The plan cannot claim more than git confirms.
-- **An MCP server as the assistant's only pen.** Decisions, findings, pitfalls, changes and the next step are recorded as events through tools, not by editing markdown.
-- **The owner's inbox and a release calendar**, both derived from the same record rather than kept by hand.
-- **Hubs as an export.** The markdown files you keep in Obsidian are generated from the database, not written by hand.
-- **Thin project skills.** The file an assistant reads first is one template filled from the record.
+- **Projects, versions, tasks, sessions.** A version is a stage that ends in a tag; a task is work inside it - or, at work, a ticket across several repositories and branches.
+- **Facts from git.** A tag means the version shipped, on that date; the plan cannot claim more than git confirms, and `doctor` names where they part.
+- **An MCP server as the assistant's only pen**, and a context packet held to a token budget.
+- **Your inbox, a weekly brief and a release calendar**, derived from the same record rather than kept by hand.
+- **`--json` on every command**, each field held by a test to its reference page.
+- **Hubs as an export.** Markdown notes are written from the record, and a hand-kept hub [moves into it](https://lacodda.github.io/rigger/guides/from-a-hub/) in one command.
 
 ## Status
 
-The record, the context packet, the MCP server, facts from git, the owner's
-inbox, the release calendar and thin project skills are in daily use across
-the whole line. The rules a line and a project state about themselves, and
-the gate a project runs, are documents in the record rather than pasted into
-every project's skill.
-
-Released versions and what landed in each: [CHANGELOG](https://github.com/lacodda/rigger/blob/main/CHANGELOG.md).
+In daily use across a line of eighteen products: the record, the packet, the MCP server, facts from git, the owner's screens, task cards at work, and a JSON contract for every command ahead of 1.0. Released versions and what landed in each: [CHANGELOG](https://github.com/lacodda/rigger/blob/main/CHANGELOG.md).
 
 ## Install
 
@@ -201,11 +124,11 @@ npm i -g @lacodda/rigger
 cargo install rigger
 ```
 
-Every installer also leaves `rgr` beside `rigger` - the same program under a shorter name, as a link rather than a second copy, so it cannot fall behind. It is skipped when `rgr` already means something else on your machine, and `RIGGER_NO_ALIAS=1` turns it off. `cargo install` produces `rigger` only.
+Every installer also leaves `rgr` beside `rigger` - the same program under a shorter name, as a link rather than a second copy. It is skipped when `rgr` already means something else on your machine, and `RIGGER_NO_ALIAS=1` turns it off. `cargo install` produces `rigger` only.
 
 ## Documentation
 
-https://lacodda.github.io/rigger/ - getting started, concepts, and a reference page per command. Architecture decisions live in https://github.com/lacodda/rigger/tree/main/docs/adr.
+https://lacodda.github.io/rigger/ - getting started, guides, concepts, and a reference page per command. Architecture decisions live in https://github.com/lacodda/rigger/tree/main/docs/adr.
 
 ## License
 

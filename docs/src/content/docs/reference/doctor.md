@@ -13,12 +13,13 @@ Prints the [profile](/rigger/reference/profile/) in use, the database path, its 
 $ rigger doctor
 profile:   line (C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml)
 database:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db
-schema:    version 4
+schema:    version 27
 projects:  1
 versions:  0
 tasks:     0
 sessions:  0
 events:    0
+mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
 backup:    today, 3 copies kept
 ```
 
@@ -104,13 +105,16 @@ Once [`rigger sync`](/rigger/reference/sync/) has read a project, `doctor` lists
 
 ```console
 $ rigger doctor
-database:  C:\Users\you\AppData\Local\lacodda\rigger\data\rigger.db
-schema:    version 4
+profile:   line (C:\Users\you\AppData\Local\lacodda\rigger\data\config.toml)
+database:  C:\Users\you\AppData\Local\lacodda\rigger\data\profiles\line\rigger.db
+schema:    version 27
 projects:  1
 versions:  3
 tasks:     1
 sessions:  0
-events:    0
+events:    1
+mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
+backup:    today, 1 copy kept
 
 closed in the plan, no tag in git (1):
   claimed      v0.2.0
