@@ -157,6 +157,9 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // person doing the sorting - nothing in the file says a wish was
     // withdrawn rather than dealt with.
     for wish in &hub.wishes {
+        if db.holds_wish(project_id, wish)? {
+            continue;
+        }
         if db.record_event(project_id, "wish", wish, &crate::db::now(), "owner")? == Change::Added {
             report.wishes_added += 1;
         }

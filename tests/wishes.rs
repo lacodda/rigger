@@ -183,3 +183,27 @@ fn doctor_says_when_something_is_left_in_the_file() {
         .success()
         .stdout(predicate::str::contains("wishes left in").and(predicate::str::contains("sample")));
 }
+
+/// A wish the record took in is not one left in the file. Right after an
+/// import, `doctor` told the owner to import what had just been imported;
+/// and a wish sorted into the plan came back as new the next time the hub
+/// was read.
+#[test]
+fn a_wish_taken_in_is_neither_left_nor_taken_twice() {
+    let data = tempfile::tempdir().unwrap();
+    let hub = project(data.path());
+    let text = "# Хотелки\n\n---\n\n**03.09.2026 · Первое** что-то одно.\n";
+    assert_eq!(wishes(data.path(), &hub, text).len(), 1);
+    rigger(data.path())
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wishes left in").not());
+
+    // Sorted into the plan, it stays sorted when the file is read again.
+    let packet = String::from_utf8(rigger(data.path()).args(["context", "sample", "--json"]).output().unwrap().stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&packet).unwrap();
+    let id = json["wishes"][0]["id"].as_i64().unwrap_or_else(|| panic!("no wish id: {json}"));
+    rigger(data.path()).args(["resolve", "sample", &id.to_string()]).assert().success();
+    assert!(wishes(data.path(), &hub, text).is_empty(), "a sorted wish came back as new");
+}

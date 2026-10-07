@@ -6733,9 +6733,17 @@ fn hubs_with_wishes(db: &Db) -> Result<Vec<(String, usize)>> {
         let Some(hub) = &project.hub_path else { continue };
         let path = Path::new(hub).join(hub::WISHES_FILE);
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let wishes = hub::parse_wishes(&text);
-        if !wishes.is_empty() {
-            out.push((project.name, wishes.len()));
+        // Only what the record does not hold yet: right after an import
+        // took them in, the file still has them, and telling the owner to
+        // import what was just imported sent them round in a circle.
+        let mut left = 0;
+        for wish in hub::parse_wishes(&text) {
+            if !db.holds_wish(project.id, &wish)? {
+                left += 1;
+            }
+        }
+        if left > 0 {
+            out.push((project.name, left));
         }
     }
     Ok(out)

@@ -4224,6 +4224,22 @@ impl Db {
             .optional()?)
     }
 
+    /// Whether the record holds a wish with this text, open or sorted. A wish
+    /// sorted into the plan is still one the record took in: read again from
+    /// a hub's wishes file, it must not come back to be sorted twice, and the
+    /// file holding it is not a file with something left to take.
+    pub fn holds_wish(&self, project_id: i64, body: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM events WHERE project_id = ?1 AND kind IN ('wish', 'sorted') AND body = ?2 LIMIT 1",
+                params![project_id, body],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     /// The id of the event just recorded by this project, of this kind.
     pub fn latest_event_id(&self, project_id: i64, kind: &str) -> Result<Option<i64>> {
         Ok(self
