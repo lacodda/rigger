@@ -960,6 +960,7 @@ enum ProjectCommand {
         /// Forget the end-of-session command
         #[arg(long, conflicts_with = "on_session_end")]
         no_on_session_end: bool,
+    quiet_on_a_closed_pipe();
     },
     /// Record how a product looks from outside: its mark, colours, form and docs
     Mark {
@@ -974,6 +975,42 @@ enum ProjectCommand {
         /// The second colour, for a mark drawn as a pair
         #[arg(long)]
         accent2: Option<String>,
+/// A reader that stops reading is not a failure of the writer.
+///
+/// `rigger doctor | head -3` closes the pipe after three lines, and the next
+/// `println!` panics on it - "failed printing to stdout ... os error 232" on
+/// Windows, a broken pipe elsewhere - so a command that did all its work
+/// ended in a panic and code 101. git and coreutils go quiet and exit 0
+/// there, and so does rigger: once, for the whole binary, in the panic
+/// hook, rather than in each of the hundreds of places that print.
+fn quiet_on_a_closed_pipe() {
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        if is_a_closed_pipe(message) {
+            std::process::exit(0);
+        }
+        report(info);
+    }));
+}
+
+/// Whether a panic is the standard library failing to print into a pipe
+/// whose reader has gone. Told by the error's number, never its words: the
+/// words are the system's and come in its language ("Канал был закрыт" on a
+/// Russian Windows). EPIPE is 32 on Unix; on Windows a closed pipe is 109,
+/// one being closed 232, and one with nobody at the other end 233.
+fn is_a_closed_pipe(message: &str) -> bool {
+    message.starts_with("failed printing to stdout")
+        && ["(os error 32)", "(os error 109)", "(os error 232)", "(os error 233)"]
+            .iter()
+            .any(|code| message.ends_with(code))
+}
+
         /// What shape of thing it is: cli, desktop, web, library, service
         #[arg(long)]
         form: Option<String>,
@@ -6631,4 +6668,19 @@ closed in the plan, no tag in git ({}):",
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_closed_pipe_is_told_by_its_number_in_any_language() {
+        assert!(super::is_a_closed_pipe("failed printing to stdout: Канал был закрыт. (os error 109)"));
+        assert!(super::is_a_closed_pipe("failed printing to stdout: Broken pipe (os error 32)"));
+        assert!(super::is_a_closed_pipe("failed printing to stdout: The pipe is being closed. (os error 232)"));
+        // Another failure to print is still a failure, and so is a closed
+        // pipe somewhere other than stdout.
+        assert!(!super::is_a_closed_pipe("failed printing to stdout: Access is denied. (os error 5)"));
+        assert!(!super::is_a_closed_pipe("failed printing to stderr: Broken pipe (os error 32)"));
+        assert!(!super::is_a_closed_pipe("attempt to divide by zero"));
+    }
 }

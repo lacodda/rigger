@@ -1681,3 +1681,38 @@ fn doctor_reports_the_database_before_and_after_init() {
         .success()
         .stdout(predicate::str::contains("\"schema_version\":"));
 }
+
+/// A reader that stops reading is not a failure of the writer: `rigger
+/// doctor | head -3` used to end in a panic and code 101 the moment `head`
+/// went away. The output here is a megabyte, far past any pipe's buffer,
+/// so the writing is still going on when the reader leaves.
+#[test]
+fn a_reader_that_leaves_early_is_not_an_error() {
+    use std::io::Read;
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("sample");
+    std::fs::create_dir_all(&root).unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    let body = "a line of a long document\n".repeat(40_000);
+    rigger(data.path())
+        .args(["doc", "add", "sample", "Long", "--slug", "long", "--body", "-"])
+        .write_stdin(body)
+        .assert()
+        .success();
+
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("rigger"))
+        .args(["doc", "show", "sample", "long"])
+        .env("RIGGER_DATA_DIR", data.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = [0u8; 64];
+    child.stdout.take().unwrap().read_exact(&mut first).unwrap();
+    // The read end is dropped here, with most of the document unwritten.
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "a closed pipe ended the run with {:?}: {stderr}", out.status);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
