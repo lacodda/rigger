@@ -4482,10 +4482,18 @@ pub fn slugify(title: &str) -> String {
 
 /// Timestamps are stored as UTC in RFC 3339, which sorts as text.
 pub fn now() -> String {
-    jiff::Timestamp::now()
-        .round(jiff::Unit::Second)
+    stamp(jiff::Timestamp::now())
+}
+
+/// A moment to the second, cut down rather than rounded: a moment is never
+/// stamped later than it happened. Git keeps a commit's time the same way,
+/// and a sitting rounded half a second up began after a commit made in its
+/// first second - which then belonged to no sitting at all. Found by CI on
+/// a runner fast enough to commit within that half second.
+fn stamp(at: jiff::Timestamp) -> String {
+    jiff::Timestamp::from_second(at.as_second())
         .map(|t| t.to_string())
-        .unwrap_or_else(|_| jiff::Timestamp::now().to_string())
+        .unwrap_or_else(|_| at.to_string())
 }
 
 /// Today, as a hub dates its lines: `2026-09-08`.
@@ -4559,7 +4567,15 @@ fn weekday(word: &str) -> Option<jiff::civil::Weekday> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_past, parse_day, slugify, stamp_of, version_order};
+    use super::{is_past, parse_day, slugify, stamp, stamp_of, version_order};
+
+    #[test]
+    fn a_moment_is_stamped_no_later_than_it_happened() {
+        let late_in_a_second: jiff::Timestamp = "2026-10-07T13:28:14.9Z".parse().unwrap();
+        assert_eq!(stamp(late_in_a_second), "2026-10-07T13:28:14Z");
+        let on_the_second: jiff::Timestamp = "2026-10-07T13:28:14Z".parse().unwrap();
+        assert_eq!(stamp(on_the_second), "2026-10-07T13:28:14Z");
+    }
 
     #[test]
     fn a_day_is_read_the_way_a_person_writes_it() {
