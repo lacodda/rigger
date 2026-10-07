@@ -17,7 +17,7 @@ $ rigger note sample "The parser must take hubs as they are." --kind finding
 Recorded a finding for sample
 
 $ rigger note sample "Ship the importer next." --kind next
-Recorded a next for sample
+Set the next step for sample; the next session starts from it
 ```
 
 ## Kinds

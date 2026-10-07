@@ -223,8 +223,12 @@ pub enum Standing {
     Planned,
     /// Shipped in the week it was planned for.
     Shipped,
-    /// Shipped, but not in the week it was aimed at.
+    /// Shipped in a week after the one it was aimed at.
     Slipped,
+    /// Shipped in a week before the one it was aimed at. Not a slip: a
+    /// release that came early is not one that "moved", and marking it with
+    /// the slip's arrow read as a late release on the grid.
+    Early,
     /// The planned week has passed and no tag exists.
     Overdue,
     /// Shipped without ever being planned.
@@ -239,6 +243,7 @@ impl Standing {
             Standing::Planned => '·',
             Standing::Shipped => '+',
             Standing::Slipped => '>',
+            Standing::Early => '<',
             Standing::Overdue => '!',
             Standing::Unplanned => '*',
         }
@@ -275,6 +280,7 @@ pub fn row(project: &str, tier: Option<Tier>, rhythm_weeks: Option<u32>, version
     for version in versions {
         let (week, standing) = match (version.planned, version.shipped) {
             (Some(planned), Some(shipped)) if planned == shipped => (shipped, Standing::Shipped),
+            (Some(planned), Some(shipped)) if shipped < planned => (shipped, Standing::Early),
             (Some(_), Some(shipped)) => (shipped, Standing::Slipped),
             (None, Some(shipped)) => (shipped, Standing::Unplanned),
             (Some(planned), None) if planned < now => (planned, Standing::Overdue),

@@ -2028,7 +2028,11 @@ fn note_on_card(task: &str, kind: &str, text: &str, json: bool) -> Result<()> {
         let id = db.event_id_by_body(desk.id, Some(card.id), kind, text)?;
         return print_event_json(&db, id, change != db::Change::Unchanged);
     }
-    println!("Recorded a {kind} on {}", card.key);
+    match kind {
+        "next" => println!("Set the next step for {}", card.key),
+        "plan" => println!("Recorded a step of the plan on {}", card.key),
+        _ => println!("Recorded a {kind} on {}", card.key),
+    }
     Ok(())
 }
 
@@ -2113,6 +2117,7 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
     match (kind, &asker) {
         ("wish", Some(asker)) => println!("Recorded a wish for {} from {}", project.name, asker.name),
         ("question", _) => println!("Asked the owner about {}; it waits in the inbox until answered", project.name),
+        ("next", _) => println!("Set the next step for {}; the next session starts from it", project.name),
         _ => println!("Recorded a {kind} for {}", project.name),
     }
     if let Some(due) = &due {
@@ -5290,8 +5295,9 @@ fn show_calendar(weeks: u32, from: Option<&str>, json: bool) -> Result<()> {
 
     println!();
     println!(
-        "{} shipped as planned   {} slipped   {} overdue   {} unplanned   {} planned",
+        "{} shipped as planned   {} early   {} slipped   {} overdue   {} unplanned   {} planned",
         calendar::Standing::Shipped.mark(),
+        calendar::Standing::Early.mark(),
         calendar::Standing::Slipped.mark(),
         calendar::Standing::Overdue.mark(),
         calendar::Standing::Unplanned.mark(),
@@ -5306,7 +5312,10 @@ fn show_calendar(weeks: u32, from: Option<&str>, json: bool) -> Result<()> {
             continue;
         };
         for cell in &row.cells {
-            if !matches!(cell.standing, calendar::Standing::Slipped | calendar::Standing::Overdue) {
+            if !matches!(
+                cell.standing,
+                calendar::Standing::Slipped | calendar::Standing::Early | calendar::Standing::Overdue
+            ) {
                 continue;
             }
             let Some(version) = versions.iter().find(|v| v.version == cell.version) else {
@@ -5373,6 +5382,7 @@ fn severity(standing: calendar::Standing) -> u8 {
         calendar::Standing::Slipped => 3,
         calendar::Standing::Planned => 2,
         calendar::Standing::Unplanned => 1,
+        calendar::Standing::Early => 0,
         calendar::Standing::Shipped => 0,
     }
 }

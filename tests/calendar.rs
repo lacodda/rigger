@@ -202,6 +202,29 @@ fn a_release_that_landed_late_is_shown_where_it_landed() {
     assert!(out.contains("2 weeks late"), "{out}");
 }
 
+/// A release that came before its week did not slip. It used to wear the
+/// slip's arrow, and a grid read by shape showed an early release as a
+/// late one.
+#[test]
+fn a_release_that_came_early_is_not_marked_as_slipped() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    // Aimed at W39 (21-25 Sep 2026), tagged in W37.
+    project(data.path(), "alpha", &["v0.1.0 · First"], &[("v0.1.0", "2026-09-11")]);
+    rigger(data.path())
+        .args(["version", "plan", "alpha", "v0.1.0", "--week", "2026-W39"])
+        .assert()
+        .success();
+
+    let out = output(data.path(), &["calendar", "--from", "2026-W37", "--weeks", "4"]);
+    let row = out.lines().find(|l| l.starts_with("alpha")).unwrap_or("");
+    assert!(row.contains("<v0.1.0"), "{out}");
+    assert!(!row.contains(">v0.1.0"), "an early release wears the slip's arrow: {out}");
+    assert!(out.contains("< early") && out.contains("2 weeks early"), "{out}");
+    let grid: serde_json::Value = serde_json::from_str(&output(data.path(), &["calendar", "--from", "2026-W37", "--weeks", "4", "--json"])).unwrap();
+    assert_eq!(grid["projects"][0]["cells"][0]["standing"], "early");
+}
+
 #[test]
 fn a_release_that_landed_in_its_week_is_not_called_slipped() {
     let data = tempfile::tempdir().unwrap();

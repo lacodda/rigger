@@ -16,7 +16,7 @@ $ rigger calendar --from 2026-W37 --weeks 5
 sample   *v0.1.0             >v0.2.0             ·v0.3.0    A
 widget             +v0.1.0   ·v0.2.0                        B
 
-+ shipped as planned   > slipped   ! overdue   * unplanned   · planned
++ shipped as planned   < early   > slipped   ! overdue   * unplanned   · planned
 
 sample   v0.2.0 — aimed at 2026-W37, 2 weeks late
 ```
@@ -97,7 +97,7 @@ With `--json`, the grid as data.
 | `projects[].cells[]` | object | One version in one week. |
 | `projects[].cells[].week` | string | The week it is shown in: the week of its tag once shipped, else the week it is aimed at. |
 | `projects[].cells[].version` | string | The version's number. |
-| `projects[].cells[].standing` | string | How it reads: `planned`, `shipped`, `slipped`, `overdue` or `unplanned`. |
+| `projects[].cells[].standing` | string | How it reads: `planned`, `shipped`, `early` (shipped before the week aimed at), `slipped` (after it), `overdue` or `unplanned`. |
 
 With `--ics` and `--json`, what was written.
 
