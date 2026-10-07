@@ -20,6 +20,7 @@ reason for a skip in `why`; `why --principles` lists objects
 - Count one version and one task in the singular
 - Mark a release that came early as early, not slipped
 - Take a hub's wish in once, and count only what is left
+- Stamp a moment no later than it happened
 
 ### Documentation
 - A first week and a move from a hub, from a live build
