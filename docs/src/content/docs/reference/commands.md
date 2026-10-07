@@ -41,6 +41,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger link`](/rigger/reference/link/) | v0.22.0 | Tie two projects together, and see when a pair has parted company |
 | [`rigger version show`](/rigger/reference/version/#version-show) | v0.23.0 | One version whole: its number, its week, how far it got; the JSON is a contract |
 | [`rigger session draft`](/rigger/reference/session/#session-draft) | v0.23.0 | The diary entry the open sitting would leave, to edit before `end --entry` |
+| [`rigger version add`](/rigger/reference/version/#version-add) | v0.27.0 | Plan a stage and its tasks without a hub |
 | [`rigger tray`](/rigger/reference/tray/) | v0.25.0 | A card's tray: the material that arrives for a task - fetched, taken in, sorted into the card's archive |
 
 ## Common to all commands

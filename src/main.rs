@@ -931,6 +931,22 @@ enum VersionCommand {
         /// Version, as the record spells it; the stage being built when omitted
         version: Option<String>,
     },
+    /// Add a stage to the plan, with its tasks; or tasks to a stage already there
+    Add {
+        /// Project name
+        project: String,
+        /// Version, such as v0.3.0
+        version: String,
+        /// What the stage is about, in a few words
+        #[arg(long)]
+        title: Option<String>,
+        /// A task of the stage; may be given more than once
+        #[arg(long = "task", value_name = "TEXT")]
+        tasks: Vec<String>,
+        /// The week it is aimed at, as `2026-W37`
+        #[arg(long, value_name = "WEEK")]
+        week: Option<String>,
+    },
     /// Aim a version at a week of the calendar
     Plan {
         /// Project name
@@ -1292,6 +1308,13 @@ fn run(cli: Cli) -> Result<()> {
         } => why(project.as_deref(), version.as_deref(), principle.as_deref(), principles, json),
         Command::Version { command } => match command {
             VersionCommand::Show { project, version } => version_show(&project, version.as_deref(), json),
+            VersionCommand::Add {
+                project,
+                version,
+                title,
+                tasks,
+                week,
+            } => version_add(&project, &version, title.as_deref(), &tasks, week.as_deref(), json),
             VersionCommand::Plan { project, version, week, clear } => version_plan(&project, &version, week.as_deref(), clear, json),
         },
         Command::Calendar { weeks, from, ics } => match ics {
@@ -4905,6 +4928,51 @@ fn project_tier(name: &str, tier: &str, rhythm: Option<u32>, json: bool) -> Resu
 /// The JSON is a contract, not a convenience: a release engine reads it to
 /// learn which number goes out on Friday and under what title, so every
 /// field is named on the reference page and a test holds the two together.
+/// Adds a stage to the plan, or tasks to a stage already there.
+///
+/// The plan was something only a hub could hold: a stage came from a
+/// heading in a markdown file and nowhere else, so a person with no hub -
+/// anyone but the line it was built in - had no way to say what comes next.
+fn version_add(project: &str, version: &str, title: Option<&str>, tasks: &[String], week: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    if !names_a_version(version) {
+        bail!("'{version}' is not a version; write it as a tag would be, such as v0.3.0");
+    }
+    let title = title.map(str::trim).filter(|t| !t.is_empty());
+    // Read before anything is written, so a week that is not a week refuses
+    // the stage rather than leaving it half made.
+    let week = week.map(calendar::Week::parse).transpose()?;
+    let (version_id, name, change) = db.add_version(project.id, version, title)?;
+    let mut added = 0;
+    for task in tasks.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+        if db.add_plan_task(project.id, version_id, task)? == db::Change::Added {
+            added += 1;
+        }
+    }
+    if let Some(week) = week {
+        db.set_planned_week(project.id, &name, Some(&week.to_string()))?;
+    }
+    if json {
+        return version_show(&project.name, Some(&name), true);
+    }
+    let tasks = plural(added, "task", "tasks");
+    match change {
+        db::Change::Added => println!("Added {name} to {}, with {tasks}", project.name),
+        db::Change::Updated => println!("{name} is now called {}; {tasks} added", title.unwrap_or_default()),
+        db::Change::Unchanged => println!("{name} was in the plan already; {tasks} added"),
+    }
+    if let Some(week) = week {
+        println!("  aimed at {week} - the week of {}", week.friday());
+    }
+    Ok(())
+}
+
+/// Whether text names a version the way a tag does: `v` and then a digit.
+fn names_a_version(text: &str) -> bool {
+    text.strip_prefix('v').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
 fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;

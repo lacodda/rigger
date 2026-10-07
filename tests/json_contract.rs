@@ -674,6 +674,26 @@ fn fill(r: &mut Record, data: &Path) {
     let patch_id = patch["tasks"][0]["id"].as_i64().unwrap_or_default().to_string();
     r.json("task freeze", &["task", "freeze", &patch_id]);
 
+    r.json(
+        "version add",
+        &[
+            "version",
+            "add",
+            "beta",
+            "v0.2.0",
+            "--title",
+            "The writer",
+            "--task",
+            "write the sheet",
+            "--week",
+            "2026-W46",
+        ],
+    );
+    r.json(
+        "version add",
+        &["version", "add", "beta", "v0.2", "--task", "write the sheet", "--task", "keep the format"],
+    );
+
     // ---- the calendar ---------------------------------------------------------
     r.json("version plan", &["version", "plan", "alpha", "v0.3.0", "--week", "2026-W45"]);
     r.json("version plan", &["version", "plan", "alpha", "v0.4.0", "--week", &now]);

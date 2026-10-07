@@ -3,7 +3,30 @@ title: version
 description: One version whole, and aiming it at a week of the release calendar.
 ---
 
-A version is a stage of a project's plan. `import` and `sync` record them; this command reads one whole, and gives one a place in the [calendar](/rigger/reference/calendar/).
+A version is a stage of a project's plan. `version add` plans one, `import` reads them from a hub and `sync` from the tags; this command reads one whole, and gives one a place in the [calendar](/rigger/reference/calendar/).
+
+## `version add`
+
+```
+rigger version add <PROJECT> <VERSION> [--title <TEXT>] [--task <TEXT>]... [--week <WEEK>] [--json]
+```
+
+Plans a stage: its number, what it is about, its tasks and, if you know it, the week it is aimed at. No hub is needed - this is how a project with no notes of its own gets a plan.
+
+```console
+$ rigger version add sample v0.1.0 --title "First light" --task "read the sheet" --task "write the report" --week 2026-W43
+Added v0.1.0 to sample, with 2 tasks
+  aimed at 2026-W43 - the week of 2026-10-23
+```
+
+Asked again, it adds what is new and nothing else. A stage is found by value - `v0.1` is `v0.1.0` - and a task by its text, so naming tasks it already has adds none, and a new one goes last in its list. A title given replaces the stage's title; one left out keeps it.
+
+```console
+$ rigger version add sample v0.1 --task "read the sheet" --task "draw the chart"
+v0.1.0 was in the plan already; 1 task added
+```
+
+A stage that shipped takes no new tasks - a task for it is a task for the next one - and text that is not a version (`next`, `0.3`) is refused: a version is written the way a tag would be. A new stage goes last in the plan, and an [export](/rigger/reference/export/) to a hub writes it there; read back, the hub changes nothing. Under `--json` it answers with the version as `version show` prints it.
 
 ## `version show`
 
@@ -65,7 +88,7 @@ $ rigger version show sample --json
 
 `version plan --json` answers with the same document for the version it aimed.
 
-<!-- json: version show, version plan -->
+<!-- json: version show, version plan, version add -->
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `project` | string | The project, as the record names it. |

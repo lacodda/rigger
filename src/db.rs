@@ -2936,6 +2936,87 @@ impl Db {
     /// Only a version the record already holds can be planned: a typo would
     /// otherwise create a row that no plan, changelog or tag knows about,
     /// and it would sit in the calendar for ever.
+    /// Adds a stage to a project's plan, or finds the one already there by
+    /// value (`v1.4` is `v1.4.0`). A title given to a stage that has one
+    /// replaces it; one left out keeps it.
+    ///
+    /// The heading is written as an export would compose it, so that the
+    /// stage reads as the plan's own - one with neither title nor heading
+    /// is what a tag leaves behind, and `doctor` tells the two apart.
+    pub fn add_version(&self, project_id: i64, name: &str, title: Option<&str>) -> Result<(i64, String, Change)> {
+        let wanted = version_order(name);
+        let mut stmt = self.conn.prepare("SELECT id, name, title FROM versions WHERE project_id = ?1")?;
+        let found = stmt
+            .query_map([project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .find(|(_, n, _)| version_order(n) == wanted);
+        let heading = |name: &str, title: Option<&str>| match title {
+            Some(title) => format!("{name} · {title}"),
+            None => name.to_string(),
+        };
+        match found {
+            Some((id, name, had)) => match title {
+                Some(title) if had.as_deref() != Some(title) => {
+                    self.conn.execute(
+                        "UPDATE versions SET title = ?1, heading = ?2 WHERE id = ?3",
+                        params![title, heading(&name, Some(title)), id],
+                    )?;
+                    Ok((id, name, Change::Updated))
+                }
+                _ => Ok((id, name, Change::Unchanged)),
+            },
+            None => {
+                // Last in the plan, in the block the plan's last stage is in,
+                // laid out as an import of the exported plan would lay it out
+                // - so that the trip through a hub and back changes nothing.
+                let (rank, after_prose): (i64, i64) = self.conn.query_row(
+                    "SELECT COALESCE(MAX(rank) + 1, 0), COALESCE((SELECT after_prose FROM versions WHERE project_id = ?1 AND status <> 'shipped' ORDER BY rank DESC LIMIT 1), 0)
+                     FROM versions WHERE project_id = ?1 AND status <> 'shipped'",
+                    [project_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                self.conn.execute(
+                    "INSERT INTO versions (project_id, name, title, status, heading, heading_depth, rank, after_prose, gap_after)
+                     VALUES (?1, ?2, ?3, 'planned', ?4, 2, ?5, ?6, 1)",
+                    params![project_id, name, title, heading(name, title), rank, after_prose],
+                )?;
+                Ok((self.conn.last_insert_rowid(), name.to_string(), Change::Added))
+            }
+        }
+    }
+
+    /// Adds a task to a stage of the plan, last in its list, unless the
+    /// stage already holds one with this text. A stage that shipped takes no
+    /// new work: a task for it is a task for the next one.
+    pub fn add_plan_task(&self, project_id: i64, version_id: i64, title: &str) -> Result<Change> {
+        let status: String = self.conn.query_row("SELECT status FROM versions WHERE id = ?1", [version_id], |r| r.get(0))?;
+        let held: Option<i64> = self
+            .conn
+            .query_row("SELECT id FROM tasks WHERE version_id = ?1 AND title = ?2", params![version_id, title], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if held.is_some() {
+            return Ok(Change::Unchanged);
+        }
+        if status == "shipped" {
+            bail!("that version has shipped; a task for it is a task for the next stage");
+        }
+        let position: i64 = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE version_id = ?1", [version_id], |r| {
+                r.get(0)
+            })?;
+        self.conn.execute(
+            "INSERT INTO tasks (project_id, version_id, title, status, created_at, position) VALUES (?1, ?2, ?3, 'new', ?4, ?5)",
+            params![project_id, version_id, title, now(), position],
+        )?;
+        Ok(Change::Added)
+    }
+
     pub fn set_planned_week(&self, project_id: i64, version: &str, week: Option<&str>) -> Result<Change> {
         let existing: Option<Option<String>> = self
             .conn
