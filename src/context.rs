@@ -14,6 +14,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::db::{Db, DocLine, Project, Task};
+use crate::plural;
 
 /// Tokens are approximated from characters. A tokeniser would be exact for
 /// one model and wrong for the next, and this number decides only how much
@@ -505,10 +506,6 @@ fn render_since(since: &SinceLastSession) -> String {
         true => format!("Last session ended {when}; nothing since\n"),
         false => format!("Last session ended {when}: {}\n", parts.join(", ")),
     }
-}
-
-fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 fn render_state(p: &Packet) -> String {

@@ -16,7 +16,7 @@ $ rigger context sample
 C:\dev\sample
 https://github.com/acme/sample.git
 Last shipped: v0.2.0 on 2026-09-03
-1 versions planned, 2 tasks open
+1 version planned, 2 tasks open
 Gate: cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 ## Current stage: v0.3.0 · Search

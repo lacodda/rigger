@@ -145,3 +145,20 @@ fn stages_planned_one_after_another_keep_their_order_through_a_hub() {
         .success()
         .stdout(predicate::str::contains("nothing changed"));
 }
+
+#[test]
+fn one_stage_and_one_task_are_counted_in_the_singular() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    rigger(data.path())
+        .args(["version", "add", "sample", "v0.1.0", "--task", "the only task"])
+        .assert()
+        .success();
+    rigger(data.path()).args(["wish", "sample", "a wish"]).assert().success();
+    // The screen and the packet count alike: the screen said "1 versions".
+    for command in ["show", "context"] {
+        let out = output(data.path(), &[command, "sample"]);
+        assert!(out.contains("1 version planned, 1 task open"), "{command}:\n{out}");
+    }
+    assert!(output(data.path(), &["show", "sample"]).contains("1 wish unsorted"));
+}

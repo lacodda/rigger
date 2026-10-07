@@ -15,6 +15,7 @@
 use serde::Serialize;
 
 use crate::db::{DigestFacts, Waiting};
+use crate::plural;
 
 /// A group of questions that appear to ask the same thing.
 #[derive(Debug, Serialize)]
@@ -168,20 +169,20 @@ pub fn digest_lines(facts: &DigestFacts, next_stage: Option<&str>, quiet_days: O
 
     let mut recorded = Vec::new();
     if facts.decisions > 0 {
-        recorded.push(plural(facts.decisions, "decision", "decisions"));
+        recorded.push(plural(facts.decisions as usize, "decision", "decisions"));
     }
     if facts.findings > 0 {
-        recorded.push(plural(facts.findings, "finding", "findings"));
+        recorded.push(plural(facts.findings as usize, "finding", "findings"));
     }
     if facts.changes > 0 {
-        recorded.push(plural(facts.changes, "change", "changes"));
+        recorded.push(plural(facts.changes as usize, "change", "changes"));
     }
     if !recorded.is_empty() {
         lines.push(format!("recorded {}", recorded.join(", ")));
     }
 
     if facts.waiting > 0 {
-        lines.push(format!("waiting on you: {}", plural(facts.waiting, "question", "questions")));
+        lines.push(format!("waiting on you: {}", plural(facts.waiting as usize, "question", "questions")));
     }
 
     if let Some(stage) = next_stage {
@@ -273,10 +274,6 @@ pub fn write_block(path: &std::path::Path, block: &str) -> anyhow::Result<crate:
         std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))?;
     }
     Ok(change)
-}
-
-fn plural(n: u32, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 #[cfg(test)]

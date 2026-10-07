@@ -138,9 +138,19 @@ pub fn render(screen: &Screen) -> String {
         }
         None => out.push_str("Nothing shipped yet\n"),
     }
-    let _ = writeln!(out, "{} versions planned, {} tasks open", screen.versions_planned, screen.tasks_open);
+    let _ = writeln!(
+        out,
+        "{} planned, {} open",
+        crate::plural(screen.versions_planned as usize, "version", "versions"),
+        crate::plural(screen.tasks_open as usize, "task", "tasks")
+    );
     if screen.questions > 0 || screen.wishes > 0 {
-        let _ = writeln!(out, "{} waiting on you, {} wishes unsorted", screen.questions, screen.wishes);
+        let _ = writeln!(
+            out,
+            "{} waiting on you, {} unsorted",
+            screen.questions,
+            crate::plural(screen.wishes, "wish", "wishes")
+        );
     }
 
     if let Some(stage) = &screen.stage {

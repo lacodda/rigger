@@ -2766,7 +2766,10 @@ fn days_since_utc(timestamp: &str) -> Option<i64> {
     Some(((jiff::Timestamp::now().as_second() - then.as_second()) / 86_400).max(0))
 }
 
-fn plural(n: usize, one: &str, many: &str) -> String {
+/// A count and its noun, agreed: `1 task`, `2 tasks`. One for the whole
+/// binary - three copies of it had drifted, and the project's screen said
+/// "1 versions planned" while the packet said "1 version planned".
+pub(crate) fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
