@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.28.0] - 2026-10-11
+
+### Breaking Changes
+
+- **Name the queue in one line each and read it whole by id**
+`context --json` replaces `questions[].text` and
+`wishes[].text` with `head` and `more`.
+
+### Documentation
+- Name the queue a line each on the shopfront
+
+### Features
+- Name the queue in one line each and read it whole by id
+
 ## [0.27.0] - 2026-10-07
 
 ### Breaking Changes
