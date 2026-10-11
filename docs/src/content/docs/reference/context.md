@@ -26,8 +26,13 @@ Gate: cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && ca
 ## Waiting for the owner
 - [2] Pick the release day.
 
+## Wishes, not yet sorted
+- [5] (charts asks) Read ODS too (+82 chars)
+
 ## Recent
-- 2026-09-03 · decision · The record is the database — Prose cannot be filtered.
+- [3] 2026-09-03 · decision · The record is the database — Prose cannot be filtered.
+
+(Any [id] above reads whole with `rigger event sample <id>`.)
 
 ## Next step
 Ship the importer next.
@@ -35,13 +40,34 @@ Ship the importer next.
 
 ## The budget
 
-The packet has a token budget - 3000 by default, `--budget` to change it - and holds it. Everything a session cannot start without comes first and is never dropped: the state line, the current stage with its open tasks, the questions waiting for you, the wishes not yet sorted, what the project has written down, and the next step. Recent events fill what is left, newest first, and the packet says what it left out:
+The packet has a token budget - 3000 by default, `--budget` to change it - and holds it. What a session cannot start without comes first and is never dropped: the state line, the current stage with its open tasks, what the project has written down, and the next step. The owner's queue and the recent events share what is left, and the packet says what it left out of either:
 
 ```
-(14 events left out by the budget; `--explain` names them - and 226 more are beyond the window)
+(16 more wishes left out by the budget; `--explain` names them)
+(14 events left out by the budget - `--explain` names them - and 226 more are beyond the window)
 ```
 
-That line is the point of the budget. A packet that quietly ended its list would look like a project where nothing else ever happened.
+Those lines are the point of the budget. A packet that quietly ended its list would look like a project where nothing else ever happened.
+
+### One line per question and wish
+
+A question or a wish is printed as the line it is known by - its bold heading when it opens with one, else its first sentence, cut at 120 characters - followed by how much more there is when that is more than a few words:
+
+```
+- [12] Tiers for the projects that have none (+455 chars)
+```
+
+A wish is written to be acted on cold, so it runs to paragraphs: what it is, where, how to fix it. Printed whole, forty of them came to twice the budget on a real record, and every session on that project started without a single recent event. A session needs to know what is queued, not to read the queue; the one it picks up it reads whole with [`event`](/rigger/reference/event/), by the id in brackets.
+
+### The queue's share
+
+The questions and the wishes may take what the events do not need, and never less than half of what is left after the fixed sections - so a long queue cannot crowd out what was decided lately, and a short history does not leave the budget idle. Within its share the queue is paid for in this order:
+
+1. the questions waiting for you, oldest first;
+2. the wishes a neighbour placed, oldest first - somebody is waiting on each;
+3. the rest of the wishes, newest first - the newest is the tail of the work just done.
+
+The first line that does not fit ends the queue, so what is left out is always the end of that order. Each list is still printed in the order it was recorded. Questions left out are counted with a pointer to [`inbox`](/rigger/reference/inbox/), which lists every one; wishes left out are named by `--explain`.
 
 ## Work put down
 
@@ -58,7 +84,7 @@ Counted rather than dropped for the same reason the budget says what it left out
 
 The two numbers are different facts and are counted apart. The first is what the budget refused. The second is what is older than the window the packet looks at - two hundred events - which no budget would have reached anyway and which [`find`](/rigger/reference/find/) is for. Adding them made a project with four hundred events of history look as though a session had been denied four hundred of them.
 
-Long events are summarised rather than truncated at a fixed width: the packet keeps the heading and the first sentence of the reasoning, then says how many characters remain. A decision in a real hub runs to fifteen hundred characters, and three of them at full length would crowd out a dozen others.
+Long events are summarised rather than truncated at a fixed width: the packet keeps the heading and the first sentence of the reasoning, then says how many characters remain. A decision in a real hub runs to fifteen hundred characters, and three of them at full length would crowd out a dozen others. Every line carries its id, and [`event`](/rigger/reference/event/) reads the rest.
 
 ## `--explain`
 
@@ -71,17 +97,19 @@ $ rigger context sample --explain
 state             32 tokens
 current stage     18 tokens
 questions          7 tokens
+wishes            12 tokens
 events            21 tokens
 documents          9 tokens
 next step          6 tokens
-total             96 tokens of 3000
+total            108 tokens of 3000
 
 ## Left out
-2026-09-17  decision   244t  The address of the action is in the shortcut, not the button… — over the budget
-2026-09-16  pitfall    197t  Backticks in an argument are run by the shell and spoil the record.… — over the budget
+2026-09-12  wish        24t  [9] Export the report as PDF — the queue's share of the budget is spent
+2026-09-17  decision   244t  [41] The address of the action is in the shortcut, not the button… — over the budget
+2026-09-16  pitfall    197t  [38] Backticks in an argument are run by the shell and spoil the record.… — over the budget
 ```
 
-It also names what the budget refused, one line each with the reason. A count tells a session that something is missing; only the names let it go and get the one it needs - with [`find`](/rigger/reference/find/) or [`why`](/rigger/reference/why/). The list is not carried in an ordinary packet: an account of the budget would be spent out of the budget.
+It also names what the budget refused, one line each with its id and the reason. A count tells a session that something is missing; only the names let it go and get the one it needs - with [`event`](/rigger/reference/event/) by its id, or [`find`](/rigger/reference/find/) and [`why`](/rigger/reference/why/) for the story around it. The list is not carried in an ordinary packet: an account of the budget would be spent out of the budget.
 
 Token counts are estimated from characters, not measured with a tokeniser: the number decides how much history to include, and an estimate that errs high is the safe direction.
 
@@ -99,7 +127,7 @@ The documents themselves are not in the packet: a vision runs to thousands of ch
 
 ## `--json`
 
-The same packet as data, for a tool that renders it or an editor that feeds it to a model. Every field of the text form is there, plus `events_omitted`, `events_beyond_window`, and `dropped` when `--explain` filled it.
+The same packet as data, for a tool that renders it or an editor that feeds it to a model. Every field of the text form is there, plus the counts of what was left out, and `dropped` when `--explain` filled it. A question or a wish is its `head` and the number of characters `more` the whole runs to, as in the text form; [`event`](/rigger/reference/event/) reads it whole.
 
 <!-- json: context -->
 | Field | Type | Meaning |
@@ -144,16 +172,21 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `current.set_aside[].asleep` | integer | How many of its open tasks are asleep. |
 | `questions` | array | Questions waiting for the owner. |
 | `questions[]` | object | One question. |
-| `questions[].id` | integer | The question's id. |
-| `questions[].text` | string | The question. |
+| `questions[].id` | integer | The question's id; `rigger event` reads it whole. |
+| `questions[].head` | string | The line it is known by: its bold heading, or its first sentence. |
+| `questions[].more` | integer | How many characters longer the whole is than `head`. |
 | `questions[].due` | string | The day an answer is needed by, `YYYY-MM-DD`. Absent when no day was set. |
-| `wishes` | array | Wishes not yet sorted into the plan. |
+| `questions_omitted` | integer | How many questions the budget left out - the newest. |
+| `wishes` | array | Wishes not yet sorted into the plan, the ones the budget kept. |
 | `wishes[]` | object | One wish. |
-| `wishes[].id` | integer | The wish's id. |
-| `wishes[].text` | string | The wish. |
+| `wishes[].id` | integer | The wish's id; `rigger event` reads it whole. |
+| `wishes[].head` | string | The line it is known by: its bold heading, or its first sentence. |
+| `wishes[].more` | integer | How many characters longer the whole is than `head`. |
 | `wishes[].asked_by` | string | The neighbour project that asked for it. Absent for the owner's own wishes. |
+| `wishes_omitted` | integer | How many wishes the budget left out. |
 | `events` | array | Recent events the budget kept, newest first. |
 | `events[]` | object | One event. |
+| `events[].id` | integer | The event's id; `rigger event` reads it whole. |
 | `events[].kind` | string | The event's kind, such as `decision`, `finding`, `pitfall` or `change`. |
 | `events[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
 | `events[].body` | string | The event's text. |
@@ -166,9 +199,10 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `next_step` | string or null | The line the last session left behind. |
 | `events_omitted` | integer | How many recent events the budget left out. |
 | `events_beyond_window` | integer | How many events are older than the window the packet looks at. |
-| `dropped` | array | Only with `--explain`: the events the budget left out, newest first. |
-| `dropped[]` | object | One event left out. |
-| `dropped[].kind` | string | Its kind: `decision`, `finding`, `pitfall`, `change` and the rest. |
+| `dropped` | array | Only with `--explain`: the questions, wishes and events the budget left out, in the order it refused them. |
+| `dropped[]` | object | One line left out. |
+| `dropped[].id` | integer | Its id; `rigger event` reads it whole. |
+| `dropped[].kind` | string | Its kind: `question`, `wish`, `decision`, `finding`, `pitfall`, `change` and the rest. |
 | `dropped[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
 | `dropped[].head` | string | Its first line, so it can be asked for by name. |
 | `dropped[].tokens` | integer | What it would have cost, in estimated tokens. |
@@ -186,6 +220,7 @@ The question a returning assistant has is not "what has been going on" but "what
 
 ## Related
 
+- [`event`](/rigger/reference/event/) - reading one line of the packet whole.
 - [`find`](/rigger/reference/find/) - searching the events this packet samples from.
 - [`why`](/rigger/reference/why/) - the whole story behind one version.
 

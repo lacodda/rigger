@@ -314,6 +314,13 @@ enum Command {
     },
     /// Serve the record over MCP, on stdin and stdout
     Mcp,
+    /// Read one recorded event whole: a wish, a question, a decision the packet shortened
+    Event {
+        /// Project name
+        project: String,
+        /// Id of the event, as the packet lists it in brackets
+        id: i64,
+    },
     /// Answer a question or sort a wish, so it leaves the packet
     Resolve {
         /// Project name
@@ -1356,6 +1363,7 @@ fn run(cli: Cli) -> Result<()> {
             ),
         },
         Command::Mcp => mcp::serve(),
+        Command::Event { project, id } => show_event(&project, id, json),
         Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref(), json),
         Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref(), None, json),
         Command::Link { command } => match command {
@@ -2129,6 +2137,19 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
     if change == db::Change::Unchanged {
         println!("  the record already held it");
     }
+    Ok(())
+}
+
+/// One event whole, by the id the packet printed. Under `--json` it is the
+/// event in the form a write prints it, so `note` and this are a pair.
+fn show_event(project: &str, id: i64, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let event = context::read(&db, &project, id)?;
+    if json {
+        return print_json(&serde_json::json!({ "event": event }));
+    }
+    print!("{}", context::render_whole(&event));
     Ok(())
 }
 

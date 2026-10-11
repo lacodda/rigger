@@ -475,8 +475,127 @@ fn the_packet_holds_the_budget_and_reports_what_it_dropped() {
     assert!(explained.contains("over the budget"), "each dropped line says why:\n{explained}");
 }
 
+/// The owner's queue is held to the budget too. A real wish runs to
+/// paragraphs, and on a real record forty of them filled the packet twice
+/// over before a single event - while the packet called itself in budget,
+/// because the queue was never counted. Now a wish is one line, the queue
+/// has a share, and what was decided last is still there to read.
+#[test]
+fn a_long_queue_leaves_room_for_what_was_decided() {
+    let data = tempfile::tempdir().unwrap();
+    let root = imported_project(data.path());
+    let near = data.path().join("near");
+    repo(&near);
+    rigger(data.path()).args(["project", "add"]).arg(&near).assert().success();
+
+    // Two orders from a neighbour, placed before anything else: the oldest
+    // wishes of all, and still the first the queue pays for.
+    for title in ["Read the sheet by name", "Keep the margins wide"] {
+        rigger(data.path())
+            .args([
+                "wish",
+                "proj",
+                &format!("**{title}**\n\nThe neighbour needs it for its next stage."),
+                "--from",
+                "near",
+            ])
+            .assert()
+            .success();
+    }
+
+    // Two hundred wishes of three paragraphs each, the way a hub keeps them.
+    let reasoning = "A paragraph of reasoning that runs on. ".repeat(25);
+    let mut file = String::from("# Хотелки\n\n---\n\n");
+    for i in 0..200 {
+        file.push_str(&format!(
+            "**05.09.2026 · Wish {i:03} says what it is about**\n\n{reasoning}\n\nHow to fix it: one more paragraph.\n\n"
+        ));
+    }
+    std::fs::write(root.join("hub").join("Хотелки.md"), file).unwrap();
+    rigger(data.path()).args(["import", "proj", "--hub"]).arg(root.join("hub")).assert().success();
+    rigger(data.path())
+        .args(["note", "proj", "The newest decision: one reader for every format.", "--kind", "decision"])
+        .assert()
+        .success();
+
+    let (total, text) = packet_cost(data.path(), &[]);
+    assert!(total <= 3000, "packet is {total} tokens, over the budget:\n{text}");
+    let packet = text.split("\n## Cost\n").next().unwrap();
+
+    // What was decided last is not crowded out by what is queued.
+    assert!(packet.contains("The newest decision"), "the queue crowded the events out:\n{packet}");
+    // A wish is the line it is known by, with a pointer to the rest.
+    assert!(!packet.contains("A paragraph of reasoning"), "a wish came whole:\n{packet}");
+    assert!(
+        packet.contains("Wish 199 says what it is about (+"),
+        "the newest wish, by its heading:\n{packet}"
+    );
+    // The neighbours' orders are paid for first, the oldest wishes last.
+    assert_eq!(packet.matches("(near asks) Read the sheet by name").count(), 1, "{packet}");
+    assert_eq!(packet.matches("(near asks) Keep the margins wide").count(), 1, "{packet}");
+    assert!(!packet.contains("Wish 000"), "the oldest wish is the first to go:\n{packet}");
+    assert!(packet.contains("Pick a colour."), "{packet}");
+    assert!(packet.contains("more wishes left out by the budget"), "{packet}");
+    assert!(packet.contains("rigger event proj <id>"), "the packet says how to read a line whole:\n{packet}");
+
+    // What was left out is named with its id, and the id reads it whole.
+    let (_, explained) = text.split_once("\n## Left out\n").expect("--explain names what it left out");
+    let line = explained.lines().find(|l| l.contains("Wish 000")).unwrap_or_else(|| panic!("{explained}"));
+    assert!(line.contains("the queue's share of the budget is spent"), "{line}");
+    let id = line.split('[').nth(1).and_then(|r| r.split(']').next()).unwrap();
+    rigger(data.path())
+        .args(["event", "proj", id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wish 000").and(predicate::str::contains("How to fix it: one more paragraph.")));
+}
+
+/// One event whole, by the id a packet printed - and a refusal, not someone
+/// else's text, when the id belongs to another project.
+#[test]
+fn an_event_is_read_whole_by_its_id() {
+    let data = tempfile::tempdir().unwrap();
+    imported_project(data.path());
+    let other = data.path().join("other");
+    repo(&other);
+    rigger(data.path()).args(["project", "add"]).arg(&other).assert().success();
+
+    let text = "**Ship the reader first.**\n\nThe writer waits on it.\n\nA third paragraph the packet never shows.";
+    let out = rigger(data.path()).args(["wish", "proj", text, "--from", "other", "--json"]).output().unwrap();
+    let written: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = written["event"]["id"].as_i64().unwrap().to_string();
+
+    rigger(data.path())
+        .args(["context", "proj"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("- [{id}] (other asks) Ship the reader first. (+")).and(predicate::str::contains("A third paragraph").not()));
+    rigger(data.path()).args(["event", "proj", &id]).assert().success().stdout(
+        predicate::str::contains(format!("[{id}] wish · proj · "))
+            .and(predicate::str::contains("asked by other"))
+            .and(predicate::str::contains("A third paragraph the packet never shows.")),
+    );
+
+    // The pair of a write: the same event, in the form `wish --json` printed.
+    let out = rigger(data.path()).args(["event", "proj", &id, "--json"]).output().unwrap();
+    let read: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(read["event"], written["event"]);
+
+    rigger(data.path())
+        .args(["event", "other", &id])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!("belongs to proj, not to other; `rigger event proj {id}`")));
+    rigger(data.path())
+        .args(["event", "proj", "999999"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("there is no [999999] in the record"));
+}
+
 /// A budget too small even for the fixed sections still produces a usable
-/// packet: state, the current stage and the owner's queue are never dropped.
+/// packet: the state and the current stage are never dropped, and the
+/// owner's queue, when it cannot be paid for, is counted where it would be.
 #[test]
 fn the_essentials_survive_an_impossible_budget() {
     let data = tempfile::tempdir().unwrap();

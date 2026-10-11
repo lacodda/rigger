@@ -19,7 +19,7 @@ versions:  0
 tasks:     0
 sessions:  0
 events:    0
-mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
+mcp:       answers - protocol 2025-06-18, 25 tools, 1 prompt
 backup:    today, 3 copies kept
 ```
 
@@ -113,7 +113,7 @@ versions:  3
 tasks:     1
 sessions:  0
 events:    1
-mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
+mcp:       answers - protocol 2025-06-18, 25 tools, 1 prompt
 backup:    today, 1 copy kept
 
 closed in the plan, no tag in git (1):

@@ -587,6 +587,7 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("wish", &["wish", "alpha", "Keep the margins wide", "--from", "beta"]);
     r.json("wish", &["wish", "alpha", "A second wish to sort"]);
     let wish_id = wish["event"]["id"].as_i64().unwrap_or_default().to_string();
+    r.json("event", &["event", "alpha", &wish_id]);
     r.json("resolve", &["resolve", "alpha", &wish_id]);
     let question = r.json("note", &["note", "beta", "Is the reader public?", "--kind", "question"]);
     let question_id = question["event"]["id"].as_i64().unwrap_or_default().to_string();

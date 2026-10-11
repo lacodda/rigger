@@ -62,7 +62,9 @@ Nothing shipped yet
 - [2] Which file formats come first?
 
 ## Recent
-- 2026-10-07 · decision · Read sheets with one library, not two
+- [1] 2026-10-07 · decision · Read sheets with one library, not two
+
+(Any [id] above reads whole with `rigger event sample <id>`.)
 ```
 
 [`rigger open sample`](/rigger/reference/open/) starts the assistant in the project with that packet as its first message. Connected to the [MCP server](/rigger/reference/mcp/) - the installer registers it - the assistant reads and writes the record itself; everything below is what it does through its tools, shown as the commands a person would type.

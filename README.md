@@ -47,7 +47,9 @@ Nothing shipped yet
 - [2] Which file formats come first?
 
 ## Recent
-- 2026-10-07 · decision · Read sheets with one library, not two
+- [1] 2026-10-07 · decision · Read sheets with one library, not two
+
+(Any [id] above reads whole with `rigger event sample <id>`.)
 ```
 
 Through the [MCP server](https://lacodda.github.io/rigger/reference/mcp/) the assistant writes back as it works - decisions, findings, the next step. A tag is the proof a version shipped, and the commits since are the changelog:

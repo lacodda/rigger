@@ -9,11 +9,14 @@
 //! Sections are ordered by what a session needs first: where the project
 //! stands, what is being built now, what waits for the owner, what happened
 //! recently, and the one line the last session left behind.
+//!
+//! Every line that stands for a longer text carries the id it is read by:
+//! the packet names, `rigger event` reads.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::Serialize;
 
-use crate::db::{Db, DocLine, Project, Task};
+use crate::db::{Db, DocLine, EventWritten, Project, Task};
 use crate::plural;
 
 /// Tokens are approximated from characters. A tokeniser would be exact for
@@ -27,13 +30,29 @@ pub fn estimate_tokens(text: &str) -> usize {
 
 pub const DEFAULT_BUDGET: usize = 3000;
 
+/// How long the line a question or a wish is known by may run, in
+/// characters. Long enough for a heading or a first sentence to say what it
+/// is about; short enough that forty of them cost less than one of them
+/// used to.
+const HEAD_CHARS: usize = 120;
+
+/// A line says how much more there is only when the rest is worth going
+/// for: a dangling clause of a few words is not.
+const POINTER_AT: usize = 40;
+
 #[derive(Debug, Serialize)]
 pub struct Packet {
     pub project: String,
     pub state: State,
     pub current: Option<Stage>,
     pub questions: Vec<Item>,
+    /// How many questions the budget left out - the newest; `inbox` lists
+    /// every one.
+    pub questions_omitted: usize,
     pub wishes: Vec<Item>,
+    /// How many wishes the budget left out - the oldest of those no
+    /// neighbour is waiting on.
+    pub wishes_omitted: usize,
     pub events: Vec<Event>,
     /// One line per handwritten text the project has: what exists to be
     /// read, not the reading of it.
@@ -71,6 +90,8 @@ pub struct Packet {
 /// A line the budget would not pay for.
 #[derive(Debug, Serialize)]
 pub struct Dropped {
+    /// The id `rigger event` reads it whole by.
+    pub id: i64,
     pub kind: String,
     pub date: String,
     /// The first line of what was left out, so it can be asked for by name.
@@ -178,10 +199,24 @@ pub fn put_down_lines(asleep: &[Task], set_aside: &[crate::db::SetAside]) -> Vec
     out
 }
 
+/// A question or a wish, by the line it is known by.
+///
+/// The whole text used to go in. Wishes are written to be acted on cold, so
+/// they run to paragraphs - a thousand characters is ordinary and three
+/// thousand happens - and on a real record forty of them came to six
+/// thousand tokens: twice the budget, before a single event. The packet was
+/// still "in budget" by its own account, because the queue was never
+/// counted against it, and every session on that project started without
+/// one line of what had been decided lately. A session needs to know what
+/// is queued, not to read the queue; the one it picks up it reads whole.
 #[derive(Debug, Serialize)]
 pub struct Item {
     pub id: i64,
-    pub text: String,
+    /// Its heading when it opens with one, else its first sentence.
+    pub head: String,
+    /// How many characters the whole holds beyond `head`; 0 when the head
+    /// is all of it.
+    pub more: usize,
     /// The neighbour who asked for it, when a wish came from one.
     ///
     /// On the line rather than in a list of its own: an order from a
@@ -198,6 +233,7 @@ pub struct Item {
 
 #[derive(Debug, Serialize)]
 pub struct Event {
+    pub id: i64,
     pub kind: String,
     pub date: String,
     pub body: String,
@@ -239,34 +275,20 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     };
 
     let current = db.current_stage(project.id)?.map(Stage::from);
-    let questions = db
-        .open_questions_of(project.id)?
-        .into_iter()
-        .map(|(id, text, due)| Item { id, text, asked_by: None, due })
-        .collect();
-    // Who asked is read once and matched by id: the wishes are already in
-    // hand, and asking the record a second question per wish would be a
-    // query per row on the one screen that is read at the start of every
-    // session.
-    let asked = db.asked_wishes(project.id)?;
-    let wishes = db
-        .open_events(project.id, "wish")?
-        .into_iter()
-        .map(|(id, text)| Item {
-            id,
-            text,
-            asked_by: asked.iter().find(|a| a.id == id).map(|a| a.asked_by.clone()),
-            due: None,
-        })
-        .collect();
+    // One query for both lists, with who asked joined in: this is the screen
+    // read at the start of every session, and a query per wish to name its
+    // neighbour would be paid on every one of them.
+    let queue = db.queue(project.id)?;
     let next_step = db.latest_event_body(project.id, "next")?;
 
     let mut packet = Packet {
         project: project.name.clone(),
         state,
         current,
-        questions,
-        wishes,
+        questions: Vec::new(),
+        questions_omitted: 0,
+        wishes: Vec::new(),
+        wishes_omitted: 0,
         events: Vec::new(),
         documents: db.document_lines(project.id)?,
         next_step,
@@ -275,10 +297,6 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         dropped: Vec::new(),
     };
 
-    // Everything above is what a session cannot start without, so it is never
-    // dropped. Recent events fill whatever budget is left, newest first, and
-    // the count of what did not fit is part of the packet.
-    //
     // The window is wider than any packet can hold, so that "left out" counts
     // events the budget refused rather than events this query never asked
     // for: a packet that drops history silently is the failure this whole
@@ -288,12 +306,44 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     let recent = db.recent_events(project.id, WINDOW)?;
     let beyond_window = db.count_recent_events(project.id)?.saturating_sub(recent.len() as u64) as usize;
 
-    // The line that says what was dropped costs tokens of its own, and so
-    // does the heading above the events. Both are reserved before anything is
-    // added, so that a packet never ends up over the budget it reports.
-    let reserve = estimate_tokens("\n## Recent\n(999 left out by the budget; 999 older than the window)\n");
+    // What is in the packet so far - the state, the stage, the documents and
+    // the next step - is what a session cannot start without, and is never
+    // dropped. The lines that say what was left out, and the one that says
+    // how to read a line whole, cost tokens of their own; they are reserved
+    // at their longest before anything else is added, so that a packet never
+    // ends up over the budget it reports.
+    let reserve = estimate_tokens(&format!("\n## Recent\n{}", events_footer(999, 9999)))
+        + estimate_tokens(&questions_footer(999, &project.name))
+        + estimate_tokens(&wishes_footer(999))
+        + estimate_tokens(&read_whole(&project.name));
     let mut spent = estimate_tokens(&render(&packet)) + reserve;
     packet.events_beyond_window = beyond_window;
+
+    // Summarised once, up front: what the events would cost decides how
+    // much the queue may take.
+    let recent: Vec<(Event, bool, usize)> = recent
+        .into_iter()
+        .map(|recent| {
+            let event = Event {
+                id: recent.id,
+                kind: recent.kind,
+                date: recent.date,
+                body: summarise(&recent.body),
+            };
+            let cost = estimate_tokens(&render_event(&event));
+            (event, recent.from_git, cost)
+        })
+        .collect();
+
+    // The owner's queue and the events share what is left. Without a share
+    // of its own the queue took everything: it was counted as essential,
+    // and on a project with forty wishes it left the events not one line.
+    // Half is the events' floor, not the queue's ceiling - when the events
+    // need less, the queue may have the rest.
+    let left = budget.saturating_sub(spent);
+    let wanted: usize = recent.iter().map(|(_, _, cost)| cost).sum();
+    let share = (left / 2).max(left.saturating_sub(wanted));
+    spent += fill_queue(&mut packet, queue, share);
 
     // Changes read from commits get a share of what is left; everything
     // written by a person competes for the rest.
@@ -305,14 +355,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     // argument behind the code it is about to change.
     let mut git_left = budget.saturating_sub(spent) / 4;
 
-    for recent in recent {
-        let from_git = recent.from_git;
-        let event = Event {
-            kind: recent.kind,
-            date: recent.date,
-            body: summarise(&recent.body),
-        };
-        let cost = estimate_tokens(&render_event(&event));
+    for (event, from_git, cost) in recent {
         let refused = if spent + cost > budget {
             Some("over the budget")
         } else if from_git && cost > git_left {
@@ -323,6 +366,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         if let Some(why) = refused {
             packet.events_omitted += 1;
             packet.dropped.push(Dropped {
+                id: event.id,
                 kind: event.kind,
                 date: event.date,
                 head: head_of(&event.body),
@@ -338,6 +382,143 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         packet.events.push(event);
     }
     Ok(packet)
+}
+
+const QUESTIONS: &str = "Waiting for the owner";
+const WISHES: &str = "Wishes, not yet sorted";
+
+impl Item {
+    fn of(queued: &crate::db::Queued) -> Item {
+        let head = headline(&queued.body);
+        let more = queued.body.trim().chars().count().saturating_sub(head.chars().count());
+        Item {
+            id: queued.id,
+            head,
+            more,
+            asked_by: queued.asked_by.clone(),
+            due: queued.due.clone(),
+        }
+    }
+}
+
+/// Puts the owner's queue into the packet within its share, and returns
+/// what it spent.
+///
+/// Questions come first, in the order they were asked: a session that does
+/// not know a question is open may settle it by itself. Then the wishes a
+/// neighbour placed, because somebody is waiting on each. Then the rest of
+/// the wishes, newest first - the newest is the tail of the work just done,
+/// and the oldest has waited this long already. The first line that does
+/// not fit ends the queue, so that what is left out is always the end of
+/// that order, and the packet can say so in a few words.
+///
+/// Each list is printed in the order it was recorded, whatever order paid
+/// for it.
+fn fill_queue(packet: &mut Packet, queue: Vec<crate::db::Queued>, share: usize) -> usize {
+    let mut left = share;
+    // A heading is paid for once, by the list under it.
+    let has = |kind: &str| queue.iter().any(|q| q.kind == kind);
+    if has("question") {
+        left = left.saturating_sub(estimate_tokens(&format!("\n## {QUESTIONS}\n")));
+    }
+    if has("wish") {
+        left = left.saturating_sub(estimate_tokens(&format!("\n## {WISHES}\n")));
+    }
+
+    let at = |kind: &'static str, asked: bool| {
+        queue
+            .iter()
+            .enumerate()
+            .filter(move |(_, q)| q.kind == kind && q.asked_by.is_some() == asked)
+            .map(|(i, _)| i)
+    };
+    let order: Vec<usize> = at("question", false).chain(at("wish", true)).chain(at("wish", false).rev()).collect();
+
+    let mut kept = vec![false; queue.len()];
+    let mut full = false;
+    for i in order {
+        let queued = &queue[i];
+        let item = Item::of(queued);
+        let cost = estimate_tokens(&render_item(&item));
+        if !full && cost <= left {
+            left -= cost;
+            kept[i] = true;
+            continue;
+        }
+        full = true;
+        match queued.kind.as_str() {
+            "question" => packet.questions_omitted += 1,
+            _ => packet.wishes_omitted += 1,
+        }
+        packet.dropped.push(Dropped {
+            id: item.id,
+            kind: queued.kind.clone(),
+            date: queued.date.clone(),
+            head: item.head,
+            tokens: cost,
+            why: "the queue's share of the budget is spent",
+        });
+    }
+    for (queued, kept) in queue.iter().zip(kept) {
+        if kept {
+            match queued.kind.as_str() {
+                "question" => packet.questions.push(Item::of(queued)),
+                _ => packet.wishes.push(Item::of(queued)),
+            }
+        }
+    }
+    share - left
+}
+
+/// The line a question or a wish is known by: its bold heading when it
+/// opens with one, else its first sentence, cut to what a list can carry.
+///
+/// A heading that only announces what follows - `**Вопрос:**` - names
+/// nothing, so a heading ending in a colon gives way to the sentence it
+/// opens.
+fn headline(text: &str) -> String {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let first = first.trim_start_matches('#').trim_start();
+    if let Some(rest) = first.strip_prefix("**")
+        && let Some(end) = rest.find("**")
+    {
+        let heading = rest[..end].trim();
+        if !heading.is_empty() && !heading.ends_with(':') {
+            return shorten(heading, HEAD_CHARS);
+        }
+    }
+    shorten(&first_sentence(&first.replace("**", "")), HEAD_CHARS)
+}
+
+/// What the packet says when the budget left questions out. They are the
+/// owner's and the inbox lists every one, so it points there.
+fn questions_footer(omitted: usize, project: &str) -> String {
+    let word = if omitted == 1 { "question" } else { "questions" };
+    format!("({omitted} more {word} left out by the budget; `rigger inbox --project {project}` lists them all)\n")
+}
+
+fn wishes_footer(omitted: usize) -> String {
+    let word = if omitted == 1 { "wish" } else { "wishes" };
+    format!("({omitted} more {word} left out by the budget; `--explain` names them)\n")
+}
+
+/// The line that says how to read whole what the packet only names.
+fn read_whole(project: &str) -> String {
+    format!("\n(Any [id] above reads whole with `rigger event {project} <id>`.)\n")
+}
+
+/// What the packet says about the events it did not print. Said even when
+/// nothing fit at all: a section that is simply absent reads as "nothing
+/// happened", which is the opposite of the truth.
+fn events_footer(dropped: usize, beyond: usize) -> String {
+    match (dropped, beyond) {
+        (0, 0) => String::new(),
+        (0, beyond) => format!("({beyond} older events are beyond the window the packet looks at; `rigger find` reaches them)\n"),
+        (dropped, 0) => format!("({dropped} events left out by the budget; `--explain` names them)\n"),
+        (dropped, beyond) => {
+            format!("({dropped} events left out by the budget - `--explain` names them - and {beyond} more are beyond the window)\n")
+        }
+    }
 }
 
 /// The line of an event a session needs, and a pointer to the rest.
@@ -445,11 +626,11 @@ pub fn costs(packet: &Packet) -> Vec<Cost> {
         },
         Cost {
             section: "questions",
-            tokens: estimate_tokens(&render_items("", &packet.questions)),
+            tokens: estimate_tokens(&render_questions(packet)),
         },
         Cost {
             section: "wishes",
-            tokens: estimate_tokens(&render_items("", &packet.wishes)),
+            tokens: estimate_tokens(&render_wishes(packet)),
         },
         Cost {
             section: "events",
@@ -577,31 +758,51 @@ fn render_stage(stage: &Stage) -> String {
     out
 }
 
-fn render_items(heading: &str, items: &[Item]) -> String {
-    if items.is_empty() {
+/// One line of the queue: the id, the day it is due, who asked, the line it
+/// is known by, and how much more there is.
+fn render_item(item: &Item) -> String {
+    // The day goes in front of the text, where a long question cannot push
+    // it out of sight - and says "overdue" in words, because the packet is
+    // read by a model that sees no colour.
+    let due = match &item.due {
+        Some(day) if crate::db::is_past(day, &crate::db::today()) => format!("(overdue since {day}) "),
+        Some(day) => format!("(due {day}) "),
+        None => String::new(),
+    };
+    let who = item.asked_by.as_deref().map(|who| format!("({who} asks) ")).unwrap_or_default();
+    let more = match item.more > POINTER_AT {
+        true => format!(" (+{} chars)", item.more),
+        false => String::new(),
+    };
+    format!("- [{}] {due}{who}{}{more}\n", item.id, item.head)
+}
+
+/// A list of the queue under its heading, with what the budget left out
+/// counted at its foot. Absent only when there is nothing either way.
+fn render_list(heading: &str, items: &[Item], footer: Option<String>) -> String {
+    if items.is_empty() && footer.is_none() {
         return String::new();
     }
-    let mut out = if heading.is_empty() { String::new() } else { format!("\n## {heading}\n") };
-    let today = crate::db::today();
+    let mut out = format!("\n## {heading}\n");
     for item in items {
-        // The day goes in front of the text, where a long question cannot
-        // push it out of sight - and says "overdue" in words, because the
-        // packet is read by a model that sees no colour.
-        let due = match &item.due {
-            Some(day) if crate::db::is_past(day, &today) => format!("(overdue since {day}) "),
-            Some(day) => format!("(due {day}) "),
-            None => String::new(),
-        };
-        match &item.asked_by {
-            Some(who) => out.push_str(&format!("- [{}] {due}({who} asks) {}\n", item.id, item.text)),
-            None => out.push_str(&format!("- [{}] {due}{}\n", item.id, item.text)),
-        }
+        out.push_str(&render_item(item));
     }
+    out.push_str(&footer.unwrap_or_default());
     out
 }
 
+fn render_questions(packet: &Packet) -> String {
+    let footer = (packet.questions_omitted > 0).then(|| questions_footer(packet.questions_omitted, &packet.project));
+    render_list(QUESTIONS, &packet.questions, footer)
+}
+
+fn render_wishes(packet: &Packet) -> String {
+    let footer = (packet.wishes_omitted > 0).then(|| wishes_footer(packet.wishes_omitted));
+    render_list(WISHES, &packet.wishes, footer)
+}
+
 fn render_event(event: &Event) -> String {
-    format!("- {} · {} · {}\n", event.date, event.kind, event.body)
+    format!("- [{}] {} · {} · {}\n", event.id, event.date, event.kind, event.body)
 }
 
 /// The packet as the assistant reads it.
@@ -610,25 +811,19 @@ pub fn render(packet: &Packet) -> String {
     if let Some(stage) = &packet.current {
         out.push_str(&render_stage(stage));
     }
-    out.push_str(&render_items("Waiting for the owner", &packet.questions));
-    out.push_str(&render_items("Wishes, not yet sorted", &packet.wishes));
+    out.push_str(&render_questions(packet));
+    out.push_str(&render_wishes(packet));
     if !packet.events.is_empty() || packet.events_omitted > 0 {
         out.push_str("\n## Recent\n");
         for event in &packet.events {
             out.push_str(&render_event(event));
         }
-        // Said even when nothing fit at all: a section that is simply absent
-        // reads as "nothing happened", which is the opposite of the truth.
-        match (packet.events_omitted, packet.events_beyond_window) {
-            (0, 0) => {}
-            (0, beyond) => out.push_str(&format!(
-                "({beyond} older events are beyond the window the packet looks at; `rigger find` reaches them)\n"
-            )),
-            (dropped, 0) => out.push_str(&format!("({dropped} events left out by the budget; `--explain` names them)\n")),
-            (dropped, beyond) => out.push_str(&format!(
-                "({dropped} events left out by the budget - `--explain` names them - and {beyond} more are beyond the window)\n"
-            )),
-        }
+        out.push_str(&events_footer(packet.events_omitted, packet.events_beyond_window));
+    }
+    // Said once, under the last list that carries ids: a line that names
+    // a text is only as good as the way to read it.
+    if !packet.questions.is_empty() || !packet.wishes.is_empty() || !packet.events.is_empty() {
+        out.push_str(&read_whole(&packet.project));
     }
     out.push_str(&render_documents(packet));
     if let Some(next) = &packet.next_step {
@@ -653,6 +848,50 @@ fn render_documents(packet: &Packet) -> String {
     out
 }
 
+/// One event whole, by the id a packet printed.
+///
+/// Refused when the id is another project's: ids are counted across the
+/// whole record, and a number copied from the wrong packet should read as a
+/// mistake rather than as somebody else's text taken for this project's.
+pub fn read(db: &Db, project: &Project, id: i64) -> Result<EventWritten> {
+    let Some(event) = db.event_written(id)? else {
+        bail!("there is no [{id}] in the record; the packet lists the ids");
+    };
+    if event.project != project.name {
+        bail!(
+            "[{id}] belongs to {}, not to {}; `rigger event {} {id}` reads it",
+            event.project,
+            project.name,
+            event.project
+        );
+    }
+    Ok(event)
+}
+
+/// An event whole, as `rigger event` prints it: what it is and whose on the
+/// first line, what else the record knows about it under that, then the
+/// text as it was written.
+pub fn render_whole(event: &EventWritten) -> String {
+    let day = event.created_at.split('T').next().unwrap_or(&event.created_at);
+    let mut out = format!("[{}] {} · {} · {day}\n", event.id, event.kind, event.project);
+    if let Some(card) = &event.card {
+        out.push_str(&format!("on the card {card}\n"));
+    }
+    if let Some(who) = &event.asked_by {
+        out.push_str(&format!("asked by {who}\n"));
+    }
+    if let Some(due) = &event.due {
+        out.push_str(&format!("due {due}\n"));
+    }
+    if let Some(principle) = &event.principle {
+        out.push_str(&format!("on the principle {principle:?}\n"));
+    }
+    out.push('\n');
+    out.push_str(event.body.trim_end());
+    out.push('\n');
+    out
+}
+
 /// What the budget refused, for `--explain`.
 ///
 /// Printed after the packet rather than inside it: it is an account of
@@ -664,7 +903,7 @@ pub fn render_dropped(packet: &Packet) -> String {
     }
     let mut out = String::from("\n## Left out\n");
     for d in &packet.dropped {
-        out.push_str(&format!("{}  {:<9} {:>4}t  {} — {}\n", d.date, d.kind, d.tokens, d.head, d.why));
+        out.push_str(&format!("{}  {:<9} {:>4}t  [{}] {} — {}\n", d.date, d.kind, d.tokens, d.id, d.head, d.why));
     }
     out
 }
@@ -708,6 +947,46 @@ mod tests {
         // "v0.3.0" would otherwise cut the sentence at its first dot.
         let sentence = first_sentence("The rule holds since v0.3.0 for every project. And then more.");
         assert_eq!(sentence, "The rule holds since v0.3.0 for every project.");
+    }
+
+    #[test]
+    fn a_wish_is_known_by_its_bold_heading() {
+        let wish = "**05.09.2026 · Read ODS too** (from the review)\n\nSome of the sheets arrive from LibreOffice.";
+        assert_eq!(headline(wish), "05.09.2026 · Read ODS too");
+    }
+
+    #[test]
+    fn a_heading_that_only_announces_gives_way_to_its_sentence() {
+        let question = "**Вопрос:** какой формат первым? Остальное потом.";
+        assert_eq!(headline(question), "Вопрос: какой формат первым?");
+    }
+
+    #[test]
+    fn without_a_heading_the_first_sentence_names_it() {
+        let wish = "`rigger why <task>` - only versions today. A task has no bounds in time.\n\nMore detail.";
+        assert_eq!(headline(wish), "`rigger why <task>` - only versions today.");
+        assert_eq!(headline("# A title line\n\nbody"), "A title line");
+    }
+
+    #[test]
+    fn a_long_first_sentence_is_cut_to_what_a_list_carries() {
+        let wish = "word ".repeat(100);
+        let head = headline(&wish);
+        assert!(head.chars().count() <= HEAD_CHARS + 1, "{head}");
+        assert!(head.ends_with('…'), "{head}");
+    }
+
+    #[test]
+    fn a_line_points_to_the_rest_only_when_there_is_much_of_it() {
+        let item = |more| Item {
+            id: 7,
+            head: "Read ODS too".to_string(),
+            more,
+            asked_by: None,
+            due: None,
+        };
+        assert_eq!(render_item(&item(12)), "- [7] Read ODS too\n");
+        assert_eq!(render_item(&item(1200)), "- [7] Read ODS too (+1200 chars)\n");
     }
 
     #[test]

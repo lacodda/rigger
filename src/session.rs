@@ -209,6 +209,7 @@ mod tests {
 
     fn event(kind: &str, body: &str, from_git: bool) -> RecentEvent {
         RecentEvent {
+            id: 0,
             kind: kind.to_string(),
             date: "2026-09-05".to_string(),
             body: body.to_string(),

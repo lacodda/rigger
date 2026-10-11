@@ -15,6 +15,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger context`](/rigger/reference/context/) | v0.3.0 | Print the context packet for a project |
 | [`rigger note`](/rigger/reference/note/), `rigger wish` | v0.3.0 | Record an event or a wish |
 | [`rigger resolve`](/rigger/reference/resolve/) | v0.7.0 | Answer a question or sort a wish |
+| [`rigger event`](/rigger/reference/event/) | v0.28.0 | Read one recorded event whole, by the id the packet printed |
 | [`rigger open`](/rigger/reference/open/) | v0.4.0 | Start a Claude Code session with the packet |
 | [`rigger mcp`](/rigger/reference/mcp/) | v0.5.0 | Serve the packet and the recording tools over MCP |
 | [`rigger sync`](/rigger/reference/sync/) | v0.6.0 | Read tags and commits into facts; the branches and commits of task cards (v0.24.0) |
@@ -60,7 +61,7 @@ The command surface arrives one release at a time. Each release adds its command
 What a command prints is the contract a program reading it relies on:
 
 - **A command that shows prints what it shows.** Each page has a table under the marker of its command - every field, as a path (`card.key`, `links[].project`, `[].version` for the items of a list printed whole), its type, and what it means.
-- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event and whether this write is what put it there; `version plan` with the version as `version show` prints it; `project add` and the rest with the project as `project show` prints it.
+- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event as [`event`](/rigger/reference/event/) reads it, and whether this write is what put it there; `version plan` with the version as `version show` prints it; `project add` and the rest with the project as `project show` prints it.
 - **One type per field.** A field is a string or a number or an object - plus `null` where it can be absent - and never one of two shapes depending on the case.
 - **Held by a test.** Every command is run with `--json` against one synthetic record; a field printed without its row in the table, a row nothing prints, or a type the table does not allow fails the build. A field is not renamed or removed without the table - and the reader - finding out.
 

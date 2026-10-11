@@ -949,8 +949,25 @@ pub struct VersionFacts {
     pub shipped_ts: Option<String>,
 }
 
+/// A question or a wish still open.
+#[derive(Debug, Clone)]
+pub struct Queued {
+    pub id: i64,
+    /// `question` or `wish`.
+    pub kind: String,
+    pub body: String,
+    /// The day it was recorded, `YYYY-MM-DD`.
+    pub date: String,
+    /// The day a question needs its answer by.
+    pub due: Option<String>,
+    /// The neighbour who placed a wish.
+    pub asked_by: Option<String>,
+}
+
 /// An event as the packet reads it back.
 pub struct RecentEvent {
+    /// The id `rigger event` reads it whole by.
+    pub id: i64,
     pub kind: String,
     pub date: String,
     pub body: String,
@@ -2916,11 +2933,12 @@ impl Db {
         Ok(self
             .conn
             .query_row(
-                "SELECT kind, created_at, body, commit_hash IS NOT NULL FROM events
+                "SELECT kind, created_at, body, commit_hash IS NOT NULL, id FROM events
                  WHERE session_id = ?1 AND kind = 'gate' ORDER BY created_at DESC, id DESC LIMIT 1",
                 params![session_id],
                 |r| {
                     Ok(RecentEvent {
+                        id: r.get(4)?,
                         kind: r.get(0)?,
                         date: r.get(1)?,
                         body: r.get(2)?,
@@ -3500,11 +3518,12 @@ impl Db {
     /// The events written against a card, oldest first.
     pub fn task_events(&self, task_id: i64) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
-            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL FROM events \
+            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL, id FROM events \
              WHERE task_id = ?1 AND kind NOT IN ('withdrawn') ORDER BY created_at, id",
         )?;
         let rows = stmt.query_map([task_id], |r| {
             Ok(RecentEvent {
+                id: r.get(4)?,
                 kind: r.get(0)?,
                 date: r.get(1)?,
                 body: r.get(2)?,
@@ -3659,12 +3678,26 @@ impl Db {
             .optional()?)
     }
 
-    /// The open questions of one project, with the day each is due.
-    pub fn open_questions_of(&self, project_id: i64) -> Result<Vec<(i64, String, Option<String>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, body, due FROM events WHERE project_id = ?1 AND kind = 'question' ORDER BY created_at, id")?;
-        let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    /// The open questions and wishes of one project, oldest first: the
+    /// packet's queue, with the day each was asked, the day a question is
+    /// due and the neighbour who placed a wish.
+    pub fn queue(&self, project_id: i64) -> Result<Vec<Queued>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.kind, e.body, substr(e.created_at, 1, 10), e.due, a.name
+               FROM events e LEFT JOIN projects a ON a.id = e.asked_by
+              WHERE e.project_id = ?1 AND e.kind IN ('question', 'wish')
+              ORDER BY e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(Queued {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                body: r.get(2)?,
+                date: r.get(3)?,
+                due: r.get(4)?,
+                asked_by: r.get(5)?,
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -3692,7 +3725,7 @@ impl Db {
     /// wishes have their own sections, and the next step its own line.
     pub fn recent_events(&self, project_id: i64, limit: u32) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
-            "SELECT kind, created_at, body, author FROM events
+            "SELECT kind, created_at, body, author, id FROM events
              WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn')
              ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
@@ -3700,6 +3733,7 @@ impl Db {
             let date: String = r.get(1)?;
             let author: String = r.get(3)?;
             Ok(RecentEvent {
+                id: r.get(4)?,
                 kind: r.get(0)?,
                 // Timestamps are stored whole; a packet only needs the day.
                 date: date.split('T').next().unwrap_or(&date).to_string(),
@@ -3772,9 +3806,10 @@ impl Db {
     pub fn session_events(&self, session_id: i64) -> Result<Vec<RecentEvent>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL              FROM events WHERE session_id = ?1 ORDER BY id")?;
+            .prepare("SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL, id              FROM events WHERE session_id = ?1 ORDER BY id")?;
         let rows = stmt.query_map([session_id], |r| {
             Ok(RecentEvent {
+                id: r.get(4)?,
                 kind: r.get(0)?,
                 date: r.get(1)?,
                 body: r.get(2)?,
@@ -3832,10 +3867,11 @@ impl Db {
     /// including the boundary cannot pull them back in.
     pub fn events_since(&self, project_id: i64, after: &str) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
-            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL              FROM events WHERE project_id = ?1 AND created_at >= ?2 AND session_id IS NULL              AND kind NOT IN ('wish', 'next', 'withdrawn') ORDER BY created_at DESC, id DESC",
+            "SELECT kind, substr(created_at, 1, 10), body, commit_hash IS NOT NULL, id              FROM events WHERE project_id = ?1 AND created_at >= ?2 AND session_id IS NULL              AND kind NOT IN ('wish', 'next', 'withdrawn') ORDER BY created_at DESC, id DESC",
         )?;
         let rows = stmt.query_map(params![project_id, after], |r| {
             Ok(RecentEvent {
+                id: r.get(4)?,
                 kind: r.get(0)?,
                 date: r.get(1)?,
                 body: r.get(2)?,

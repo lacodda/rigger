@@ -166,7 +166,8 @@ fn initialize() -> Value {
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": "The record of this project: what is done, what is next, what waits for the owner. \
-    Start a session with the `context` tool, or the `start session` prompt. Record what you decide, find or \
+    Start a session with the `context` tool, or the `start session` prompt; it names each question, wish and \
+    event in one line, and `event` reads one whole by its id. Record what you decide, find or \
     break with `record_decision`, `record_finding`, `record_pitfall` and `record_change` as it happens, not \
     at the end. Leave the next session one line with `set_next_step`. Anything only the owner can settle goes \
     to `ask_owner`; anything for the plan later goes to `wish`.",
@@ -213,12 +214,21 @@ fn tools() -> Vec<Value> {
     vec![
         tool(
             "context",
-            "Where the project stands: what shipped, what is being built, what waits for the owner, what happened recently, and the line the last session left behind. Read this before doing anything else in a project.",
+            "Where the project stands: what shipped, what is being built, what waits for the owner, what happened recently, and the line the last session left behind. Read this before doing anything else in a project. Questions, wishes and events come one line each with an [id]; `event` reads one whole.",
             json!({
                 "project": project_arg(),
                 "budget": { "type": "integer", "description": "Token budget for the packet; the default is 3000" },
             }),
             &["project"],
+        ),
+        tool(
+            "event",
+            "Read one recorded event whole by the [id] the packet printed: a wish before building it, a question before acting near it, a decision the packet shortened to its first sentence.",
+            json!({
+                "project": project_arg(),
+                "id": { "type": "integer", "description": "Id of the event, as the packet lists it in brackets" },
+            }),
+            &["project", "id"],
         ),
         tool(
             "plan",
@@ -465,6 +475,13 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 .map(|b| b as usize)
                 .unwrap_or(context::DEFAULT_BUDGET);
             Ok(context::render(&context::build(db, &project, budget)?))
+        }
+        "event" => {
+            let project = project(db)?;
+            let Some(id) = args.get("id").and_then(Value::as_i64) else {
+                bail!("this tool needs an `id`; the packet lists them in brackets");
+            };
+            Ok(context::render_whole(&context::read(db, &project, id)?))
         }
         "plan" => {
             let project = project(db)?;
@@ -983,6 +1000,7 @@ mod tests {
         let names: Vec<String> = tools().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         for promised in [
             "context",
+            "event",
             "plan",
             "record_decision",
             "record_finding",

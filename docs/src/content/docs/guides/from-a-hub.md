@@ -80,7 +80,7 @@ versions:  3
 tasks:     3
 sessions:  0
 events:    4
-mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
+mcp:       answers - protocol 2025-06-18, 25 tools, 1 prompt
 backup:    none - one file, no copy of it; run `rigger backup`
 ```
 
@@ -100,17 +100,28 @@ Last shipped: v0.1.0 on 2026-10-07
 - label the axes
 
 ## Wishes, not yet sorted
-- [2] **05.09.2026 · Read ODS too**
-
-Some of the sheets arrive from LibreOffice.
+- [2] 05.09.2026 · Read ODS too (+49 chars)
 
 ## Recent
-- 2026-10-07 · change · fix: keep merged cells
-- 2026-10-07 · change · feat: read a sheet
-- 2026-09-04 · decision · One library for every format — Two readers drifted apart within a week.
+- [4] 2026-10-07 · change · fix: keep merged cells
+- [3] 2026-10-07 · change · feat: read a sheet
+- [1] 2026-09-04 · decision · One library for every format — Two readers drifted apart within a week.
+
+(Any [id] above reads whole with `rigger event sample <id>`.)
 
 ## Written down
 - decisions · Решения · 2026-10-07 — `rigger doc show sample decisions`
+```
+
+A wish is one line there, however many paragraphs the hub gave it; [`event`](/rigger/reference/event/) reads it whole by its id:
+
+```console
+$ rigger event sample 2
+[2] wish · sample · 2026-10-07
+
+**05.09.2026 · Read ODS too**
+
+Some of the sheets arrive from LibreOffice.
 ```
 
 ## Hand the hub over

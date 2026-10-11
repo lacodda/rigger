@@ -100,7 +100,7 @@ versions:  0
 tasks:     0
 sessions:  0
 events:    0
-mcp:       answers - protocol 2025-06-18, 24 tools, 1 prompt
+mcp:       answers - protocol 2025-06-18, 25 tools, 1 prompt
 backup:    none - one file, no copy of it; run `rigger backup`
 
 never synced (1): sample

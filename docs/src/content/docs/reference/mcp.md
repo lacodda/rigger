@@ -41,6 +41,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | Tool | What it does |
 | --- | --- |
 | `context` | Where the project stands - the packet, as a session's first read |
+| `event` | One recorded event whole, by the `[id]` the packet printed: a wish before building it, a decision the packet cut to its first sentence |
 | `plan` | The stage being built and its open tasks, each with an id |
 | `record_decision` | A decision and the reason behind it |
 | `record_finding` | Something learnt about the code or the domain |
@@ -117,4 +118,5 @@ Only a malformed request is a JSON-RPC error - an unknown method, a call without
 - [`context`](/rigger/reference/context/) - the same packet, on the command line.
 - [`note`](/rigger/reference/note/) - the same recording, for the owner and for scripts.
 - [`resolve`](/rigger/reference/resolve/) - what the `resolve` tool does on the command line.
+- [`event`](/rigger/reference/event/) - what the `event` tool does on the command line.
 - [`open`](/rigger/reference/open/) - starting a session with the packet already in it.
