@@ -48,7 +48,7 @@ rigger keeps the record as data in a local SQLite file and derives everything el
 		A pushed tag means the version shipped, on that date. Commits since the last tag are activity. The plan cannot claim more than git confirms; a mismatch is reported, never silently fixed.
 	</Card>
 	<Card title="A context packet, not a hub" icon="document">
-		`rigger context` prints what the assistant needs to start - state, current stage, open questions, last events, next step - inside a fixed token budget that is tested, not hoped for.
+		`rigger context` prints what the assistant needs to start - state, current stage, open questions and wishes a line each, last events, next step - inside a fixed token budget that is tested, not hoped for. `rigger event` reads any line whole.
 	</Card>
 	<Card title="An MCP server as the only pen" icon="seti:json">
 		Decisions, findings, pitfalls, changes and the next step are recorded through tools, as events with a date and a session. Nothing is written by editing markdown.
