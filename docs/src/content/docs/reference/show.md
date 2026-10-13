@@ -57,6 +57,7 @@ The screen as data: the same facts, without the text form's sentences.
 | `remote` | string or null | The git remote's URL. |
 | `tier` | string or null | The project's tier letter. |
 | `rhythm_weeks` | integer or null | The tier's rhythm: how many weeks one version takes. |
+| `retired_at` | string or null | When the project was [retired](/rigger/reference/project/#project-retire), in RFC 3339 UTC; null while it is in the work. The screen then says so in place of the tier. |
 | `gate` | string or null | The command that says the project is fit to commit. |
 | `on_session_end` | string or null | The command the project runs when a session ends. |
 | `hub_path` | string or null | The project's hub directory in the notes vault. |

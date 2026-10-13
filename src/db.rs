@@ -512,6 +512,49 @@ const MIGRATIONS: &[&str] = &[
     // to. A day rather than a moment: a task is put down until Monday, not
     // until 09:14.
     "ALTER TABLE tasks ADD COLUMN snoozed_until TEXT;",
+    // v28: a project can be retired - taken out of the work for good, with
+    // its history kept. The tier `out` was the nearest thing, and it is not
+    // this: `out` means "worked on when asked", so the line's skill went on
+    // offering the project, the calendar went on giving it a row, and the
+    // inbox went on asking about it.
+    //
+    // A moment rather than a flag, because "since when" is the first thing
+    // asked of a retirement; and the decision that says why, by id, so the
+    // reason is read from the history rather than kept twice. `SET NULL`
+    // on that id leaves the project retired: losing the note of why must
+    // not quietly bring a project back.
+    //
+    // Triggers rather than a check in Rust: the record is written by the
+    // CLI, by MCP and by the import, and a project taken out of the work
+    // that went on gathering events, sittings, stages and tasks would be
+    // back in it by the side door. What it already holds can still be
+    // edited - a wish sorted, a task closed - so it can be tidied; nothing
+    // new is added. The message names no project because a trigger cannot
+    // spell one; the commands that know the name say it first.
+    "
+    ALTER TABLE projects ADD COLUMN retired_at TEXT;
+    ALTER TABLE projects ADD COLUMN retired_by INTEGER REFERENCES events(id) ON DELETE SET NULL;
+    CREATE TRIGGER events_not_into_retired BEFORE INSERT ON events
+    WHEN (SELECT retired_at FROM projects WHERE id = NEW.project_id) IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'the project is retired: its history reads, but nothing new is recorded against it - `rigger project unretire` brings it back');
+    END;
+    CREATE TRIGGER sessions_not_into_retired BEFORE INSERT ON sessions
+    WHEN (SELECT retired_at FROM projects WHERE id = NEW.project_id) IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'the project is retired: its history reads, but nothing new is recorded against it - `rigger project unretire` brings it back');
+    END;
+    CREATE TRIGGER versions_not_into_retired BEFORE INSERT ON versions
+    WHEN (SELECT retired_at FROM projects WHERE id = NEW.project_id) IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'the project is retired: its history reads, but nothing new is recorded against it - `rigger project unretire` brings it back');
+    END;
+    CREATE TRIGGER tasks_not_into_retired BEFORE INSERT ON tasks
+    WHEN (SELECT retired_at FROM projects WHERE id = NEW.project_id) IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'the project is retired: its history reads, but nothing new is recorded against it - `rigger project unretire` brings it back');
+    END;
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -651,6 +694,28 @@ pub struct Project {
     /// is a ritual that stops happening - which is the argument `session`
     /// was built on in the first place.
     pub on_session_end: Option<String>,
+    /// When it was taken out of the work, if it was. A retired project
+    /// leaves every list that looks ahead and keeps its history.
+    pub retired_at: Option<String>,
+    /// The decision that retired it, which says why.
+    pub retired_by: Option<i64>,
+}
+
+impl Project {
+    /// Refuses a project taken out of the work, by name and with the day
+    /// it left. The commands that would add to its history say so before
+    /// the schema does, because a trigger cannot name the project.
+    pub fn ensure_working(&self) -> Result<()> {
+        if let Some(at) = &self.retired_at {
+            let day = at.split('T').next().unwrap_or(at);
+            bail!(
+                "{} is retired since {day}: its history reads, but nothing new is recorded against it; `rigger project unretire {}` brings it back",
+                self.name,
+                self.name
+            );
+        }
+        Ok(())
+    }
 }
 
 /// What a project is, as far as the parts of rigger that read git care.
@@ -1064,6 +1129,8 @@ pub struct Activity {
 #[derive(Debug, Default, Serialize)]
 pub struct Counts {
     pub projects: u64,
+    /// Of those, how many are retired.
+    pub retired: u64,
     pub versions: u64,
     pub tasks: u64,
     pub sessions: u64,
@@ -1351,10 +1418,76 @@ impl Db {
             .with_context(|| format!("the project '{name}' was recorded but cannot be read back"))
     }
 
+    /// The projects in the work: every one recorded, less the retired.
+    ///
+    /// The short name is the working list on purpose. Fifteen screens walk
+    /// the projects - the line's skill, the calendar, the signals, `sync`,
+    /// the inbox - and every one of them means the projects being worked
+    /// on. A filter each of them had to remember is a filter the sixteenth
+    /// would forget; asking for the retired as well takes a longer name.
     pub fn projects(&self) -> Result<Vec<Project>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE retired_at IS NULL ORDER BY name"))?;
+        let rows = stmt.query_map([], row_to_project)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every project recorded, the retired among them: for the screens that
+    /// read history rather than plan work.
+    pub fn all_projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(&format!("SELECT {PROJECT_COLUMNS} FROM projects ORDER BY name"))?;
         let rows = stmt.query_map([], row_to_project)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Takes a project out of the work, recording why as a decision.
+    ///
+    /// The decision is written first and the project retired after, in one
+    /// transaction: once retired, the project takes no new events, and the
+    /// one that says why it was retired has to get in before the door
+    /// closes. Retiring a retired project changes nothing and says so.
+    pub fn retire(&self, project_id: i64, why: &str) -> Result<Change> {
+        let tx = self.conn.unchecked_transaction()?;
+        let retired: Option<String> = tx.query_row("SELECT retired_at FROM projects WHERE id = ?1", [project_id], |r| r.get(0))?;
+        if retired.is_some() {
+            return Ok(Change::Unchanged);
+        }
+        let at = now();
+        tx.execute(
+            "INSERT INTO events (project_id, kind, body, author, created_at) VALUES (?1, 'decision', ?2, 'owner', ?3)",
+            params![project_id, format!("Retired: {why}"), at],
+        )?;
+        let decision = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE projects SET retired_at = ?2, retired_by = ?3 WHERE id = ?1",
+            params![project_id, at, decision],
+        )?;
+        tx.commit()?;
+        Ok(Change::Updated)
+    }
+
+    /// Brings a retired project back into the work, recording that it came
+    /// back - and why, when that is said - as a decision. The door opens
+    /// before the decision is written, the reverse of `retire`.
+    pub fn unretire(&self, project_id: i64, why: Option<&str>) -> Result<Change> {
+        let tx = self.conn.unchecked_transaction()?;
+        let retired: Option<String> = tx.query_row("SELECT retired_at FROM projects WHERE id = ?1", [project_id], |r| r.get(0))?;
+        let Some(since) = retired else {
+            return Ok(Change::Unchanged);
+        };
+        tx.execute("UPDATE projects SET retired_at = NULL, retired_by = NULL WHERE id = ?1", [project_id])?;
+        let day = since.split('T').next().unwrap_or(&since);
+        let body = match why {
+            Some(why) => format!("Back in the work, retired since {day}: {why}"),
+            None => format!("Back in the work, retired since {day}."),
+        };
+        tx.execute(
+            "INSERT INTO events (project_id, kind, body, author, created_at) VALUES (?1, 'decision', ?2, 'owner', ?3)",
+            params![project_id, body, now()],
+        )?;
+        tx.commit()?;
+        Ok(Change::Updated)
     }
 
     pub fn project_by_name(&self, name: &str) -> Result<Option<Project>> {
@@ -2361,7 +2494,9 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Every question waiting for an answer, across all projects.
+    /// Every question waiting for an answer, across the projects in the
+    /// work. A retired project's questions wait for nobody: they stay in
+    /// its history, unanswered, and leave the inbox.
     ///
     /// Oldest first: a question that has waited three weeks is more overdue
     /// than one asked this morning, and the order should say so.
@@ -2370,7 +2505,7 @@ impl Db {
         let mut stmt = self.conn.prepare(
             "SELECT p.name, e.id, e.created_at, e.body, e.due
              FROM events e JOIN projects p ON p.id = e.project_id
-             WHERE e.kind = 'question'
+             WHERE e.kind = 'question' AND p.retired_at IS NULL
              ORDER BY e.created_at, p.name, e.id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -3909,6 +4044,7 @@ impl Db {
         };
         Ok(Counts {
             projects: count("projects")?,
+            retired: count("projects WHERE retired_at IS NOT NULL")?,
             versions: count("versions")?,
             tasks: count("tasks")?,
             sessions: count("sessions")?,
@@ -4057,8 +4193,10 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Every link of the record, each read from the side it was recorded
-    /// from, with the distance each end has travelled past its anchor.
+    /// Every link of the record between two projects in the work, each read
+    /// from the side it was recorded from, with the distance each end has
+    /// travelled past its anchor. A pair with a retired half has parted for
+    /// good, and saying so every week would be a warning nobody can act on.
     ///
     /// The distance is what tells a pair being built from a pair forgotten:
     /// an anchored version that is still to come, with three shipped
@@ -4074,6 +4212,7 @@ impl Db {
               JOIN projects tp ON tp.id = l.to_project
          LEFT JOIN versions fv ON fv.id = l.from_version
          LEFT JOIN versions tv ON tv.id = l.to_version
+             WHERE fp.retired_at IS NULL AND tp.retired_at IS NULL
           ORDER BY l.id";
         let mut stmt = self.conn.prepare(sql)?;
         let rows: Vec<LinkRow> = stmt
@@ -4321,7 +4460,9 @@ impl Db {
     }
 
     /// Every open wish of the record that a neighbour asked for, with the
-    /// project it was asked of.
+    /// project it was asked of - when that project is still in the work.
+    /// A wish asked by a project since retired is still a wish of the one
+    /// it was asked of.
     ///
     /// One query rather than one per project: the inbox is read across the
     /// whole line, and eighteen round trips to answer one screen is how a
@@ -4331,7 +4472,7 @@ impl Db {
             "SELECT e.id, e.body, asker.name, target.name, substr(e.created_at, 1, 10) FROM events e \
                JOIN projects asker ON asker.id = e.asked_by \
                JOIN projects target ON target.id = e.project_id \
-              WHERE e.kind = 'wish' \
+              WHERE e.kind = 'wish' AND target.retired_at IS NULL \
            ORDER BY target.name, e.created_at, e.id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -4408,8 +4549,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
 /// One constant rather than the same list spelt at each query: the column
 /// added in migration 21 had to reach four places, and a list spelt four
 /// times is a list that reaches three.
-const PROJECT_COLUMNS: &str =
-    "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end";
+const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end, retired_at, retired_by";
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -4429,6 +4569,8 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         form: row.get(13)?,
         docs_url: row.get(14)?,
         on_session_end: row.get(15)?,
+        retired_at: row.get(16)?,
+        retired_by: row.get(17)?,
     })
 }
 

@@ -458,6 +458,14 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             None => bail!("no project named '{name}'; the projects are listed by `rigger project list`"),
         }
     };
+    // The project, refused when it has been retired: for the tools that
+    // add to its history. Reading tools take a retired project as they
+    // take any other - its history stays readable by name.
+    let working = |db: &Db| -> Result<Project> {
+        let project = project(db)?;
+        project.ensure_working()?;
+        Ok(project)
+    };
     let text = || -> Result<&str> {
         match args.get("text").and_then(Value::as_str) {
             Some(text) if !text.trim().is_empty() => Ok(text.trim()),
@@ -488,7 +496,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             Ok(render_plan(db, &project)?)
         }
         "record_shipped" => {
-            let project = project(db)?;
+            let project = working(db)?;
             let Some(tag) = args.get("tag").and_then(Value::as_str) else {
                 bail!("a release is recorded by its tag: give `tag` as v0.23.0");
             };
@@ -553,6 +561,11 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 bail!("this tool needs an `id`; the packet lists them");
             };
             let answer = args.get("answer").and_then(Value::as_str).map(str::trim).filter(|a| !a.is_empty());
+            // Putting a retired project's wish away is tidying; an answer
+            // is a new decision, which it no longer takes.
+            if answer.is_some() {
+                project.ensure_working()?;
+            }
             let (kind, body) = db.resolve_event(project.id, id, answer)?;
             let first_line = body.lines().next().unwrap_or(&body);
             Ok(match (kind.as_str(), answer) {
@@ -607,6 +620,11 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 bail!("the body is empty; a document is removed with `rigger doc remove`, not by emptying it");
             }
             let existing = db.document(project.id, slug)?;
+            // A retired project's texts can be corrected, but it takes no
+            // new ones.
+            if existing.is_none() {
+                project.ensure_working()?;
+            }
             // A rewrite keeps what it was not told to change, so an
             // assistant correcting a vision cannot silently retitle it or
             // turn it into a research note.
@@ -712,6 +730,8 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             };
             let from = named_project(db, &from_name)?;
             let to = named_project(db, &to_name)?;
+            from.ensure_working()?;
+            to.ensure_working()?;
             if from.id == to.id {
                 bail!("a link joins two projects; {} is one", from.name);
             }
@@ -770,7 +790,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 "record_plan" => "plan",
                 other => bail!("rigger serves no tool named `{other}`"),
             };
-            let project = project(db)?;
+            let project = working(db)?;
             let text = text()?;
             if kind == "state" {
                 db.add_state_line(project.id, &crate::db::today(), text)?;
@@ -793,7 +813,11 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             };
             let asker = match kind {
                 "wish" => match args.get("from").and_then(Value::as_str).map(str::trim).filter(|f| !f.is_empty()) {
-                    Some(name) => Some(named_project(db, name)?),
+                    Some(name) => {
+                        let asker = named_project(db, name)?;
+                        asker.ensure_working()?;
+                        Some(asker)
+                    }
                     None => None,
                 },
                 _ => None,

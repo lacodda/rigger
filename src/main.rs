@@ -893,6 +893,22 @@ enum ProjectCommand {
         #[arg(long)]
         suggest: bool,
     },
+    /// Take a project out of the work for good, keeping its history readable
+    Retire {
+        /// Project name
+        name: String,
+        /// Why it leaves the work; recorded as a decision against it
+        #[arg(long, value_name = "TEXT")]
+        why: String,
+    },
+    /// Bring a retired project back into the work
+    Unretire {
+        /// Project name
+        name: String,
+        /// Why it comes back; recorded as a decision against it
+        #[arg(long, value_name = "TEXT")]
+        why: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1179,6 +1195,8 @@ fn run(cli: Cli) -> Result<()> {
                     json,
                 ),
             },
+            ProjectCommand::Retire { name, why } => project_retire(&name, &why, json),
+            ProjectCommand::Unretire { name, why } => project_unretire(&name, why.as_deref(), json),
         },
         Command::Import { project, hub, answers, check } => match answers {
             Some(answers) => import_answers(&project, &answers, check, json),
@@ -1401,7 +1419,7 @@ fn run(cli: Cli) -> Result<()> {
 /// a year later.
 fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     let answers = answers::read(path)?;
     let entries = answers.entries();
     let at = answers.at().unwrap_or_else(db::now);
@@ -1458,6 +1476,7 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
     let Some(project) = db.project_by_name(project)? else {
         bail!("no project named '{project}'; see `rigger project list`");
     };
+    project.ensure_working()?;
     let hub = hub::read(hub_dir)?;
     // Where the hub is, so a later check can find it. Not guessed from the
     // repository path: the hubs of this line live in a notes vault. Spelt
@@ -1640,7 +1659,7 @@ fn write_skill(
         return Ok(());
     }
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project.unwrap_or_default())?;
+    let project = working_project(&db, project.unwrap_or_default())?;
     let (template, source) = skill::load_template(template)?;
     let about = match project.kind {
         db::Kind::Repo => repo::detect_about(Path::new(&project.path)),
@@ -1799,6 +1818,17 @@ fn open_project(db: &Db, name: &str) -> Result<db::Project> {
     bail!("no project named '{name}'; see `rigger project list`")
 }
 
+/// A project in the work, for the commands that add to its history.
+///
+/// A retired project refuses new history at the schema, but a trigger
+/// cannot name the project it refused; these commands refuse first, and
+/// say which project and since when.
+fn working_project(db: &Db, name: &str) -> Result<db::Project> {
+    let project = open_project(db, name)?;
+    project.ensure_working()?;
+    Ok(project)
+}
+
 /// A project named outright, or the one the working directory sits in.
 ///
 /// A hook has no project name to pass: the Stop hook of an assistant is
@@ -1868,7 +1898,7 @@ fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Resu
 
 fn open_session(project: &str, print: bool, budget: usize, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     let packet = context::build(&db, &project, budget)?;
     let message = open::first_message(&context::render(&packet));
 
@@ -1903,7 +1933,7 @@ fn open_session(project: &str, print: bool, budget: usize, json: bool) -> Result
 fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let projects = match project {
-        Some(name) => vec![open_project(&db, name)?],
+        Some(name) => vec![working_project(&db, name)?],
         None => db.projects()?,
     };
     let mut reports = Vec::new();
@@ -2047,7 +2077,7 @@ fn note_on_card(task: &str, kind: &str, text: &str, json: bool) -> Result<()> {
 /// Records a release as the release engine reports it.
 fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], text: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     let recorded = delivery::record(&db, &project, tag, release, registries, text)?;
     if json {
         return print_json(&serde_json::json!({ "project": project.name, "shipped": recorded }));
@@ -2069,7 +2099,7 @@ fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], 
 
 fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by: Option<&str>, due: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     // Read before anything is written, so that a day that is not a day
     // refuses the question rather than leaving it recorded without one.
     let due = due.map(|d| db::parse_day(d, &db::today())).transpose()?;
@@ -2093,7 +2123,7 @@ fn note(project: &str, kind: &str, text: &str, principle: Option<&str>, asked_by
     // The neighbour has to exist before the wish is written, so that a
     // typo in the name is a refusal rather than a wish nobody asked for.
     let asker = match asked_by {
-        Some(name) => Some(open_project(&db, name)?),
+        Some(name) => Some(working_project(&db, name)?),
         None => None,
     };
     if let Some(asker) = &asker
@@ -2156,6 +2186,11 @@ fn show_event(project: &str, id: i64, json: bool) -> Result<()> {
 fn resolve(project: &str, id: i64, answer: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
+    // A retired project's wishes and questions can still be put away - that
+    // is tidying what it holds - but an answer is a new decision.
+    if answer.is_some() {
+        project.ensure_working()?;
+    }
     let (kind, body) = db.resolve_event(project.id, id, answer)?;
     if json {
         return print_json(&serde_json::json!({
@@ -2371,8 +2406,8 @@ fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>, json: bool
     let db = Db::open(&paths::db_path()?)?;
     let (from_name, from_version) = link_side(from);
     let (to_name, to_version) = link_side(to);
-    let from_project = open_project(&db, from_name)?;
-    let to_project = open_project(&db, to_name)?;
+    let from_project = working_project(&db, from_name)?;
+    let to_project = working_project(&db, to_name)?;
     if from_project.id == to_project.id {
         bail!("a link joins two projects; {} is one", from_project.name);
     }
@@ -2414,9 +2449,15 @@ fn link_list(project: Option<&str>, json: bool) -> Result<()> {
             db.links_of(project.id)?
         }
         None => {
+            // The line as it is worked: a tie with a retired end is part of
+            // that project's history, read by naming it.
+            let working = db.projects()?;
             let mut all: Vec<link::Link> = Vec::new();
-            for project in db.projects()? {
+            for project in &working {
                 for found in db.links_of(project.id)? {
+                    if !working.iter().any(|p| p.name == found.far.project) {
+                        continue;
+                    }
                     // Each link is found from both of its ends; keep the
                     // first sighting so the list is of links, not of ends.
                     if !all.iter().any(|seen| seen.id == found.id) {
@@ -2904,7 +2945,7 @@ fn doc_show(project: &str, slug: &str, json: bool) -> Result<()> {
 fn doc_add(project: &str, title: &str, kind: &str, slug: Option<&str>, body: Option<&str>, json: bool) -> Result<()> {
     doc::check_kind(kind)?;
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
 
     // A vision written twice is a vision nobody reads, so the second one is
     // refused by name rather than made: the fix is to edit the first.
@@ -3643,7 +3684,7 @@ fn task_new(title: &str, key: Option<&str>, aliases: &[String], projects: &[Stri
 /// card for a task they are not about to work on.
 fn link_and_hold(db: &Db, card: &card::Card, projects: &[String], branch: Option<&str>) -> Result<()> {
     for name in projects {
-        let project = open_project(db, name)?;
+        let project = working_project(db, name)?;
         db.link_card(card.id, project.id, branch, None)?;
     }
     db.set_setting(ACTIVE_CARD, Some(&card.id.to_string()))?;
@@ -4068,7 +4109,7 @@ fn task_context(task: &str, budget: usize, json: bool) -> Result<()> {
 fn task_link(task: &str, project: &str, branch: Option<&str>, role: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let card = find_card(&db, task)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     db.link_card(card.id, project.id, branch, role)?;
     if json {
         return print_card_json(&db, card.id);
@@ -4561,7 +4602,7 @@ fn refresh_line_skill(db: &Db, say: bool) -> Result<()> {
     }
     std::fs::write(&path, &rendered.text).with_context(|| format!("cannot write {}", path.display()))?;
     if say {
-        println!("  {} now lists {} projects", path.display(), listed.len());
+        println!("  {} now lists {}", path.display(), plural(listed.len(), "project", "projects"));
     }
     Ok(())
 }
@@ -4587,9 +4628,11 @@ fn project_service(name: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Every project recorded, the retired among them: this is the index of
+/// the record, and a project taken out of the work is still in it.
 fn project_list(json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let projects = db.projects()?;
+    let projects = db.all_projects()?;
     if json {
         println!("{}", serde_json::to_string_pretty(&projects)?);
         return Ok(());
@@ -4600,7 +4643,10 @@ fn project_list(json: bool) -> Result<()> {
     }
     let width = projects.iter().map(|p| p.name.len()).max().unwrap_or(0);
     for p in &projects {
-        println!("{:width$}  {}", p.name, where_it_lives(p));
+        match p.retired_at.as_deref().and_then(|at| at.split('T').next()) {
+            Some(day) => println!("{:width$}  {}  (retired {day})", p.name, where_it_lives(p)),
+            None => println!("{:width$}  {}", p.name, where_it_lives(p)),
+        }
     }
     Ok(())
 }
@@ -4634,6 +4680,12 @@ fn project_show(name: &str, json: bool) -> Result<()> {
         db::Kind::Service => println!("  kind:    a place the record keeps for itself; no repository"),
     }
     println!("  since:   {}", project.created_at);
+    if let Some(at) = &project.retired_at {
+        match project.retired_by {
+            Some(id) => println!("  retired: {at} - why in [{id}], `rigger event {} {id}`", project.name),
+            None => println!("  retired: {at}"),
+        }
+    }
     if let Some(gate) = &project.gate {
         println!("  gate:    {gate}");
     }
@@ -4709,6 +4761,9 @@ fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Op
 fn gate(project: Option<&str>, check: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = project_here(&db, project)?;
+    // Refused before the command runs rather than after: a gate is a run
+    // and a record of it, and the record would be refused anyway.
+    project.ensure_working()?;
     let Some(command) = project.gate.clone() else {
         bail!(
             "{} has no gate. Set it to what CI runs:
@@ -4929,7 +4984,7 @@ fn project_set_quietly(db: &Db, project: &db::Project, gate: Option<&str>, no_ga
 
 fn project_tier(name: &str, tier: &str, rhythm: Option<u32>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, name)?;
+    let project = working_project(&db, name)?;
     let tier = calendar::Tier::parse(tier)?;
     // A tier carries a rhythm of its own, so setting one is a single word
     // in the common case; `--rhythm` is for the project that keeps its
@@ -4952,6 +5007,96 @@ fn project_tier(name: &str, tier: &str, rhythm: Option<u32>, json: bool) -> Resu
     Ok(())
 }
 
+/// Takes a project out of the work for good, keeping its history.
+///
+/// The tier `out` was the nearest thing and is not this: `out` is "worked
+/// on when asked", so the line's skill went on offering the project and
+/// the calendar went on giving it a row. A retired project leaves every
+/// list that looks ahead - the line's skill, the registry, the calendar,
+/// the rotation and its signals, the inbox, `sync` - and stays readable by
+/// name in every one that looks back.
+///
+/// What it leaves open is left as it was and counted, not closed on its
+/// behalf: a wish nobody sorted is part of the history too.
+fn project_retire(name: &str, why: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, name)?;
+    let why = why.trim();
+    if why.is_empty() {
+        bail!("say why with --why: a retirement is a decision, and the record keeps why it was taken");
+    }
+    if project.kind == db::Kind::Service {
+        bail!(
+            "{} is a place the record keeps for itself, not a project in the work; there is nothing to retire it from",
+            project.name
+        );
+    }
+    // The close of a sitting may record what it ran, and a retired project
+    // takes nothing new; so the sitting is closed first, by the person who
+    // opened it, rather than left open with no way to end it cleanly.
+    if let Some(open) = db.open_session(project.id)? {
+        bail!(
+            "a sitting on {} has been open since {}; close it first with `rigger session end {}`",
+            project.name,
+            open.started_at,
+            project.name
+        );
+    }
+    let change = db.retire(project.id, why)?;
+    if json {
+        refresh_line_skill(&db, false)?;
+        return print_project_json(&db, &project.name);
+    }
+    let project = db.project_by_name(&project.name)?.context("the project just retired is not in the record")?;
+    let day = project.retired_at.as_deref().and_then(|at| at.split('T').next()).unwrap_or_default();
+    if change == db::Change::Unchanged {
+        println!("{} was retired already, on {day}", project.name);
+        println!("  `rigger project unretire {}` brings it back", project.name);
+        return Ok(());
+    }
+    println!("{} is retired, as of {day}: {why}", project.name);
+    let questions = db.count_open_events(project.id, "question")?;
+    let wishes = db.count_open_events(project.id, "wish")?;
+    let tasks = db.count_open_tasks(project.id)?;
+    if questions + wishes > 0 || tasks > 0 {
+        println!(
+            "  left as they were: {}, {}, {} - kept in its history, gone from the inbox and the plan",
+            plural(questions as usize, "question", "questions"),
+            plural(wishes as usize, "wish", "wishes"),
+            plural(tasks as usize, "open task", "open tasks")
+        );
+    }
+    println!("  gone from the line's skill, the registry, the calendar, the rotation, the inbox and sync");
+    println!("  `rigger show {}` still reads it; nothing new is recorded against it", project.name);
+    println!("  `rigger project unretire {}` brings it back", project.name);
+    refresh_line_skill(&db, true)?;
+    Ok(())
+}
+
+/// Brings a retired project back into the work: the lists that left it
+/// out take it in again, with the tier and rhythm it had.
+fn project_unretire(name: &str, why: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, name)?;
+    let why = why.map(str::trim).filter(|w| !w.is_empty());
+    let change = db.unretire(project.id, why)?;
+    if json {
+        refresh_line_skill(&db, false)?;
+        return print_project_json(&db, &project.name);
+    }
+    if change == db::Change::Unchanged {
+        println!("{} is not retired; it is in the work already", project.name);
+        return Ok(());
+    }
+    println!("{} is back in the work", project.name);
+    match &project.tier {
+        Some(tier) => println!("  its tier is {tier}, as it was; `rigger project tier` moves it"),
+        None => println!("  it has no tier; `rigger project tier {} <A|B|C|out>` gives it one", project.name),
+    }
+    refresh_line_skill(&db, true)?;
+    Ok(())
+}
+
 /// One version, whole.
 ///
 /// The JSON is a contract, not a convenience: a release engine reads it to
@@ -4964,7 +5109,7 @@ fn project_tier(name: &str, tier: &str, rhythm: Option<u32>, json: bool) -> Resu
 /// anyone but the line it was built in - had no way to say what comes next.
 fn version_add(project: &str, version: &str, title: Option<&str>, tasks: &[String], week: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     if !names_a_version(version) {
         bail!("'{version}' is not a version; write it as a tag would be, such as v0.3.0");
     }
@@ -5077,7 +5222,7 @@ fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> 
 fn tier_suggest(project: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let projects = match project {
-        Some(name) => vec![open_project(&db, name)?],
+        Some(name) => vec![working_project(&db, name)?],
         None => db.projects()?.into_iter().filter(|p| p.kind.reads_git()).collect(),
     };
     let to = calendar::Week::current();
@@ -5140,7 +5285,7 @@ fn tier_name(tier: Option<calendar::Tier>) -> String {
 
 fn version_plan(project: &str, version: &str, week: Option<&str>, clear: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
+    let project = working_project(&db, project)?;
     if week.is_none() && !clear {
         bail!("say which week with --week 2026-W37, or --clear to take it off the calendar");
     }
@@ -5870,10 +6015,24 @@ fn show_retro(cycle: bool, weeks: Option<u32>, to: Option<&str>, record: bool, j
 
     let mut versions = Vec::new();
     let mut projects = Vec::new();
-    for project in db.projects()? {
-        versions.extend(db.calendar_versions(project.id, &project.name)?);
-        let tier = project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok());
-        projects.push((project.name.clone(), tier, project.rhythm_weeks));
+    // A look back keeps a retired project's past and drops its future: what
+    // it shipped happened, and what it planned before it left was planned;
+    // a version aimed at a week after it left was never going to ship, and
+    // counting it missed would charge the line for a decision. Nor is it
+    // held to a tier it no longer sits in.
+    for project in db.all_projects()? {
+        let left = project.retired_at.as_deref().and_then(calendar::Week::of_recorded);
+        let planned = db.calendar_versions(project.id, &project.name)?;
+        versions.extend(
+            planned
+                .into_iter()
+                .filter(|v| v.shipped.is_some() || left.is_none_or(|left| v.planned.is_some_and(|week| week < left))),
+        );
+        let tier = match left {
+            Some(_) => None,
+            None => project.tier.as_deref().and_then(|t| calendar::Tier::parse(t).ok()),
+        };
+        projects.push((project.name.clone(), tier, if left.is_some() { None } else { project.rhythm_weeks }));
     }
     let looked = retro::look_back(from, to, &versions, &projects);
     let summary = retro::summary(&looked);
@@ -6145,6 +6304,7 @@ fn red_gate_reminder(db: &Db, project: &db::Project, session: i64) -> Result<Opt
 fn session_start(project: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = project_here(&db, project)?;
+    project.ensure_working()?;
     let (session, change) = db.start_session(project.id, &db::now())?;
     // Told only when the sitting is new: joining one already open is not a
     // second interval, and telling kasl twice would split the time it
@@ -6874,7 +7034,10 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     }
     println!("database:  {}", path.display());
     println!("schema:    version {schema}");
-    println!("projects:  {}", counts.projects);
+    match counts.retired {
+        0 => println!("projects:  {}", counts.projects),
+        retired => println!("projects:  {} ({retired} retired)", counts.projects),
+    }
     println!("versions:  {}", counts.versions);
     println!("tasks:     {}", counts.tasks);
     println!("sessions:  {}", counts.sessions);

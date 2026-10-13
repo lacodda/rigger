@@ -928,6 +928,13 @@ fn fill(r: &mut Record, data: &Path) {
     std::fs::create_dir_all(&late).unwrap();
     git(&late, &["init", "--quiet", "--initial-branch", "main"]);
     r.json("project add", &["project", "add", late.to_str().unwrap()]);
+    // Taken out of the work, brought back, and taken out for good: the
+    // project, its packet and its screen say so.
+    r.json("project retire", &["project", "retire", "late", "--why", "Folded into alpha"]);
+    r.json("project unretire", &["project", "unretire", "late", "--why", "Split out again"]);
+    r.json("project retire", &["project", "retire", "late", "--why", "Folded into alpha for good"]);
+    r.json("context", &["context", "late"]);
+    r.json("show", &["show", "late"]);
 
     for dir in [&hub, &out_hub] {
         std::fs::write(dir.join("Хотелки.md"), "# Хотелки\n\nWhat to sort later.\n\n---\n\n- Still kept here by hand\n").unwrap();

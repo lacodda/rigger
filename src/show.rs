@@ -27,6 +27,9 @@ pub struct Screen {
     pub remote: Option<String>,
     pub tier: Option<String>,
     pub rhythm_weeks: Option<u32>,
+    /// When it was taken out of the work, if it was; a tier is then beside
+    /// the point and is not shown.
+    pub retired_at: Option<String>,
     pub gate: Option<String>,
     pub on_session_end: Option<String>,
     pub hub_path: Option<String>,
@@ -73,6 +76,7 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         remote: project.remote.clone(),
         tier: project.tier.clone(),
         rhythm_weeks: project.rhythm_weeks,
+        retired_at: project.retired_at.clone(),
         gate: project.gate.clone(),
         on_session_end: project.on_session_end.clone(),
         hub_path: project.hub_path.clone(),
@@ -106,7 +110,10 @@ pub fn render(screen: &Screen) -> String {
     if let Some(hub) = &screen.hub_path {
         let _ = writeln!(out, "{:<10} {hub}", "hub");
     }
-    if let Some(tier) = &screen.tier {
+    if let Some(at) = &screen.retired_at {
+        let day = at.split('T').next().unwrap_or(at);
+        let _ = writeln!(out, "{:<10} since {day} - its history reads, nothing new is recorded", "retired");
+    } else if let Some(tier) = &screen.tier {
         let rhythm = match screen.rhythm_weeks {
             Some(1) => " · a version a week".to_string(),
             Some(n) => format!(" · a version every {n} weeks"),
@@ -292,6 +299,7 @@ mod tests {
             remote: None,
             tier: Some("C".into()),
             rhythm_weeks: Some(1),
+            retired_at: None,
             gate: Some("cargo test".into()),
             on_session_end: None,
             hub_path: None,

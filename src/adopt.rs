@@ -188,6 +188,14 @@ pub fn adopt(db: &Db, root: &Path, hubs: Option<&Path>, check: bool) -> Result<V
         };
 
         let project = match db.project_by_path(&path)? {
+            // Taken out of the work: its checkout is still on disk, and
+            // reading it again would add to a history that is closed.
+            Some(project) if project.retired_at.is_some() => {
+                let day = project.retired_at.as_deref().and_then(|at| at.split('T').next()).unwrap_or_default();
+                adopted.name = project.name.clone();
+                adopted.status = Status::Skipped(format!("retired since {day}"));
+                None
+            }
             Some(project) => {
                 // Recorded under whatever name the owner gave it; that name
                 // wins over the directory's, for the hub as well.

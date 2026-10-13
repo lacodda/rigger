@@ -44,6 +44,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger session draft`](/rigger/reference/session/#session-draft) | v0.23.0 | The diary entry the open sitting would leave, to edit before `end --entry` |
 | [`rigger version add`](/rigger/reference/version/#version-add) | v0.27.0 | Plan a stage and its tasks without a hub |
 | [`rigger tray`](/rigger/reference/tray/) | v0.25.0 | A card's tray: the material that arrives for a task - fetched, taken in, sorted into the card's archive |
+| [`rigger project retire`](/rigger/reference/project/#project-retire) | v0.29.0 | Take a project out of the work for good, keeping its history readable; `unretire` brings it back |
 
 ## Common to all commands
 

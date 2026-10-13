@@ -32,7 +32,7 @@ $ rigger project list
 sample  C:\dev\sample
 ```
 
-With `--json`, an array of the objects `project show --json` prints.
+A retired project is listed with the day it left: `attic  C:\dev\attic  (retired 2026-10-13)`. With `--json`, an array of the objects `project show --json` prints, the retired among them.
 
 <!-- json: project list -->
 | Field | Type | Meaning |
@@ -54,6 +54,8 @@ With `--json`, an array of the objects `project show --json` prints.
 | `[].form` | string or null | What shape of thing the product is: `cli`, `desktop`, `web`, `library` or `service`; null when not recorded. |
 | `[].docs_url` | string or null | Where the documentation lives; null when there is no site. |
 | `[].on_session_end` | string or null | The command run when a sitting closes; null when none is set. |
+| `[].retired_at` | string or null | When the project was retired, in RFC 3339 UTC; null while it is in the work. |
+| `[].retired_by` | integer or null | The id of the decision that retired it, which `rigger event` reads; null while it is in the work. |
 
 
 ## `project show`
@@ -83,9 +85,9 @@ $ rigger project show sample --json
 
 Timestamps are UTC in RFC 3339. `tier` and `rhythm_weeks` are null until `project tier` sets them.
 
-The commands that record or change a project - `add`, `service`, `set`, `mark` and `tier` - print the same object under `--json`.
+The commands that record or change a project - `add`, `service`, `set`, `mark`, `tier`, `retire` and `unretire` - print the same object under `--json`.
 
-<!-- json: project add, project service, project show, project set, project mark, project tier -->
+<!-- json: project add, project service, project show, project set, project mark, project tier, project retire, project unretire -->
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | integer | The project's id in the record. |
@@ -104,6 +106,8 @@ The commands that record or change a project - `add`, `service`, `set`, `mark` a
 | `form` | string or null | What shape of thing the product is: `cli`, `desktop`, `web`, `library` or `service`; null when not recorded. |
 | `docs_url` | string or null | Where the documentation lives; null when there is no site. |
 | `on_session_end` | string or null | The command run when a sitting closes; null when none is set. |
+| `retired_at` | string or null | When the project was retired, in RFC 3339 UTC; null while it is in the work. |
+| `retired_by` | integer or null | The id of the decision that retired it, which `rigger event` reads; null while it is in the work. |
 
 
 ## `project tier`
@@ -261,6 +265,58 @@ The forms are `cli`, `desktop`, `web`, `library` and `service` - a closed list, 
 
 What is not named keeps what it had, so `--form cli` states the form and not the whole mark; `--clear` takes the mark off. With no flags, `mark` says what is recorded.
 
+## `project retire`
+
+```
+rigger project retire <NAME> --why <TEXT>
+rigger project unretire <NAME> [--why <TEXT>]
+```
+
+Takes a project out of the work for good, keeping everything it has done readable.
+
+```console
+$ rigger project retire attic --why "Folded into sample; nobody climbs up there any more."
+attic is retired, as of 2026-10-13: Folded into sample; nobody climbs up there any more.
+  left as they were: 1 question, 1 wish, 1 open task - kept in its history, gone from the inbox and the plan
+  gone from the line's skill, the registry, the calendar, the rotation, the inbox and sync
+  `rigger show attic` still reads it; nothing new is recorded against it
+  `rigger project unretire attic` brings it back
+  C:\Users\you\.claude\skills\line\SKILL.md now lists 1 project
+```
+
+The tier `out` is not this. `out` is a project worked on when asked: the line's skill goes on offering it, the calendar goes on giving it a row, the inbox goes on asking its questions. A retired project is one nobody will work on, and every list that looks ahead leaves it out:
+
+| Leaves it out | Still reads it by name |
+| --- | --- |
+| the line's [skill](/rigger/reference/skill/) - an installed one is written again on the spot | [`show`](/rigger/reference/show/), which says so in place of the tier, and the [context packet](/rigger/reference/context/), which opens with the day it was retired and the decision that says why |
+| the registry [`export --line`](/rigger/reference/export/) publishes | [`event`](/rigger/reference/event/), [`why`](/rigger/reference/why/), [`find`](/rigger/reference/find/) and [`export`](/rigger/reference/export/) |
+| [`calendar`](/rigger/reference/calendar/) and its `--ics`, [`next`](/rigger/reference/next/), [`week`](/rigger/reference/week/), [`release-day`](/rigger/reference/release-day/) | [`retro`](/rigger/reference/retro/) - what it shipped happened, and what it planned before it left was planned; a version aimed at a week after it left is not counted missed, and no tier is held against it |
+| the tier signals, `project tier --suggest`, and the pairs [`link`](/rigger/reference/link/) warns have parted | `link list <name>` |
+| [`inbox`](/rigger/reference/inbox/) - its questions wait for nobody now - and [`digest`](/rigger/reference/digest/) | `digest` with its name; its questions and wishes in its own packet |
+| [`sync`](/rigger/reference/sync/), [`adopt`](/rigger/reference/adopt/) and `doctor --hubs` | `project list`, which marks it `(retired YYYY-MM-DD)`; [`doctor`](/rigger/reference/doctor/) counts it |
+| the resources the [MCP server](/rigger/reference/mcp/) lists | every MCP tool that reads |
+
+`--why` is required: a retirement is a decision, and it is recorded as one against the project before the door closes. What the project leaves open - questions, wishes, tasks - is counted and left as it was, part of its history rather than tidied away on its behalf.
+
+Nothing new is recorded against it afterwards. `note`, `wish`, `session start`, `open`, `gate`, `version add` and `plan`, `project tier`, `link add`, `doc add`, `skill`, `sync` and `import` refuse it by name; so do the MCP tools that write. Below them the database refuses on its own: new events, sittings, stages and tasks of a retired project are rejected by the schema, whatever writes them. What it already holds can still be edited - a wish sorted with [`resolve`](/rigger/reference/resolve/), a task closed - so that it can be tidied; an answer to one of its questions is a new decision, and is refused.
+
+```console
+$ rigger note attic --kind decision "Paint it after all"
+error: attic is retired since 2026-10-13: its history reads, but nothing new is recorded against it; `rigger project unretire attic` brings it back
+```
+
+A sitting still open on the project is refused first - close it with `session end`. A place the record keeps for itself (`project service`) is not in the work and cannot be retired. Retiring a retired project changes nothing and says so.
+
+`unretire` brings it back, with the tier and rhythm it had. `--why` is optional there; the return is recorded as a decision either way.
+
+```console
+$ rigger project unretire attic --why "The ladder arrived"
+attic is back in the work
+  its tier is A, as it was; `rigger project tier` moves it
+```
+
+Under `--json`, both print the project as `project show` does.
+
 ## `rigger project service <name>`
 
 Records a place the record keeps for itself: a project with no repository, and none coming.
@@ -282,5 +338,5 @@ Everything else works on it as usual: events, questions, wishes, [`digest`](/rig
 - [`init`](/rigger/reference/init/) - the database `project` writes to.
 - [`doctor`](/rigger/reference/doctor/) - how many projects are recorded.
 - [`calendar`](/rigger/reference/calendar/) - where a tier and its rhythm are read.
-- [`retro`](/rigger/reference/retro/) - what a service project is made for.
+- [`retro`](/rigger/reference/retro/) - what a service project is made for, and what it keeps of a retired one.
 - [`gate`](/rigger/reference/gate/) - running the command `project set --gate` records.

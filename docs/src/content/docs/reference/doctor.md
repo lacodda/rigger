@@ -30,7 +30,7 @@ With `--json`:
   "database": "C:\\Users\\you\\AppData\\Local\\lacodda\\rigger\\data\\rigger.db",
   "initialised": true,
   "schema_version": 4,
-  "counts": { "projects": 1, "versions": 0, "tasks": 0, "sessions": 0, "events": 0 },
+  "counts": { "projects": 1, "retired": 0, "versions": 0, "tasks": 0, "sessions": 0, "events": 0 },
   "backup": { "newest_at": "2026-09-15T12:02:53Z", "age_days": 0, "copies": 3, "state": "fresh" }
 }
 ```
@@ -45,7 +45,8 @@ Before `init`, only `profile`, `database` and `initialised` (false) are printed.
 | `initialised` | boolean | Whether the database exists. |
 | `schema_version` | integer | The schema version the database holds. |
 | `counts` | object | How many records of each kind the database holds. |
-| `counts.projects` | integer | Projects. |
+| `counts.projects` | integer | Projects, the retired among them. |
+| `counts.retired` | integer | Of those, how many are [retired](/rigger/reference/project/#project-retire). |
 | `counts.versions` | integer | Versions. |
 | `counts.tasks` | integer | Tasks. |
 | `counts.sessions` | integer | Sessions. |

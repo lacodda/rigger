@@ -129,6 +129,22 @@ pub struct State {
     /// states it. One line, so that a session knows what green means here
     /// without being told in a skill file.
     pub gate: Option<String>,
+    /// When the project was taken out of the work, if it was. Said at the
+    /// top: a session opened on a retired project has to learn first that
+    /// nothing it records will be taken.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired: Option<Retired>,
+}
+
+/// A project taken out of the work, as the packet names it.
+#[derive(Debug, Serialize)]
+pub struct Retired {
+    /// When it left, as recorded.
+    pub since: String,
+    /// The decision that says why, by the id `rigger event` reads.
+    pub decision: Option<i64>,
+    /// That decision's first line.
+    pub head: Option<String>,
 }
 
 /// The difference between now and where the last sitting stopped.
@@ -272,6 +288,17 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         days_since_commit: activity.as_ref().and_then(|a| a.last_commit_at.as_deref()).and_then(days_since_day),
         since_last_session: since_last_session(db, project)?,
         gate: project.gate.clone(),
+        retired: match &project.retired_at {
+            Some(since) => Some(Retired {
+                since: since.clone(),
+                decision: project.retired_by,
+                head: match project.retired_by {
+                    Some(id) => db.event_written(id)?.map(|e| headline(&e.body)),
+                    None => None,
+                },
+            }),
+            None => None,
+        },
     };
 
     let current = db.current_stage(project.id)?.map(Stage::from);
@@ -694,6 +721,17 @@ fn render_state(p: &Packet) -> String {
     if let Some(remote) = &p.state.remote {
         out.push_str(remote);
         out.push('\n');
+    }
+    if let Some(retired) = &p.state.retired {
+        let day = retired.since.split('T').next().unwrap_or(&retired.since);
+        match (retired.decision, &retired.head) {
+            (Some(id), Some(head)) => out.push_str(&format!("Retired since {day} - [{id}] {head}\n")),
+            _ => out.push_str(&format!("Retired since {day}\n")),
+        }
+        out.push_str(&format!(
+            "Its history reads; nothing new is recorded against it. `rigger project unretire {}` brings it back.\n",
+            p.project
+        ));
     }
     match (&p.state.last_shipped, &p.state.last_shipped_on) {
         (Some(v), Some(on)) => match &p.state.delivery_short {

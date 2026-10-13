@@ -150,6 +150,10 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `state.since_last_session.events` | integer | Events recorded since, not counting commits. |
 | `state.since_last_session.commits` | integer | Changes read from commit messages since. |
 | `state.gate` | string or null | The command that says the project is fit to commit. |
+| `state.retired` | object | When and why the project was [retired](/rigger/reference/project/#project-retire). Absent while it is in the work. |
+| `state.retired.since` | string | When it was retired, an RFC 3339 UTC moment. |
+| `state.retired.decision` | integer or null | The id of the decision that retired it, which `rigger event` reads. |
+| `state.retired.head` | string or null | That decision's first line. |
 | `current` | object or null | The current stage: the first planned version with open work that is not all put down; `null` when there is none. |
 | `current.version` | string | The stage's version, like `v0.3.0`. |
 | `current.title` | string | The stage's title. |

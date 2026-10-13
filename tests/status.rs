@@ -148,6 +148,9 @@ fn an_open_task_from_before_reads_as_new() {
          ALTER TABLE versions DROP COLUMN delivered_by;
          DROP TABLE task_branches; DROP TABLE task_commits;
          ALTER TABLE tasks DROP COLUMN snoozed_until;
+         DROP TRIGGER events_not_into_retired; DROP TRIGGER sessions_not_into_retired;
+         DROP TRIGGER versions_not_into_retired; DROP TRIGGER tasks_not_into_retired;
+         ALTER TABLE projects DROP COLUMN retired_by; ALTER TABLE projects DROP COLUMN retired_at;
          PRAGMA user_version = 16;",
     )
     .unwrap();
