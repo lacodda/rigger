@@ -100,7 +100,7 @@ The whole first week, command by command: [Your first week](https://lacodda.gith
 
 ## What you get
 
-- **Projects, versions, tasks, sessions.** A version is a stage that ends in a tag; a task is work inside it - or, at work, a ticket across several repositories and branches.
+- **Projects, versions, tasks, sessions.** A version is a stage that ends in a tag; a task is work inside it - or, at work, a ticket across several repositories and branches. A project taken out of the work is retired: it leaves every screen that looks ahead, and its history stays readable.
 - **Facts from git.** A tag means the version shipped, on that date; the plan cannot claim more than git confirms, and `doctor` names where they part.
 - **An MCP server as the assistant's only pen**, and a context packet held to a token budget.
 - **Your inbox, a weekly brief and a release calendar**, derived from the same record rather than kept by hand.
@@ -109,7 +109,7 @@ The whole first week, command by command: [Your first week](https://lacodda.gith
 
 ## Status
 
-In daily use across a line of nineteen products: the record, the packet held to its budget on the real record, the MCP server, facts from git, the owner's screens, task cards at work, and a JSON contract for every command ahead of 1.0. Released versions and what landed in each: [CHANGELOG](https://github.com/lacodda/rigger/blob/main/CHANGELOG.md).
+In daily use across a line of eighteen products, with one retired: the record, the packet held to its budget on the real record, the MCP server, facts from git, the owner's screens, task cards at work, and a JSON contract for every command ahead of 1.0. Released versions and what landed in each: [CHANGELOG](https://github.com/lacodda/rigger/blob/main/CHANGELOG.md).
 
 ## Install
 
