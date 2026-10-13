@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.29.0] - 2026-10-13
+
+### Documentation
+- Name retirement on the shopfront
+
+### Features
+- Retire a project and keep its history readable
+
 ## [0.28.0] - 2026-10-11
 
 ### Breaking Changes
