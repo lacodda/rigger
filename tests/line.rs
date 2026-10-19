@@ -21,6 +21,8 @@ fn rigger(data: &Path) -> Command {
 fn project(data: &Path) -> std::path::PathBuf {
     let root = data.join("sample");
     std::fs::create_dir_all(&root).unwrap();
+    // A repository by kind: a directory without `.git` is a folder of work.
+    std::fs::create_dir_all(root.join(".git")).unwrap();
     rigger(data).arg("init").assert().success();
     rigger(data).args(["project", "add"]).arg(&root).assert().success();
     let hub = data.join("hub");

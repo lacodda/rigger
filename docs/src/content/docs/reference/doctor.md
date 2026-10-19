@@ -184,7 +184,7 @@ It is the one thing "every project through rigger" has left to do, so the list s
 
 ## What it leaves out
 
-A [service project](/rigger/reference/project/) never appears among the projects waiting to be synced. There is no repository to read, so it would have sat in that list for ever being advised a command that could not help it.
+A [service project](/rigger/reference/project/) never appears among the projects waiting to be synced, and neither does a [folder](/rigger/reference/project/#project-add) of work with no repository. There is no repository to read, so either would have sat in that list for ever being advised a command that could not help it.
 
 ## Related
 

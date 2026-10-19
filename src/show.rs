@@ -24,6 +24,10 @@ pub struct Screen {
     pub name: String,
     pub about: Option<String>,
     pub path: String,
+    /// A repository, a folder with no repository, or a place the record
+    /// keeps for itself - which says whether `path` and `remote` can be
+    /// read as git's.
+    pub kind: crate::db::Kind,
     pub remote: Option<String>,
     pub tier: Option<String>,
     pub rhythm_weeks: Option<u32>,
@@ -73,6 +77,7 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         name: project.name.clone(),
         about,
         path: project.path.clone(),
+        kind: project.kind,
         remote: project.remote.clone(),
         tier: project.tier.clone(),
         rhythm_weeks: project.rhythm_weeks,
@@ -103,7 +108,17 @@ pub fn render(screen: &Screen) -> String {
     }
     out.push('\n');
 
-    let _ = writeln!(out, "{:<10} {}", "path", screen.path);
+    match screen.kind {
+        crate::db::Kind::Repo => {
+            let _ = writeln!(out, "{:<10} {}", "path", screen.path);
+        }
+        crate::db::Kind::Folder => {
+            let _ = writeln!(out, "{:<10} {} - a folder, no repository", "path", screen.path);
+        }
+        crate::db::Kind::Service => {
+            let _ = writeln!(out, "{:<10} none - a place the record keeps for itself", "path");
+        }
+    }
     if let Some(remote) = &screen.remote {
         let _ = writeln!(out, "{:<10} {remote}", "remote");
     }
@@ -296,6 +311,7 @@ mod tests {
             name: "sample".into(),
             about: Some("A sample product".into()),
             path: "C:\\dev\\sample".into(),
+            kind: crate::db::Kind::Repo,
             remote: None,
             tier: Some("C".into()),
             rhythm_weeks: Some(1),

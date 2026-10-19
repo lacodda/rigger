@@ -125,7 +125,7 @@ enum Command {
         /// Read the template from this file instead of the data directory
         #[arg(long, value_name = "FILE")]
         template: Option<PathBuf>,
-        /// Print the built-in template, to start one of your own from
+        /// Print the built-in template, to start one of your own from; for a named project, the template of its kind
         #[arg(long)]
         print_template: bool,
         /// Write one skill for the whole line instead of one per project
@@ -818,9 +818,9 @@ enum TrayCommand {
 
 #[derive(Subcommand)]
 enum ProjectCommand {
-    /// Record a repository as a project
+    /// Record a repository as a project, or a folder of work with no repository
     Add {
-        /// Path to the repository root
+        /// Path to the repository root, or to the folder the work lives in
         path: PathBuf,
         /// Project name; defaults to the name the repository declares
         #[arg(long)]
@@ -854,6 +854,12 @@ enum ProjectCommand {
         /// Forget the end-of-session command
         #[arg(long, conflicts_with = "on_session_end")]
         no_on_session_end: bool,
+        /// One line about the project, for one whose manifest says nothing
+        #[arg(long, value_name = "TEXT")]
+        about: Option<String>,
+        /// Forget the line about the project
+        #[arg(long, conflicts_with = "about")]
+        no_about: bool,
     },
     /// Record how a product looks from outside: its mark, colours, form and docs
     Mark {
@@ -1165,7 +1171,20 @@ fn run(cli: Cli) -> Result<()> {
                 no_gate,
                 on_session_end,
                 no_on_session_end,
-            } => project_set(&name, gate.as_deref(), no_gate, on_session_end.as_deref(), no_on_session_end, json),
+                about,
+                no_about,
+            } => project_set(
+                &name,
+                &Settings {
+                    gate: gate.as_deref(),
+                    no_gate,
+                    on_session_end: on_session_end.as_deref(),
+                    no_on_session_end,
+                    about: about.as_deref(),
+                    no_about,
+                },
+                json,
+            ),
             ProjectCommand::Mark {
                 name,
                 code,
@@ -1652,19 +1671,22 @@ fn write_skill(
     json: bool,
 ) -> Result<()> {
     if print_template {
+        // The template of the kind the named project is; a repository's when
+        // none is named, since that is what most of a line is.
+        let built_in = match project {
+            Some(name) => skill::built_in(open_project(&Db::open(&paths::db_path()?)?, name)?.kind)?,
+            None => skill::DEFAULT_TEMPLATE,
+        };
         if json {
-            return print_skill_json(None, "template", skill::DEFAULT_TEMPLATE);
+            return print_skill_json(None, "template", built_in);
         }
-        print!("{}", skill::DEFAULT_TEMPLATE);
+        print!("{built_in}");
         return Ok(());
     }
     let db = Db::open(&paths::db_path()?)?;
     let project = working_project(&db, project.unwrap_or_default())?;
-    let (template, source) = skill::load_template(template)?;
-    let about = match project.kind {
-        db::Kind::Repo => repo::detect_about(Path::new(&project.path)),
-        db::Kind::Service => None,
-    };
+    let (template, source) = skill::load_template(template, project.kind)?;
+    let about = repo::about(&project);
     let fields = skill::Fields {
         name: &project.name,
         path: &project.path,
@@ -1786,16 +1808,17 @@ Move what it says into the record, then run again with `--replace`.",
 
 /// Every project the line's skill lists, in the order it lists them.
 ///
-/// A place the record keeps for itself is left out: it has no repository
-/// to work in and no stage to continue, so naming it among the projects
-/// would be offering an assistant somewhere it cannot go.
+/// A place the record keeps for itself is left out: it has no directory to
+/// work in and no stage to continue, so naming it among the projects would
+/// be offering an assistant somewhere it cannot go. A folder with no
+/// repository is listed - it is worked on like any product.
 fn listed_projects(db: &Db) -> Result<Vec<skill::Listed>> {
     let mut listed: Vec<skill::Listed> = db
         .projects()?
         .into_iter()
-        .filter(|p| p.kind == db::Kind::Repo)
+        .filter(|p| p.kind.has_a_place())
         .map(|p| skill::Listed {
-            about: repo::detect_about(Path::new(&p.path)),
+            about: repo::about(&p),
             name: p.name,
             path: p.path,
         })
@@ -1858,10 +1881,7 @@ fn project_here(db: &Db, name: Option<&str>) -> Result<db::Project> {
 fn show_project(project: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
-    let about = match project.kind {
-        db::Kind::Repo => repo::detect_about(Path::new(&project.path)),
-        db::Kind::Service => None,
-    };
+    let about = repo::about(&project);
     let screen = show::build(&db, &project, about)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&screen)?);
@@ -1948,7 +1968,10 @@ fn sync_projects(project: Option<&str>, json: bool) -> Result<()> {
         // than failing at something it was never meant to do.
         if !project.kind.reads_git() {
             if projects.len() == 1 {
-                println!("{} is a place the record keeps for itself; there is no repository to read", project.name);
+                match project.kind {
+                    db::Kind::Folder => println!("{} is a folder with no repository; there is no git to read", project.name),
+                    _ => println!("{} is a place the record keeps for itself; there is no repository to read", project.name),
+                }
             }
             continue;
         }
@@ -4555,17 +4578,48 @@ fn project_add(path: PathBuf, name: Option<String>, json: bool) -> Result<()> {
         bail!("{} is not a directory", root.display());
     }
     let db = Db::open(&paths::db_path()?)?;
-    let name = name.unwrap_or_else(|| repo::detect_name(&root));
+    let kind = db::Kind::of_directory(&root);
     let remote = repo::detect_remote(&root);
-    let project = db.add_project(&name, &root.to_string_lossy(), remote.as_deref(), db::Kind::Repo)?;
+    // A folder recorded before git arrived in it. The path is the project,
+    // so adding it again is how the record learns what the disk now says -
+    // rather than a flag that could set a kind the directory does not have.
+    if let Some(existing) = db.project_by_path(&root.to_string_lossy())?
+        && existing.kind == db::Kind::Folder
+        && kind == db::Kind::Repo
+        && name.as_deref().is_none_or(|n| n == existing.name)
+    {
+        existing.ensure_working()?;
+        db.set_kind(existing.id, kind, remote.as_deref())?;
+        if json {
+            refresh_line_skill(&db, false)?;
+            return print_project_json(&db, &existing.name);
+        }
+        println!("'{}' has a repository now: recorded as one, and sync reads it from here on", existing.name);
+        if let Some(url) = &remote {
+            println!("  remote: {url}");
+        }
+        refresh_line_skill(&db, true)?;
+        return Ok(());
+    }
+    let name = name.unwrap_or_else(|| repo::detect_name(&root));
+    let project = db.add_project(&name, &root.to_string_lossy(), remote.as_deref(), kind)?;
     if json {
         refresh_line_skill(&db, false)?;
         return print_project_json(&db, &project.name);
     }
     println!("Recorded '{}' at {}", project.name, project.path);
-    match &project.remote {
-        Some(url) => println!("  remote: {url}"),
-        None => println!("  remote: none (no origin in .git/config)"),
+    match (project.kind, &project.remote) {
+        (db::Kind::Folder, _) => {
+            println!("  no repository: a folder of work, and sync will not ask git about it");
+            if repo::about(&project).is_none() {
+                println!(
+                    "  nothing says what it is; give it a line with `rigger project set {} --about \"<text>\"`",
+                    project.name
+                );
+            }
+        }
+        (_, Some(url)) => println!("  remote: {url}"),
+        (_, None) => println!("  remote: none (no origin in .git/config)"),
     }
     refresh_line_skill(&db, true)?;
     Ok(())
@@ -4658,6 +4712,7 @@ fn project_list(json: bool) -> Result<()> {
 fn where_it_lives(project: &db::Project) -> String {
     match project.kind {
         db::Kind::Repo => project.path.clone(),
+        db::Kind::Folder => format!("{} (a folder, no repository)", project.path),
         db::Kind::Service => "(no repository - a place the record keeps for itself)".to_string(),
     }
 }
@@ -4677,7 +4732,14 @@ fn project_show(name: &str, json: bool) -> Result<()> {
             println!("  path:    {}", project.path);
             println!("  remote:  {}", project.remote.as_deref().unwrap_or("none"));
         }
+        db::Kind::Folder => {
+            println!("  path:    {}", project.path);
+            println!("  kind:    a folder with no repository; git is never asked about it");
+        }
         db::Kind::Service => println!("  kind:    a place the record keeps for itself; no repository"),
+    }
+    if let Some(about) = &project.about {
+        println!("  about:   {about}");
     }
     println!("  since:   {}", project.created_at);
     if let Some(at) = &project.retired_at {
@@ -4697,17 +4759,25 @@ fn project_show(name: &str, json: bool) -> Result<()> {
 /// The gate is the first of these: the command CI runs, so that "green
 /// before a commit" has one spelling per project instead of a copy in the
 /// skill file, the README and whatever an assistant remembers.
-fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Option<&str>, no_on_session_end: bool, json: bool) -> Result<()> {
+fn project_set(name: &str, set: &Settings, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, name)?;
     if json {
         // Checked and written exactly as below, then answered as the project
         // now stands rather than line by line.
-        project_set_quietly(&db, &project, gate, no_gate, on_session_end, no_on_session_end)?;
+        project_set_quietly(&db, &project, set)?;
         return print_project_json(&db, &project.name);
     }
+    let Settings {
+        gate,
+        no_gate,
+        on_session_end,
+        no_on_session_end,
+        about,
+        no_about,
+    } = *set;
 
-    if !no_gate && gate.is_none() && !no_on_session_end && on_session_end.is_none() {
+    if !no_gate && gate.is_none() && !no_on_session_end && on_session_end.is_none() && !no_about && about.is_none() {
         // Nothing asked for is a question, not a no-op: a command that
         // silently did nothing would look like it had worked.
         match &project.gate {
@@ -4720,6 +4790,11 @@ fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Op
                 "{} runs nothing when a session closes; set it with --on-session-end \"<command>\"",
                 project.name
             ),
+        }
+        match (&project.about, repo::about(&project)) {
+            (Some(about), _) => println!("{}: the record says it is \"{about}\"", project.name),
+            (None, Some(about)) => println!("{}: its manifest says it is \"{about}\"", project.name),
+            (None, None) => println!("{} says nothing about itself; set a line with --about \"<text>\"", project.name),
         }
         return Ok(());
     }
@@ -4749,7 +4824,58 @@ fn project_set(name: &str, gate: Option<&str>, no_gate: bool, on_session_end: Op
         println!("{}: a closing session runs `{hook}`", project.name);
         println!("It runs after the sitting is written down, and its outcome is recorded.");
     }
+
+    if no_about {
+        db.set_about(project.id, None)?;
+        println!("{} has no line about it in the record now.", project.name);
+    } else if let Some(about) = about {
+        let about = checked_about(&project, about)?;
+        db.set_about(project.id, Some(&about))?;
+        println!("{}: \"{about}\"", project.name);
+        refresh_line_skill(&db, true)?;
+    }
     Ok(())
+}
+
+/// What `project set` was asked to change.
+#[derive(Clone, Copy)]
+struct Settings<'a> {
+    gate: Option<&'a str>,
+    no_gate: bool,
+    on_session_end: Option<&'a str>,
+    no_on_session_end: bool,
+    about: Option<&'a str>,
+    no_about: bool,
+}
+
+/// A line about a project, as the record may hold it.
+///
+/// Refused where the manifest already says one: the manifest is what the
+/// registry publishes, and a second line in the record would be a second
+/// truth that the first edit to either makes disagree. And refused where
+/// it would break what reads it - a skill's description is one line in a
+/// catalogue an assistant parses, and angle brackets break that catalogue
+/// for every skill around it.
+fn checked_about(project: &db::Project, about: &str) -> Result<String> {
+    let about = about.trim();
+    if about.is_empty() {
+        bail!("an empty line says nothing; use --no-about to take it off");
+    }
+    if about.contains('\n') {
+        bail!("the line about a project is one line: it is what a skill's description and the line's table say");
+    }
+    if let Some(c) = about.chars().find(|c| skill::FORBIDDEN_IN_DESCRIPTION.contains(c)) {
+        bail!("the line contains `{c}`, which breaks the catalogue of skills an assistant parses");
+    }
+    if project.kind.has_a_place()
+        && let Some(manifest) = repo::detect_about(Path::new(&project.path))
+    {
+        bail!(
+            "{} is described by its manifest: \"{manifest}\"\nChange the description there; a second line in the record would be a second truth.",
+            project.name
+        );
+    }
+    Ok(about.to_string())
 }
 
 /// Runs a project's gate and records how it went.
@@ -4908,7 +5034,7 @@ fn project_mark(name: &str, given: db::Mark, clear: bool, json: bool) -> Result<
 /// Writes the line's public registry.
 fn export_line(to: Option<&Path>, check: bool, json_out: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let registry = line::build(&db, |p| repo::detect_about(Path::new(&p.path)))?;
+    let registry = line::build(&db, repo::about)?;
     // Before the file is written, every time. The one mistake this command
     // can make is publishing something private, and that one cannot be
     // taken back.
@@ -4960,7 +5086,15 @@ fn export_line(to: Option<&Path>, check: bool, json_out: bool) -> Result<()> {
 
 /// The writes of `project set`, without a word: what `--json` runs before
 /// it prints the project.
-fn project_set_quietly(db: &Db, project: &db::Project, gate: Option<&str>, no_gate: bool, on_session_end: Option<&str>, no_on_session_end: bool) -> Result<()> {
+fn project_set_quietly(db: &Db, project: &db::Project, set: &Settings) -> Result<()> {
+    let Settings {
+        gate,
+        no_gate,
+        on_session_end,
+        no_on_session_end,
+        about,
+        no_about,
+    } = *set;
     if no_gate {
         db.set_gate(project.id, None)?;
     } else if let Some(gate) = gate {
@@ -4978,6 +5112,12 @@ fn project_set_quietly(db: &Db, project: &db::Project, gate: Option<&str>, no_ga
             bail!("an empty command is not a command; use --no-on-session-end to take it off");
         }
         db.set_on_session_end(project.id, Some(hook))?;
+    }
+    if no_about {
+        db.set_about(project.id, None)?;
+    } else if let Some(about) = about {
+        db.set_about(project.id, Some(&checked_about(project, about)?))?;
+        refresh_line_skill(db, false)?;
     }
     Ok(())
 }
@@ -6835,8 +6975,9 @@ fn generate(db: &Db, project: &db::Project, name: &str) -> Result<String> {
 fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
     let mut out = Vec::new();
     for project in db.projects()? {
-        // A place the record keeps for itself has no hub to vouch for.
-        if !project.kind.reads_git() {
+        // A place the record keeps for itself has no hub to vouch for. A
+        // folder does: it is worked on like any product.
+        if !project.kind.has_a_place() {
             continue;
         }
         // Where the record says the hub is. It used to be guessed beside

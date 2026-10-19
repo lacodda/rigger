@@ -52,8 +52,9 @@ The screen as data: the same facts, without the text form's sentences.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `name` | string | The project's name. |
-| `about` | string or null | The one-line description, read from the repository's `Cargo.toml` or `package.json`. |
+| `about` | string or null | The one-line description: the manifest's (`Cargo.toml` or `package.json`), else the line `project set --about` recorded. |
 | `path` | string | The project's directory. |
+| `kind` | string | `repo`, `folder` (a directory of work with no repository) or `service`; the text form says which beside the path. |
 | `remote` | string or null | The git remote's URL. |
 | `tier` | string or null | The project's tier letter. |
 | `rhythm_weeks` | integer or null | The tier's rhythm: how many weeks one version takes. |

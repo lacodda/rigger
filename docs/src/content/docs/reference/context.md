@@ -135,6 +135,7 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `project` | string | The project's name. |
 | `state` | object | Where the project stands. |
 | `state.path` | string | The project's directory. |
+| `state.kind` | string | `repo`, `folder` (a directory of work with no repository - git is never asked, and the text form says so under the path) or `service`. |
 | `state.remote` | string or null | The git remote's URL, when there is one. |
 | `state.last_shipped` | string or null | The newest shipped version. |
 | `state.last_shipped_on` | string or null | The day it shipped, `YYYY-MM-DD`. |

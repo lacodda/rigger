@@ -487,13 +487,15 @@ fn fill(r: &mut Record, data: &Path) {
     git(&alpha, &["update-ref", "refs/remotes/origin/feat/ACME-7311-sheet", "HEAD"]);
     commit(&beta, "a.txt", "feat: start");
     git(&beta, &["tag", "v0.1.0"]);
-    // A directory recorded before it became a repository.
+    // A repository whose git went after it was recorded: never synced, and
+    // a warning on every sync. (A directory that never had git is a folder.)
     let notes = repos.join("notes");
-    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::create_dir_all(notes.join(".git")).unwrap();
 
     r.json("project add", &["project", "add", alpha.to_str().unwrap()]);
     r.json("project add", &["project", "add", beta.to_str().unwrap()]);
     r.json("project add", &["project", "add", notes.to_str().unwrap()]);
+    std::fs::remove_dir_all(notes.join(".git")).unwrap();
     r.json("project service", &["project", "service", "line"]);
 
     let hub = data.join("hubs").join("alpha");

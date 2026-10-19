@@ -21,6 +21,8 @@ fn rigger(data: &Path) -> Command {
 fn project(data: &Path) -> std::path::PathBuf {
     let root = data.join("sample");
     std::fs::create_dir_all(&root).unwrap();
+    // A repository by kind: a directory without `.git` is a folder of work.
+    std::fs::create_dir_all(root.join(".git")).unwrap();
     std::fs::write(
         root.join("Cargo.toml"),
         "[package]\nname = \"sample-cli\"\ndescription = \"A sample product\"\n",

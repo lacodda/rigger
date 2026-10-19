@@ -197,7 +197,7 @@ Running it when nothing has changed costs a walk of recent history and prints no
 
 ## Projects with no repository
 
-A [service project](/rigger/reference/project/) - a place the record keeps for itself - has no git to read, and `sync` does not ask. Syncing everything passes over it in silence; naming it says so once rather than reporting a missing repository as a problem.
+A [service project](/rigger/reference/project/) - a place the record keeps for itself - has no git to read, and `sync` does not ask; nor does it ask about a [folder](/rigger/reference/project/#project-add), work made of files with no repository. Syncing everything passes over both in silence; naming one says so once rather than reporting a missing repository as a problem.
 
 ## Related
 

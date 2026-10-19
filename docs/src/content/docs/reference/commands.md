@@ -45,6 +45,8 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger version add`](/rigger/reference/version/#version-add) | v0.27.0 | Plan a stage and its tasks without a hub |
 | [`rigger tray`](/rigger/reference/tray/) | v0.25.0 | A card's tray: the material that arrives for a task - fetched, taken in, sorted into the card's archive |
 | [`rigger project retire`](/rigger/reference/project/#project-retire) | v0.29.0 | Take a project out of the work for good, keeping its history readable; `unretire` brings it back |
+| [`rigger project add`](/rigger/reference/project/#project-add) on a folder | v0.30.0 | Record work that lives in a folder with no repository; git is never asked, and its skill has a template of its own |
+| [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
 
 ## Common to all commands
 

@@ -13,6 +13,8 @@ fn rigger(data: &Path) -> Command {
 
 fn repo(root: &Path) {
     std::fs::create_dir_all(root).unwrap();
+    // A repository by kind: a directory without `.git` is a folder of work.
+    std::fs::create_dir_all(root.join(".git")).unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"declared-elsewhere\"\nversion = \"0.1.0\"\n").unwrap();
 }
 
@@ -92,7 +94,6 @@ fn project_add_reads_the_origin_remote() {
     let data = tempfile::tempdir().unwrap();
     let root = data.path().join("remoted");
     repo(&root);
-    std::fs::create_dir(root.join(".git")).unwrap();
     std::fs::write(
         root.join(".git").join("config"),
         "[remote \"origin\"]\n\turl = https://example.com/remoted.git\n",

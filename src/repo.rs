@@ -54,6 +54,23 @@ fn git_config(root: &Path) -> Option<String> {
     std::fs::read_to_string(git_dir.join("config")).ok()
 }
 
+/// The one line about a project that is in force: its manifest's, else the
+/// one the record holds.
+///
+/// Every screen that names what a project is reads it here - the skill, the
+/// line's skill, `show`, the registry - so that a project described in two
+/// places cannot be described two ways. The record's line is written only
+/// where the manifest is silent (`project set --about` refuses otherwise),
+/// and the manifest still wins should it gain a description later.
+pub fn about(project: &crate::db::Project) -> Option<String> {
+    let manifest = if project.kind.has_a_place() {
+        detect_about(Path::new(&project.path))
+    } else {
+        None
+    };
+    manifest.or_else(|| project.about.clone())
+}
+
 /// One line about the project, from the manifest that publishes it.
 ///
 /// The `description` of a `Cargo.toml` or a `package.json`, whichever the

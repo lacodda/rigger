@@ -103,6 +103,10 @@ pub struct Dropped {
 #[derive(Debug, Serialize)]
 pub struct State {
     pub path: String,
+    /// What kind of place the path is: a repository, a folder with no
+    /// repository, or a place the record keeps for itself. A folder is said
+    /// beside its path, so that a session does not go looking for commits.
+    pub kind: crate::db::Kind,
     pub remote: Option<String>,
     pub last_shipped: Option<String>,
     pub last_shipped_on: Option<String>,
@@ -270,9 +274,10 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         // with this line, so a marker there would be the first thing an
         // assistant read and the first thing it got wrong.
         path: match project.kind {
-            crate::db::Kind::Repo => project.path.clone(),
+            crate::db::Kind::Repo | crate::db::Kind::Folder => project.path.clone(),
             crate::db::Kind::Service => "(no repository - a place the record keeps for itself)".to_string(),
         },
+        kind: project.kind,
         remote: project.remote.clone(),
         last_shipped: db.last_shipped_version(project.id)?.map(|(name, _)| name),
         last_shipped_on: db.last_shipped_version(project.id)?.map(|(_, on)| on),
@@ -718,6 +723,9 @@ fn render_since(since: &SinceLastSession) -> String {
 
 fn render_state(p: &Packet) -> String {
     let mut out = format!("# {}\n\n{}\n", p.project, p.state.path);
+    if p.state.kind == crate::db::Kind::Folder {
+        out.push_str("A folder with no repository: the work is the files in it, and git is never asked\n");
+    }
     if let Some(remote) = &p.state.remote {
         out.push_str(remote);
         out.push('\n');

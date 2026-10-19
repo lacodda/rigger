@@ -6,7 +6,7 @@ description: Write a thin project skill from a template and the record.
 ```
 rigger skill <PROJECT> [--install] [--dir <DIR>] [--replace] [--template <FILE>]
 rigger skill --line [--install] [--dir <DIR>] [--replace] [--template <FILE>]
-rigger skill --print-template
+rigger skill --print-template [<PROJECT>]
 rigger skill --line --print-template
 ```
 
@@ -49,11 +49,29 @@ A template named `skill.md` in the data directory is used for every project from
 | Placeholder | Filled with |
 | --- | --- |
 | `{{name}}` | the project's name |
-| `{{path}}` | the checkout |
+| `{{path}}` | the checkout, or the folder the work lives in |
 | `{{remote}}` | ` - ` and the origin URL, or nothing when the repository has none |
 | `{{hub}}` | where the hub is, once one was imported or exported |
-| `{{about}}` | the `description` of the `Cargo.toml` or `package.json` at the root |
+| `{{about}}` | the line about the project: the `description` of its manifest - a `Cargo.toml`'s `[package]`, then its `[workspace.package]`, then the member that ships, else a `package.json` - or, where none says one, the line [`project set --about`](/rigger/reference/project/#--about) recorded |
 | `{{file:NAME}}` | the contents of `NAME` in the hub - for what only this project can say |
+
+Both built-in templates end their start with one more sentence: a skill called with a word after its name - `/sample release`, `/stories sync` - is being asked for the ritual of that name in [`rules`](/rigger/reference/rules/), and runs it whole. A project's own rituals live in the record, so the word is all the skill has to carry.
+
+The description is measured, as the line's is: a skill whose description is over 1024 characters, or carries `<` or `>`, is refused rather than written (see [below](#the-description-is-measured)). A line about a project is now something a person can write into the record, which is what makes the check worth having here too.
+
+### A folder with no repository
+
+A [folder](/rigger/reference/project/#project-add) - work made of files, with no repository - has a template of its own. A repository's skill speaks of code, of commits and of a gate before each one, and every one of those sentences is wrong about a folder of texts; a conditional inside one template would have been a language to learn for a single difference.
+
+```console
+$ rigger skill stories
+---
+name: stories
+description: stories - A library of short stories, one idea each. The work lives in C:\notes\stories, a folder with no repository. Triggers on "work on stories", ...
+---
+```
+
+`skill.folder.md` in the data directory replaces it, the way `skill.md` replaces the repository's. A folder never falls back to `skill.md`: a line that wrote its own template for repositories wrote about code and commits, and the built-in folder template is nearer the truth than that. `--print-template <PROJECT>` prints the built-in template of that project's kind. A place the record keeps for itself (`project service`) has nothing in it to work on, and is refused a skill.
 
 `{{file:...}}` is how a project keeps a ritual of its own - a deployment that has to happen after the tag, a week of use before a version counts as shipped - without every skill of the line carrying it. The file lives in the hub, written by hand, and the skill quotes it. A file that is not there leaves the section empty and says so on stderr; a placeholder rigger does not know is an error, because a skill with a hole in it would be read by every session before anyone noticed.
 

@@ -248,11 +248,15 @@ fn a_project_without_a_repository_is_reported_not_fatal() {
     let data = tempfile::tempdir().unwrap();
     let root = data.path().join("not-a-repo");
     std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "--quiet", "--initial-branch", "main"]);
     rigger(data.path()).arg("init").assert().success();
     rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    // Recorded as a repository, which then went away - moved, deleted, a
+    // checkout half made. One such project must not stop a sync of the
+    // whole line. (A directory that never had git is a folder, and is not
+    // asked at all.)
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
 
-    // A project can be recorded before its repository exists; one such
-    // project must not stop a sync of the whole line.
     rigger(data.path())
         .args(["sync"])
         .assert()
@@ -415,10 +419,13 @@ fn a_directory_inside_another_repository_is_not_read_as_that_repository() {
     let outer = data.path().join("outer");
     repo_with_history(&outer, &[("first", "v0.1.0")]);
     let inner = outer.join("inner");
-    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::create_dir_all(inner.join(".git")).unwrap();
 
     rigger(data.path()).arg("init").assert().success();
     rigger(data.path()).args(["project", "add"]).arg(&inner).assert().success();
+    // Recorded as a repository whose own git then went; without it, a
+    // directory is a folder and git is never asked.
+    std::fs::remove_dir_all(inner.join(".git")).unwrap();
     // git would find `outer` by walking up from `inner`; its tags are
     // somebody else's releases, and the project must not inherit them.
     rigger(data.path())

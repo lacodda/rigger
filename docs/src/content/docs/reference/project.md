@@ -3,7 +3,13 @@ title: project
 description: Add, list and show projects.
 ---
 
-A project is a repository rigger keeps a record of. This release records the repository itself; versions, tasks and events attach to it in the releases that follow.
+A project is something rigger keeps a record of: almost always a repository, sometimes a folder of work with no repository, and once in a while a place the record keeps for itself. Versions, tasks, events and documents attach to it whichever it is; what differs is whether git is asked.
+
+| Kind | What it is | git |
+| --- | --- | --- |
+| `repo` | a checkout on disk | [`sync`](/rigger/reference/sync/) reads its tags and commits |
+| `folder` | a directory of work with no repository - texts, notes, anything made of files | never asked; the line's [skill](/rigger/reference/skill/) offers it like any product |
+| `service` | a place the record keeps for itself ([`project service`](#rigger-project-service-name)) | never asked; not offered to work on |
 
 ## `project add`
 
@@ -19,7 +25,23 @@ Recorded 'sample' at C:\dev\sample
   remote: https://github.com/acme/sample.git
 ```
 
-A path recorded before, or a name already taken, is refused with the existing project named in the message.
+A directory with no `.git` is recorded as a **folder**: work made of files, with no repository. [`sync`](/rigger/reference/sync/) and [`doctor`](/rigger/reference/doctor/) do not ask git about it, and nothing nags about a sync it cannot have; the line's [skill](/rigger/reference/skill/) lists it, and its own skill is written from the [folder template](/rigger/reference/skill/#a-folder-with-no-repository). The registry [`export --line`](/rigger/reference/export/) publishes leaves it out - a folder has no public repository to point at.
+
+```console
+$ rigger project add C:\notes\stories
+Recorded 'stories' at C:\notes\stories
+  no repository: a folder of work, and sync will not ask git about it
+  nothing says what it is; give it a line with `rigger project set stories --about "<text>"`
+```
+
+The kind is read from the directory rather than asked for, so it cannot disagree with the disk when it is written. When git arrives in a folder later, record the same path again and it becomes a repository - the same project, with its history:
+
+```console
+$ rigger project add C:\notes\stories
+'stories' has a repository now: recorded as one, and sync reads it from here on
+```
+
+Otherwise a path recorded before, or a name already taken, is refused with the existing project named in the message.
 
 ## `project list`
 
@@ -40,12 +62,12 @@ A retired project is listed with the day it left: `attic  C:\dev\attic  (retired
 | `[]` | object | One project per element, shaped as in `project show`. |
 | `[].id` | integer | The project's id in the record. |
 | `[].name` | string | The name the project is called by. |
-| `[].path` | string | The repository's directory, or the name itself for a service project. |
+| `[].path` | string | The repository's or the folder's directory, or the name itself for a service project. |
 | `[].remote` | string or null | The `origin` remote from git config; null when there is none. |
 | `[].created_at` | string | When the project was recorded, in RFC 3339 UTC. |
 | `[].tier` | string or null | The release tier: `A`, `B`, `C` or `out`; null until `project tier` sets one. |
 | `[].rhythm_weeks` | integer or null | Weeks meant to go between releases; null until a tier or `--rhythm` sets it. |
-| `[].kind` | string | `repo` for a repository, `service` for a place the record keeps for itself. |
+| `[].kind` | string | `repo` for a repository, `folder` for a directory of work with no repository, `service` for a place the record keeps for itself. |
 | `[].hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
 | `[].gate` | string or null | The command that says the project is fit to commit; null when none is set. |
 | `[].mark_code` | string or null | The two-lowercase-letter code of the mark, unique across the line; null when no mark is recorded. |
@@ -56,6 +78,7 @@ A retired project is listed with the day it left: `attic  C:\dev\attic  (retired
 | `[].on_session_end` | string or null | The command run when a sitting closes; null when none is set. |
 | `[].retired_at` | string or null | When the project was retired, in RFC 3339 UTC; null while it is in the work. |
 | `[].retired_by` | integer or null | The id of the decision that retired it, which `rigger event` reads; null while it is in the work. |
+| `[].about` | string or null | The line the record holds about the project, written by `project set --about` where no manifest describes it; null otherwise. |
 
 
 ## `project show`
@@ -92,12 +115,12 @@ The commands that record or change a project - `add`, `service`, `set`, `mark`, 
 | --- | --- | --- |
 | `id` | integer | The project's id in the record. |
 | `name` | string | The name the project is called by. |
-| `path` | string | The repository's directory, or the name itself for a service project. |
+| `path` | string | The repository's or the folder's directory, or the name itself for a service project. |
 | `remote` | string or null | The `origin` remote from git config; null when there is none. |
 | `created_at` | string | When the project was recorded, in RFC 3339 UTC. |
 | `tier` | string or null | The release tier: `A`, `B`, `C` or `out`; null until `project tier` sets one. |
 | `rhythm_weeks` | integer or null | Weeks meant to go between releases; null until a tier or `--rhythm` sets it. |
-| `kind` | string | `repo` for a repository, `service` for a place the record keeps for itself. |
+| `kind` | string | `repo` for a repository, `folder` for a directory of work with no repository, `service` for a place the record keeps for itself. |
 | `hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
 | `gate` | string or null | The command that says the project is fit to commit; null when none is set. |
 | `mark_code` | string or null | The two-lowercase-letter code of the mark, unique across the line; null when no mark is recorded. |
@@ -108,6 +131,7 @@ The commands that record or change a project - `add`, `service`, `set`, `mark`, 
 | `on_session_end` | string or null | The command run when a sitting closes; null when none is set. |
 | `retired_at` | string or null | When the project was retired, in RFC 3339 UTC; null while it is in the work. |
 | `retired_by` | integer or null | The id of the decision that retired it, which `rigger event` reads; null while it is in the work. |
+| `about` | string or null | The line the record holds about the project, written by `project set --about` where no manifest describes it; null otherwise. |
 
 
 ## `project tier`
@@ -188,6 +212,7 @@ With `--suggest`, `--json` prints the window and one suggestion per project.
 ```
 rigger project set <NAME> [--gate <COMMAND>] [--no-gate]
                           [--on-session-end <COMMAND>] [--no-on-session-end]
+                          [--about <TEXT>] [--no-about]
 ```
 
 Sets what the record keeps about a project beyond what git can tell it.
@@ -240,6 +265,27 @@ before you stop:
 ```
 
 `--no-on-session-end` takes it off. It is a field of the project rather than a setting of the profile: what has to happen when a sitting on one project ends has nothing to do with the others.
+
+### `--about`
+
+One line about the project, for a project whose manifest says nothing.
+
+```console
+$ rigger project set stories --about "A library of short stories, one idea each"
+stories: "A library of short stories, one idea each"
+```
+
+What a project is has always come from the manifest that publishes it - the `description` of a `Cargo.toml` (its `[package]`, then a workspace's `[workspace.package]`, then the member that ships) or of a `package.json`. A folder of texts has no manifest, and its skill told every session it was "a project recorded in rigger". The line is what the project's [skill](/rigger/reference/skill/) says in its description, what the line's skill lists beside its name, and what [`show`](/rigger/reference/show/) prints under it.
+
+It is refused where a manifest already describes the project, and the refusal quotes it: the manifest is what the registries publish, and a second line in the record would be a second truth that the first edit to either would make disagree. Should a manifest gain a description later, the manifest's is the one in force.
+
+```console
+$ rigger project set sample --about "Something else"
+error: sample is described by its manifest: "A sample product"
+Change the description there; a second line in the record would be a second truth.
+```
+
+The line is one line, and angle brackets are refused - it goes into a skill's description, and a `<` there breaks the catalogue an assistant parses for every skill around it. With no flags, `set` says which line is in force and where it comes from. `--no-about` takes it off.
 
 ## `rigger project mark <name>`
 

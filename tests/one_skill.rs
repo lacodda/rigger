@@ -25,6 +25,8 @@ fn line(data: &Path) {
     for (name, about) in [("sample", Some("A sample product")), ("other", None)] {
         let root = data.join(name);
         std::fs::create_dir_all(&root).unwrap();
+        // A repository by kind: a directory without `.git` is a folder of work.
+        std::fs::create_dir_all(root.join(".git")).unwrap();
         if let Some(about) = about {
             std::fs::write(root.join("Cargo.toml"), format!("[package]\nname = \"{name}\"\ndescription = \"{about}\"\n")).unwrap();
         }

@@ -555,6 +555,17 @@ const MIGRATIONS: &[&str] = &[
         SELECT RAISE(ABORT, 'the project is retired: its history reads, but nothing new is recorded against it - `rigger project unretire` brings it back');
     END;
     ",
+    // v29: one line about a project, for the projects whose manifest says
+    // nothing. The description has always come from the `Cargo.toml` or
+    // `package.json` that publishes the product, and that stays the truth
+    // where there is one. A project worked on in a folder with no manifest
+    // - a library of texts, a set of notes - had no line at all, and its
+    // skill told every session it was "a project recorded in rigger".
+    //
+    // Nullable, and written only where the manifest is silent: a second
+    // copy beside the manifest's would be a second truth, and the first
+    // edit to either would make them disagree without saying so.
+    "ALTER TABLE projects ADD COLUMN about TEXT;",
 ];
 
 /// What one read of a repository added to a card.
@@ -699,6 +710,10 @@ pub struct Project {
     pub retired_at: Option<String>,
     /// The decision that retired it, which says why.
     pub retired_by: Option<i64>,
+    /// One line about it, as the record holds it - only for a project whose
+    /// manifest says nothing. What is in force, manifest or record, is read
+    /// in one place: `repo::about`.
+    pub about: Option<String>,
 }
 
 impl Project {
@@ -720,15 +735,23 @@ impl Project {
 
 /// What a project is, as far as the parts of rigger that read git care.
 ///
-/// Almost everything recorded is a repository. The exception is the line
+/// Almost everything recorded is a repository. One exception is the line
 /// itself - somewhere for a retro to leave its summary that is not one of
 /// the projects it looked at. Such a place has no repository and never
 /// will, and saying so is cheaper than every reader guessing.
+///
+/// The other is work that lives in a folder with no repository: a library
+/// of texts written in a notes vault, with a hub, decisions and sittings
+/// like any product, and nothing for git to say about it. Recorded as a
+/// repository it made `sync` warn on every run; recorded as a service it
+/// vanished from the line's skill, which is where a session looks for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     /// A checkout on disk, which `sync` reads.
     Repo,
+    /// A directory of work with no repository: worked on, never synced.
+    Folder,
     /// A place the record keeps for itself; git is never asked about it.
     Service,
 }
@@ -737,6 +760,7 @@ impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Repo => "repo",
+            Kind::Folder => "folder",
             Kind::Service => "service",
         }
     }
@@ -744,6 +768,20 @@ impl Kind {
     /// Whether `sync` and `doctor` should expect git to answer for it.
     pub fn reads_git(self) -> bool {
         self == Kind::Repo
+    }
+
+    /// Whether there is a directory to work in: a repository or a folder,
+    /// but not a place the record keeps for itself.
+    pub fn has_a_place(self) -> bool {
+        self != Kind::Service
+    }
+
+    /// The kind a directory on disk is: a repository when git is there.
+    ///
+    /// Read from the directory rather than asked for, so the kind cannot
+    /// disagree with the disk at the moment it is written.
+    pub fn of_directory(root: &std::path::Path) -> Kind {
+        if root.join(".git").exists() { Kind::Repo } else { Kind::Folder }
     }
 }
 
@@ -753,6 +791,7 @@ impl From<String> for Kind {
     /// one does not know should not make the project vanish from a list.
     fn from(text: String) -> Kind {
         match text.as_str() {
+            "folder" => Kind::Folder,
             "service" => Kind::Service,
             _ => Kind::Repo,
         }
@@ -2992,6 +3031,22 @@ impl Db {
         Ok(())
     }
 
+    /// Sets the line the record holds about a project, or clears it.
+    pub fn set_about(&self, project_id: i64, about: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE projects SET about = ?2 WHERE id = ?1", params![project_id, about])?;
+        Ok(())
+    }
+
+    /// Records what a folder became once git arrived in it, along with the
+    /// remote it now has.
+    pub fn set_kind(&self, project_id: i64, kind: Kind, remote: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE projects SET kind = ?2, remote = ?3 WHERE id = ?1",
+            params![project_id, kind.as_str(), remote],
+        )?;
+        Ok(())
+    }
+
     /// Documents matching a query, best first.
     ///
     /// The same shape as `find_events`, so that `find` can put the two
@@ -4549,7 +4604,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
 /// One constant rather than the same list spelt at each query: the column
 /// added in migration 21 had to reach four places, and a list spelt four
 /// times is a list that reaches three.
-const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end, retired_at, retired_by";
+const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end, retired_at, retired_by, about";
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -4571,6 +4626,7 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         on_session_end: row.get(15)?,
         retired_at: row.get(16)?,
         retired_by: row.get(17)?,
+        about: row.get(18)?,
     })
 }
 

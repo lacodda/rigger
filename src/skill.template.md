@@ -13,6 +13,8 @@ The record knows where this project stands and how the work is done here; the sk
 2. `rigger context {{name}}` - the packet: the current stage, what waits on the owner, the gate, recent events, the next step. Over MCP it is the `context` tool.
 3. `rigger rules {{name}}` - how the work is done: the rituals of the line, and the ones only this project states about itself.
 
+Called with a word after its name (`/{{name}} release`), the word names a ritual in `rigger rules {{name}}`: run that ritual whole.
+
 ## While working
 
 - Record as it happens, never afterwards: `record_decision`, `record_finding`, `record_pitfall`, `record_change` over MCP, or `rigger note {{name}} --kind <kind> "<text>"`.
