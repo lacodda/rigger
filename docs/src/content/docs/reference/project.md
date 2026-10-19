@@ -275,7 +275,7 @@ $ rigger project set stories --about "A library of short stories, one idea each"
 stories: "A library of short stories, one idea each"
 ```
 
-What a project is has always come from the manifest that publishes it - the `description` of a `Cargo.toml` (its `[package]`, then a workspace's `[workspace.package]`, then the member that ships) or of a `package.json`. A folder of texts has no manifest, and its skill told every session it was "a project recorded in rigger". The line is what the project's [skill](/rigger/reference/skill/) says in its description, what the line's skill lists beside its name, and what [`show`](/rigger/reference/show/) prints under it.
+What a project is has always come from the manifest that publishes it: the `description` of a manifest at the root - a `Cargo.toml`'s `[package]`, then its `[workspace.package]`, then a `package.json` - and only when the root says nothing, the workspace member that ships (the crate or package named after the project, or `<project>-cli`). A root speaks for the repository and a member for its part: read the other way round, a desktop app was described as its command-line crate. A folder of texts has no manifest, and its skill told every session it was "a project recorded in rigger". The line is what the project's [skill](/rigger/reference/skill/) says in its description, what the line's skill lists beside its name, and what [`show`](/rigger/reference/show/) prints under it.
 
 It is refused where a manifest already describes the project, and the refusal quotes it: the manifest is what the registries publish, and a second line in the record would be a second truth that the first edit to either would make disagree. Should a manifest gain a description later, the manifest's is the one in force.
 

@@ -52,7 +52,7 @@ A template named `skill.md` in the data directory is used for every project from
 | `{{path}}` | the checkout, or the folder the work lives in |
 | `{{remote}}` | ` - ` and the origin URL, or nothing when the repository has none |
 | `{{hub}}` | where the hub is, once one was imported or exported |
-| `{{about}}` | the line about the project: the `description` of its manifest - a `Cargo.toml`'s `[package]`, then its `[workspace.package]`, then the member that ships, else a `package.json` - or, where none says one, the line [`project set --about`](/rigger/reference/project/#--about) recorded |
+| `{{about}}` | the line about the project: the `description` of a manifest at the root - a `Cargo.toml`'s `[package]`, then its `[workspace.package]`, then a `package.json` - else of the workspace member that ships; where none says one, the line [`project set --about`](/rigger/reference/project/#--about) recorded |
 | `{{file:NAME}}` | the contents of `NAME` in the hub - for what only this project can say |
 
 Both built-in templates end their start with one more sentence: a skill called with a word after its name - `/sample release`, `/stories sync` - is being asked for the ritual of that name in [`rules`](/rigger/reference/rules/), and runs it whole. A project's own rituals live in the record, so the word is all the skill has to carry.

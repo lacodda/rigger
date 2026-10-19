@@ -73,42 +73,120 @@ pub fn about(project: &crate::db::Project) -> Option<String> {
 
 /// One line about the project, from the manifest that publishes it.
 ///
-/// The `description` of a `Cargo.toml` or a `package.json`, whichever the
-/// root holds - written once by the owner for the registry, and good enough
-/// for a skill's front matter to say what the name stands for. Nothing is
-/// guessed when neither says anything.
+/// The `description` of a `Cargo.toml` or a `package.json` - written once by
+/// the owner for the registry, and good enough for a skill's front matter to
+/// say what the name stands for. Nothing is guessed when none says anything.
+///
+/// Every manifest at the root is read before any member's. A root speaks
+/// for the repository; a member speaks for its crate or package, and picking
+/// one does not say "no description" - it says something confidently wrong.
+/// A desktop app built with Tauri keeps the product's line in the root
+/// `package.json` beside a Cargo workspace with none, and reading the
+/// workspace's members first named furca after its command-line crate and
+/// midda after its scanning engine.
 pub fn detect_about(root: &Path) -> Option<String> {
-    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
-        if let Some(about) = section_description(&text, "[package]") {
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).ok();
+    let npm = std::fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    if let Some(text) = &cargo {
+        if let Some(about) = section_description(text, "[package]") {
             return Some(about);
         }
         // A workspace states what its members share in `[workspace.package]`,
         // and that is where a product split into crates keeps its own line:
-        // members inherit it with `description.workspace = true`. Read after
-        // the root's own package and before any member, because a member
-        // speaks for its crate - efema came back as "The wire format of
-        // efema", true of the first member and false of the product.
-        if let Some(about) = section_description(&text, "[workspace.package]") {
-            return Some(about);
-        }
-        // A workspace root has no `[package]` of its own, and the product's
-        // description lives in one of its members. Reading only the root
-        // gave five projects of this line no description at all - in the
-        // skill an assistant reads, in the public registry, and on the
-        // project's own screen - and nothing said so, because a project
-        // genuinely without a description looks exactly the same.
-        if let Some(about) = workspace_description(root, &text) {
+        // members inherit it with `description.workspace = true`. Read before
+        // any member, because a member speaks for its crate - efema came
+        // back as "The wire format of efema", true of the first member and
+        // false of the product.
+        if let Some(about) = section_description(text, "[workspace.package]") {
             return Some(about);
         }
     }
-    if let Ok(text) = std::fs::read_to_string(root.join("package.json"))
-        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
-        && let Some(about) = json.get("description").and_then(|d| d.as_str())
-        && !about.trim().is_empty()
+    if let Some(about) = npm.as_ref().and_then(json_description) {
+        return Some(about);
+    }
+    // A workspace root has no description of its own, and the product's
+    // lives in one of its members. Reading only the root gave five projects
+    // of this line no description at all - in the skill an assistant reads,
+    // in the public registry, and on the project's own screen - and nothing
+    // said so, because a project genuinely without a description looks
+    // exactly the same.
+    if let Some(text) = &cargo
+        && let Some(about) = workspace_description(root, text)
     {
-        return Some(about.trim().to_string());
+        return Some(about);
+    }
+    npm_workspace_description(root, npm.as_ref())
+}
+
+/// The `description` of a parsed `package.json`, if it states one.
+fn json_description(json: &serde_json::Value) -> Option<String> {
+    let about = json.get("description")?.as_str()?.trim();
+    (!about.is_empty()).then(|| about.to_string())
+}
+
+/// The description of the npm package that is the product, in a workspace
+/// whose root says nothing: the member named after the project, or
+/// `<project>-cli`.
+///
+/// Only a member named so is an answer. The first member that describes
+/// itself is a guess the Cargo side makes for a workspace of one crate that
+/// speaks; a package workspace is a design system's primitives or an app's
+/// plugins, and the first of those is never the product.
+fn npm_workspace_description(root: &Path, npm: Option<&serde_json::Value>) -> Option<String> {
+    let name = root.file_name()?.to_string_lossy().to_string();
+    let mut patterns: Vec<String> = Vec::new();
+    // pnpm keeps the list in its own file; npm and yarn in `workspaces`.
+    if let Ok(text) = std::fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+        patterns.extend(pnpm_packages(&text));
+    }
+    if let Some(list) = npm.and_then(|j| j.get("workspaces")).and_then(|w| w.as_array()) {
+        patterns.extend(list.iter().filter_map(|p| p.as_str()).map(str::to_string));
+    }
+    for wanted in [name.clone(), format!("{name}-cli")] {
+        for pattern in &patterns {
+            // `packages/*` names a directory of members; anything else names
+            // one member. The member is found by its directory, as a crate is.
+            let dir = match pattern.strip_suffix("/*") {
+                Some(parent) => root.join(parent).join(&wanted),
+                None if pattern.rsplit('/').next() == Some(wanted.as_str()) => root.join(pattern),
+                None => continue,
+            };
+            let about = std::fs::read_to_string(dir.join("package.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|json| json_description(&json));
+            if about.is_some() {
+                return about;
+            }
+        }
     }
     None
+}
+
+/// The entries of the `packages:` list in a `pnpm-workspace.yaml`.
+///
+/// Read by hand, as the Cargo lists are: the list is a run of `- 'glob'`
+/// lines under one key, and a YAML parser for that would be a dependency
+/// for twenty lines.
+fn pnpm_packages(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_list = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !line.starts_with([' ', '\t', '-']) && !trimmed.is_empty() {
+            in_list = trimmed == "packages:";
+            continue;
+        }
+        if in_list && let Some(item) = trimmed.strip_prefix('-') {
+            let item = item.trim().trim_matches(['"', '\'']).trim();
+            if !item.is_empty() && !item.starts_with('!') {
+                out.push(item.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// The `description` a manifest states in one section, such as its own
@@ -361,6 +439,86 @@ mod tests {
         )
         .unwrap();
         assert_eq!(detect_about(&root).as_deref(), Some("The root"));
+    }
+
+    /// A desktop app keeps the product's line in the root `package.json`,
+    /// beside a Cargo workspace that says nothing. Its members describe
+    /// themselves - the command-line crate, the engine - and reading them
+    /// first named the product after one of its parts.
+    #[test]
+    fn a_root_package_json_speaks_before_any_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fork");
+        for member in ["fork-core", "fork-cli"] {
+            std::fs::create_dir_all(root.join("crates").join(member)).unwrap();
+        }
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/fork-core\", \"crates/fork-cli\"]\n\n[workspace.package]\nversion = \"0.5.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("fork-core").join("Cargo.toml"),
+            "[package]\nname = \"fork-core\"\ndescription = \"The engine behind fork\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("fork-cli").join("Cargo.toml"),
+            "[package]\nname = \"fork\"\ndescription = \"fork: a headless CLI\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("package.json"), "{\"name\":\"fork\",\"description\":\"A fast git client\"}").unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("A fast git client"));
+
+        // Without it, the member that ships is still the answer.
+        std::fs::remove_file(root.join("package.json")).unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("fork: a headless CLI"));
+    }
+
+    /// A package workspace is described by the member named after the
+    /// project - and by nothing else: its other members are a design
+    /// system's primitives or an app's plugins, never the product.
+    #[test]
+    fn a_package_workspace_is_described_by_the_member_named_after_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("kit");
+        for member in ["icons", "kit"] {
+            std::fs::create_dir_all(root.join("packages").join(member)).unwrap();
+        }
+        std::fs::write(root.join("package.json"), "{\"name\":\"kit-workspace\",\"private\":true}").unwrap();
+        std::fs::write(
+            root.join("pnpm-workspace.yaml"),
+            "packages:\n  - 'packages/*'\n  - '!packages/ignored'\nonlyBuiltDependencies:\n  - esbuild\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("packages").join("icons").join("package.json"),
+            "{\"name\":\"kit-icons\",\"description\":\"The icons\"}",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("packages").join("kit").join("package.json"),
+            "{\"name\":\"kit-ui\",\"description\":\"A design system\"}",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("A design system"));
+
+        // No member named so: nothing, rather than the first that speaks.
+        std::fs::remove_dir_all(root.join("packages").join("kit")).unwrap();
+        assert_eq!(detect_about(&root), None);
+
+        // npm's own list is read the same way.
+        let npm = dir.path().join("deck");
+        std::fs::create_dir_all(npm.join("apps").join("deck")).unwrap();
+        std::fs::write(npm.join("package.json"), "{\"name\":\"deck-root\",\"workspaces\":[\"apps/deck\"]}").unwrap();
+        std::fs::write(npm.join("apps").join("deck").join("package.json"), "{\"description\":\"Slides\"}").unwrap();
+        assert_eq!(detect_about(&npm).as_deref(), Some("Slides"));
+    }
+
+    #[test]
+    fn the_packages_of_a_pnpm_workspace_are_its_list_and_no_other() {
+        let text = "packages:\n  - packages/*\n  - \"apps/web\"\n  - '!**/test/**'\ncatalog:\n  react: ^19\n";
+        assert_eq!(pnpm_packages(text), ["packages/*", "apps/web"]);
     }
 
     /// An inherited description, in either spelling, is not a description:
