@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.30.0] - 2026-10-18
+
+### Breaking Changes
+
+- **Record a folder of work with no repository**
+`project add` on a directory without `.git` records
+a folder instead of a repo that `sync` warns about; project
+JSON gains `about`, and its `kind` may be `folder`.
+
+### Bug Fixes
+- Read a workspace's own description before any member
+
+### Documentation
+- Name folders of work on the shopfront
+
+### Features
+- Record a folder of work with no repository
+
 ## [0.29.0] - 2026-10-13
 
 ### Documentation
