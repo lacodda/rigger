@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.30.1] - 2026-10-18
+
+### Bug Fixes
+- Describe a project by its root manifests before a member
+
 ## [0.30.0] - 2026-10-18
 
 ### Breaking Changes
