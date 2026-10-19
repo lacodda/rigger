@@ -62,7 +62,16 @@ fn git_config(root: &Path) -> Option<String> {
 /// guessed when neither says anything.
 pub fn detect_about(root: &Path) -> Option<String> {
     if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
-        if let Some(about) = package_description(&text) {
+        if let Some(about) = section_description(&text, "[package]") {
+            return Some(about);
+        }
+        // A workspace states what its members share in `[workspace.package]`,
+        // and that is where a product split into crates keeps its own line:
+        // members inherit it with `description.workspace = true`. Read after
+        // the root's own package and before any member, because a member
+        // speaks for its crate - efema came back as "The wire format of
+        // efema", true of the first member and false of the product.
+        if let Some(about) = section_description(&text, "[workspace.package]") {
             return Some(about);
         }
         // A workspace root has no `[package]` of its own, and the product's
@@ -85,20 +94,31 @@ pub fn detect_about(root: &Path) -> Option<String> {
     None
 }
 
-/// The `description` of a manifest's own `[package]`, if it states one.
-fn package_description(text: &str) -> Option<String> {
-    let mut in_package = false;
+/// The `description` a manifest states in one section, such as its own
+/// `[package]` or the `[workspace.package]` its members share.
+///
+/// Only a written string counts. A member that inherits - spelt
+/// `description.workspace = true` or `description = { workspace = true }` -
+/// says nothing of its own rather than something wrong; the second form
+/// came back as the text `{ workspace = true }` before strings were asked
+/// for.
+fn section_description(text: &str, section: &str) -> Option<String> {
+    let mut in_section = false;
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            in_package = line == "[package]";
+            in_section = line == section;
             continue;
         }
-        if in_package
+        if in_section
             && let Some((key, value)) = line.split_once('=')
             && key.trim() == "description"
         {
-            let value = value.trim().trim_matches('"').trim();
+            let value = value.trim();
+            let Some(quote) = value.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                continue;
+            };
+            let value = value.trim_matches(quote).trim();
             if !value.is_empty() {
                 return Some(value.to_string());
             }
@@ -129,7 +149,7 @@ fn workspace_description(root: &Path, text: &str) -> Option<String> {
     let name = root.file_name()?.to_string_lossy().to_string();
     let described = |member: &String| -> Option<String> {
         let text = std::fs::read_to_string(root.join(member).join("Cargo.toml")).ok()?;
-        package_description(&text)
+        section_description(&text, "[package]")
     };
     let basename = |member: &String| member.rsplit(['/', '\\']).next().unwrap_or(member).to_string();
     for wanted in [name.clone(), format!("{name}-cli")] {
@@ -285,6 +305,67 @@ mod tests {
         std::fs::write(bare.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/x\"]\n").unwrap();
         std::fs::write(bare.join("crates").join("x").join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
         assert_eq!(detect_about(&bare), None);
+    }
+
+    /// A workspace that keeps the product's line in `[workspace.package]`
+    /// is described by it, ahead of any member: the first member speaks for
+    /// its own crate. Before, the members were read and the first one that
+    /// described itself won - "the wire format", true of a crate and false
+    /// of the product - while the member that inherits the workspace's line
+    /// was passed over as silent.
+    #[test]
+    fn the_workspace_package_speaks_for_the_product_before_any_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("relay");
+        for member in ["relay-proto", "relay-server"] {
+            std::fs::create_dir_all(root.join("crates").join(member)).unwrap();
+        }
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/relay-proto\", \"crates/relay-server\"]\n\n[workspace.package]\nversion = \"0.5.0\"\ndescription = \"A sync relay\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("relay-proto").join("Cargo.toml"),
+            "[package]\nname = \"relay-proto\"\ndescription = \"The wire format of relay\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("relay-server").join("Cargo.toml"),
+            "[package]\nname = \"relay-server\"\ndescription.workspace = true\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("A sync relay"));
+
+        // The root's own package still comes first.
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"relay\"\ndescription = \"The root\"\n\n[workspace]\nmembers = [\"crates/relay-proto\"]\n\n[workspace.package]\ndescription = \"A sync relay\"\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("The root"));
+    }
+
+    /// An inherited description, in either spelling, is not a description:
+    /// the inline-table form used to come back as its own text.
+    #[test]
+    fn an_inherited_description_says_nothing_rather_than_its_own_syntax() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("relay");
+        std::fs::create_dir_all(root.join("crates").join("relay")).unwrap();
+        std::fs::create_dir_all(root.join("crates").join("relay-core")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/relay\", \"crates/relay-core\"]\n").unwrap();
+        std::fs::write(
+            root.join("crates").join("relay").join("Cargo.toml"),
+            "[package]\nname = \"relay\"\ndescription = { workspace = true }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates").join("relay-core").join("Cargo.toml"),
+            "[package]\nname = \"relay-core\"\ndescription = 'Core of relay'\n",
+        )
+        .unwrap();
+        assert_eq!(detect_about(&root).as_deref(), Some("Core of relay"));
     }
 
     #[test]
