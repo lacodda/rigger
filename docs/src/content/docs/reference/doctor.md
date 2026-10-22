@@ -65,7 +65,12 @@ Before `init`, only `profile`, `database` and `initialised` (false) are printed.
 | `hubs[]` | object | One such hub file. |
 | `hubs[].project` | string | The project's name. |
 | `hubs[].file` | string | The file, several joined by `, ` when kept by hand, or `-` when no hub is known. |
-| `hubs[].why` | string | The reason the file cannot be vouched for. |
+| `hubs[].state` | string | `edited` (written in since the record wrote it), `unaccounted` (differs, and the record has no note of writing it), `by-hand` (never handed over), `no-hub` or `hub-missing`. |
+| `hubs[].why` | string | The reason the file cannot be vouched for, and what to do about it. |
+| `hubs_behind` | array or null | Hub files the record wrote and has moved on from since - nothing in them is lost; null unless `--hubs` is given. |
+| `hubs_behind[]` | object | One such file. |
+| `hubs_behind[].project` | string | The project's name. |
+| `hubs_behind[].file` | string | The file, relative to the hub. |
 | `closed_without_a_tag` | array | Versions the plan closed that no tag confirms. |
 | `closed_without_a_tag[]` | object | One such version. |
 | `closed_without_a_tag[].project` | string | The project's name. |
@@ -154,17 +159,31 @@ Checked without being asked: it is one small file per project that has a hub. Th
 
 ## Hubs (`--hubs`)
 
-A generated file that somebody has edited has stopped being a view of the record, and the next [`export`](/rigger/reference/export/) would overwrite the edit without saying so. `--hubs` names those files. It is off by default because it reads every hub from disk.
+A file of a hub that somebody has written in has stopped being a view of the record, and the next [`export`](/rigger/reference/export/) would overwrite the edit without saying so. `--hubs` names those files. It is off by default because it reads every hub from disk.
 
 ```console
 $ rigger doctor --hubs
 
 hubs the record cannot vouch for (1):
-  sample       План.md        edited since it was generated
+  sample       План.md        edited since the record wrote it; `rigger import` takes the edit in
   edited: `rigger import` takes the edit into the record; `rigger export` discards it
 ```
 
 Both ways out are named, because either can be the right one: the edit was worth making, or it was not.
+
+### Behind is not edited
+
+A file can differ from the record for two opposite reasons: somebody wrote in it, or the record moved on since it wrote the file - a question asked, a box ticked, a sitting ended. The first is a decision to make; the second loses nothing, and writing the file again is all it needs. Since v0.31.0 the record notes what it last wrote into each file (or read in from it), so the two are told apart:
+
+```console
+$ rigger doctor --hubs
+
+hubs: nothing written in by hand
+behind the record (3 files in 2 hubs): alpha, beta
+  nothing in them is lost: the next session end, or `rigger export`, writes them again
+```
+
+Reported in one list, the second kind buried the first: of the 66 files an earlier `doctor` named across one line's hubs, 64 were only behind, and the two that held an edit were lost among them. A file the record has no note of - written before it kept them - is named apart, as `unaccounted`, with `export --check` to see how it differs; after the next export it has one.
 
 A project whose hub the record has never seen is named too, rather than passed over:
 

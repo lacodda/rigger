@@ -152,6 +152,7 @@ fn an_open_task_from_before_reads_as_new() {
          DROP TRIGGER versions_not_into_retired; DROP TRIGGER tasks_not_into_retired;
          ALTER TABLE projects DROP COLUMN retired_by; ALTER TABLE projects DROP COLUMN retired_at;
          ALTER TABLE projects DROP COLUMN about;
+         DROP TABLE hub_files;
          PRAGMA user_version = 16;",
     )
     .unwrap();

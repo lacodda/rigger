@@ -30,9 +30,14 @@ pub struct Report {
     pub diary_updated: u32,
     /// Files whose between-stage prose the record took in.
     pub prose_files: u32,
-    /// Handwritten texts taken into the record: vision, rituals, research.
+    /// Handwritten texts taken into the record: vision, rituals, research,
+    /// and every other `.md` of the hub.
     pub documents_added: u32,
     pub documents_updated: u32,
+    /// Generated files that were not read back, because they are still
+    /// exactly what the record last wrote: reading them could only take the
+    /// record back to how it stood at that export.
+    pub untouched: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -57,6 +62,20 @@ impl Report {
     }
 }
 
+/// A slug no document of the project holds yet: the one asked for, or the
+/// first free number after it. The hub keeps its own texts apart; this
+/// keeps them apart from texts the record has from anywhere else.
+fn free_slug(db: &Db, project_id: i64, wanted: &str) -> Result<String> {
+    let mut slug = wanted.to_string();
+    for n in 2.. {
+        if db.document(project_id, &slug)?.is_none() {
+            break;
+        }
+        slug = format!("{wanted}-{n}");
+    }
+    Ok(slug)
+}
+
 fn tally(change: Change, added: &mut u32, updated: &mut u32) {
     match change {
         Change::Added => *added += 1,
@@ -70,6 +89,24 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         warnings: hub.warnings.clone(),
         ..Report::default()
     };
+
+    // Which of the hub's files speak in this import. One that was not there
+    // says nothing - a missing plan is not a plan with no stages, and a
+    // missing README is not one with no state lines. One the record wrote
+    // and nobody has touched since says nothing either: it is the record as
+    // it stood at that export, and reading it back would undo whatever the
+    // record has learnt after - a ticked box, a state line, a sitting.
+    let mut speaking: Vec<&str> = Vec::new();
+    for file in crate::hub::FILES {
+        let Some(digest) = hub.digest_of(file) else { continue };
+        let generated = crate::export::GENERATED.contains(&file);
+        if generated && db.hub_file_digest(project_id, file)?.as_deref() == Some(digest) {
+            report.untouched.push(file.to_string());
+            continue;
+        }
+        speaking.push(file);
+    }
+    let speaks = |file: &str| speaking.contains(&file);
 
     // Closed stages first: when a version appears in both files, the changelog
     // is the one that knows it shipped, and the plan must not undo that.
@@ -90,9 +127,14 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     let open = hub.open_stages.iter().map(|stage| (stage, false));
     let mut named = Vec::new();
     for (stage, from_changelog) in closed.chain(open) {
+        // Named whether or not its file speaks: a stage the file holds is
+        // not one the hub struck, even when the file is not read back.
+        named.push(stage.version.as_str());
+        if !speaks(if from_changelog { "Изменения.md" } else { "План.md" }) {
+            continue;
+        }
         let version = db.upsert_version(project_id, stage, from_changelog)?;
         tally(version.change, &mut report.versions_added, &mut report.versions_updated);
-        named.push(stage.version.as_str());
         // A plan the record wrote cannot overrule the record. Its empty
         // boxes are a picture of how things stood at the last export, and
         // a task closed since is closed - found when importing this
@@ -123,7 +165,12 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // this reasoning. The task half of this guard was already here; the
     // version half was not, which is how a class of defect gets fixed in
     // one of the two places it lives.
-    if !hub.plan_is_generated {
+    //
+    // And only when there was a plan to read. A hub without one - a folder
+    // holding a diary and nothing else - named no stage because it had no
+    // file to name them in, and striking on that reasoning would empty the
+    // plan of every project whose hub was read in part.
+    if speaks("План.md") && !hub.plan_is_generated {
         report.versions_dropped += db.drop_versions_not_in(project_id, &named)?;
     }
 
@@ -140,16 +187,20 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         }
     }
 
-    for question in &hub.questions {
-        // A question has no date of its own; it is open now, which is what
-        // the inbox will ask for later.
-        if db.record_event(project_id, "question", question, &crate::db::now(), "owner")? == Change::Added {
-            report.questions_added += 1;
+    // The questions live in the plan, so only a plan that speaks can add
+    // one or strike one.
+    if speaks("План.md") {
+        for question in &hub.questions {
+            // A question has no date of its own; it is open now, which is
+            // what the inbox will ask for later.
+            if db.record_event(project_id, "question", question, &crate::db::now(), "owner")? == Change::Added {
+                report.questions_added += 1;
+            }
         }
+        // One the owner struck from the hub by hand is withdrawn; one an
+        // assistant asked was never in the file and stays.
+        report.questions_withdrawn += db.withdraw_questions_not_in(project_id, &hub.questions)?;
     }
-    // One the owner struck from the hub by hand is withdrawn; one an
-    // assistant asked was never in the file and stays.
-    report.questions_withdrawn += db.withdraw_questions_not_in(project_id, &hub.questions)?;
 
     // The wishes file, read into the record so that it can stop being a
     // place the record has to be told about. Not struck the way questions
@@ -168,8 +219,10 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // The diary becomes sessions that already ended: an entry is one
     // sitting, written before rigger knew what a sitting was, and it has
     // nowhere else to live that an export could read back.
-    for entry in &hub.diary {
-        tally(db.upsert_diary_entry(project_id, entry)?, &mut report.diary_added, &mut report.diary_updated);
+    if speaks("Дневник.md") {
+        let (added, updated) = db.import_diary(project_id, &hub.diary)?;
+        report.diary_added += added;
+        report.diary_updated += updated;
     }
 
     // Everything that belongs to no stage and no entry - a preamble, a map,
@@ -177,7 +230,7 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // generate a file that had lost most of what a person had written in it:
     // measured on this project's own hub, 88% of the changelog and 42% of
     // the plan is prose of this kind.
-    let mut files: Vec<&str> = hub.prose.iter().map(|p| p.file.as_str()).collect();
+    let mut files: Vec<&str> = hub.prose.iter().map(|p| p.file.as_str()).filter(|f| speaks(f)).collect();
     files.sort_unstable();
     files.dedup();
     for file in files {
@@ -188,7 +241,8 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     }
 
     // The README's state block: one dated line per thing worth telling.
-    if db.set_state_lines(project_id, &hub.state)? != Change::Unchanged {
+    // Replaced wholesale, so only by a README that was there to read.
+    if speaks("README.md") && db.set_state_lines(project_id, &hub.state)? != Change::Unchanged {
         report.prose_files += 1;
     }
 
@@ -202,29 +256,65 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     // written through `doc edit` and not yet exported is not silently
     // replaced by the older file it came from.
     for document in &hub.documents {
-        let existing = db.document(project_id, &document.slug)?;
+        // Found by the file it came from first: that is the one name a
+        // text has that cannot collide within a hub. By its slug second,
+        // for what was read before the record kept the file - and only a
+        // slug held by no other file, or the text of one file would be
+        // written over the text of another.
+        //
+        // And last by what it says: a text written through `doc add` or an
+        // assistant's tool has no file and an address of its own choosing,
+        // and the same words in the hub - put there by an export, or by hand
+        // as well - are that text, not a second one.
+        let unfiled = |held: &crate::db::Document| held.source_file.as_deref().is_none_or(str::is_empty);
+        let existing = match db.document_by_source(project_id, &document.source_file)? {
+            Some(held) => Some(held),
+            None => match db
+                .document(project_id, &document.slug)?
+                .filter(|held| unfiled(held) || held.source_file.as_deref() == Some(document.source_file.as_str()))
+            {
+                Some(held) => Some(held),
+                None => db
+                    .documents(project_id, Some(&document.kind))?
+                    .into_iter()
+                    .find(|held| unfiled(held) && crate::db::lf(&held.body).trim_end() == document.body),
+            },
+        };
         match &existing {
             // Unchanged in substance, but the record may not yet know which
             // file it came from - documents predate that column. Learning it
             // is not a change worth reporting; not learning it makes the
             // export invent a filename and write the note out twice.
-            Some(held) if held.body == document.body && held.title == document.title => {
+            //
+            // The title is not part of the substance: a text written through
+            // the tool carries a title its first heading need not repeat,
+            // and reading the file back renamed it after that heading.
+            Some(held) if crate::db::lf(&held.body).trim_end() == document.body => {
                 if held.source_file.as_deref() != Some(document.source_file.as_str()) {
                     db.set_document_source(held.id, &document.source_file)?;
                 }
-                continue;
             }
-            Some(_) => report.documents_updated += 1,
-            None => report.documents_added += 1,
+            held => {
+                let slug = match held {
+                    Some(held) => {
+                        report.documents_updated += 1;
+                        held.slug.clone()
+                    }
+                    None => {
+                        report.documents_added += 1;
+                        free_slug(db, project_id, &document.slug)?
+                    }
+                };
+                db.write_document_from(project_id, &document.kind, &slug, &document.title, &document.body, Some(&document.source_file))?;
+            }
         }
-        db.write_document_from(
-            project_id,
-            &document.kind,
-            &document.slug,
-            &document.title,
-            &document.body,
-            Some(&document.source_file),
-        )?;
+        // The record now holds what the file says, so the file is one it
+        // has accounted for, and a change after this is an edit. Not for
+        // the decisions preamble: its file is the journal, whose entries
+        // are events, and no export writes it.
+        if document.kind != "decisions" {
+            db.set_hub_file_digest(project_id, &document.source_file, &document.digest)?;
+        }
     }
 
     Ok(report)

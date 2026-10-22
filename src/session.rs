@@ -161,11 +161,7 @@ pub fn summarise(
 /// sitting closes, the assistant edits it rather than writing one from a
 /// blank page, and `session end --entry` puts the edited text in its place.
 pub fn diary_entry(summary: &Summary, day: &str, heading: Option<&str>) -> String {
-    let title = match heading {
-        Some(text) if !text.trim().is_empty() => format!("## {day} · {}", text.trim()),
-        _ => format!("## {day}"),
-    };
-    let mut out = format!("{title}\n");
+    let mut out = format!("{}\n", entry_heading(day, heading));
 
     let section = |out: &mut String, label: &str, items: &[String]| {
         if items.is_empty() {
@@ -194,9 +190,48 @@ pub fn diary_entry(summary: &Summary, day: &str, heading: Option<&str>) -> Strin
     out
 }
 
+/// The heading line a diary entry of a day opens with: the date, and the
+/// title after it when there is one.
+pub fn entry_heading(day: &str, heading: Option<&str>) -> String {
+    match heading {
+        Some(text) if !text.trim().is_empty() => format!("## {day} · {}", text.trim()),
+        _ => format!("## {day}"),
+    }
+}
+
+/// An entry split into its heading - the words after `## ` - and what was
+/// written under it.
+///
+/// The one place the heading of an entry is read from, for the record and
+/// the file alike. It used to come from two: the file got the heading the
+/// entry's text carried, the record got one composed from `--heading`, and
+/// after any sitting that gave one but not the other the hub's diary read
+/// differently from the record it was generated from.
+pub fn split_entry(text: &str) -> (String, &str) {
+    let text = text.trim_start();
+    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+    match first.trim_end().strip_prefix("## ") {
+        Some(heading) => (heading.trim().to_string(), rest.trim()),
+        None => (String::new(), text.trim()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The heading of an entry is read from its text, once, for the record
+    /// and the file alike.
+    #[test]
+    fn an_entry_splits_into_its_heading_and_its_body() {
+        let (heading, body) = split_entry("## 2026-10-20 · Title\n\nWhat happened.\n");
+        assert_eq!(heading, "2026-10-20 · Title");
+        assert_eq!(body, "What happened.");
+        let (heading, body) = split_entry("No heading at all.");
+        assert_eq!(heading, "");
+        assert_eq!(body, "No heading at all.");
+        assert_eq!(entry_heading("2026-10-20", Some(" ")), "## 2026-10-20");
+    }
 
     fn session() -> Session {
         Session {

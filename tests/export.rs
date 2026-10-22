@@ -251,7 +251,7 @@ fn doctor_says_when_it_does_not_know_where_a_hub_is() {
         said.contains("no hub recorded"),
         "a hub it has never seen is not a clean bill of health\n{said}"
     );
-    assert!(!said.contains("every generated file matches"), "{said}");
+    assert!(!said.contains("every file says what the record says"), "{said}");
 }
 
 /// A column an edited migration left out is put back on open.
@@ -407,14 +407,14 @@ fn doctor_names_a_generated_file_that_was_edited() {
         .success();
 
     let clean = output(data.path(), &["doctor", "--hubs"]);
-    assert!(clean.contains("every generated file matches"), "{clean}");
+    assert!(clean.contains("every file says what the record says"), "{clean}");
 
     let text = std::fs::read_to_string(hub.join("План.md")).unwrap();
     std::fs::write(hub.join("План.md"), format!("{text}\n\nдописано руками\n")).unwrap();
 
     let drifted = output(data.path(), &["doctor", "--hubs"]);
     assert!(drifted.contains("cannot vouch for"), "{drifted}");
-    assert!(drifted.contains("edited since it was generated"), "{drifted}");
+    assert!(drifted.contains("edited since the record wrote it"), "{drifted}");
     assert!(drifted.contains("План.md"), "{drifted}");
     // Named with what to do about it, in both directions.
     assert!(drifted.contains("rigger import"), "{drifted}");

@@ -117,6 +117,7 @@ The text is edited through a file in a directory of that rigger process's own, u
 | `[].title` | string | The title. |
 | `[].bytes` | integer | The size of the body in bytes. |
 | `[].updated_at` | string | The moment the document was last written, in RFC 3339 UTC. |
+| `[].file` | string or null | The hub file it was read from and is written back to, relative to the hub; `null` for a text that never came from a hub. |
 
 `doc show --json` prints the whole row.
 

@@ -19,6 +19,7 @@ mod gate;
 mod git;
 mod handoff;
 mod hub;
+mod hubfile;
 mod ics;
 mod import;
 mod kasl;
@@ -931,7 +932,7 @@ enum SessionCommand {
         /// A title for the diary entry, if one is being written
         #[arg(long, value_name = "TEXT")]
         heading: Option<String>,
-        /// Append the entry to this diary file
+        /// Put the entry into this diary file: one kept by hand gets it at the top, a generated one is written from the record
         #[arg(long, value_name = "FILE")]
         diary: Option<PathBuf>,
         /// Use this entry instead of the composed one - an edited `session draft`; `-` reads standard input
@@ -1502,7 +1503,14 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
     // the way the platform spells it, not the way the shell happened to.
     let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
     let run = |db: &Db| {
-        db.set_hub_path(project.id, hub_dir)?;
+        // Only when the record knows no hub yet. Reading a directory is not
+        // moving the hub there: an import from a scratch copy, or from a
+        // folder holding one file to take in, made that folder the
+        // project's hub until the next export, and every later check read
+        // the wrong place.
+        if project.hub_path.is_none() {
+            db.set_hub_path(project.id, hub_dir)?;
+        }
         import::import(db, project.id, &hub)
     };
     let report = match check {
@@ -1516,6 +1524,9 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
     }
     for warning in &report.warnings {
         println!("note: {warning}");
+    }
+    if !report.untouched.is_empty() {
+        println!("note: not read back, still what the record wrote: {}", report.untouched.join(", "));
     }
     if !report.changed() {
         println!("{}: nothing changed", project.name);
@@ -1556,6 +1567,7 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
     if report.wishes_added > 0 {
         println!("  {:<10} {} taken out of {}", "wishes", report.wishes_added, hub::WISHES_FILE);
     }
+    line("diary", report.diary_added, report.diary_updated);
     line("documents", report.documents_added, report.documents_updated);
     Ok(())
 }
@@ -2923,6 +2935,7 @@ fn doc_list(project: &str, kind: Option<&str>, json: bool) -> Result<()> {
                         "title": d.title,
                         "updated_at": d.updated_at,
                         "bytes": d.body.len(),
+                        "file": d.source_file,
                     }))
                     .collect::<Vec<_>>()
             )?
@@ -6555,15 +6568,44 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     // `--diary` still appends it to a file, for a hub kept by hand.
     let day = at.split('T').next().unwrap_or_default().to_string();
     let edited = entry.is_some();
-    let text = entry.unwrap_or_else(|| session::diary_entry(&summary, &day, heading));
+    let text = match entry {
+        // The owner's words keep their own heading; words without one get
+        // the heading a composed entry would have had.
+        Some(text) if text.starts_with("## ") => text,
+        Some(text) => format!("{}\n\n{text}\n", session::entry_heading(&day, heading)),
+        None => session::diary_entry(&summary, &day, heading),
+    };
+    // One heading for the record and the file: the one the entry's text
+    // carries. The record took it from `--heading` and the file from the
+    // text, so an edited entry with a title of its own lost it in the
+    // record, a `--heading` lost it in the file, and the hub's diary read
+    // differently from the record it was generated from after either.
+    let (title, body) = session::split_entry(&text);
+    let entry = hub::DiaryEntry {
+        heading: (!title.is_empty() && title != day).then_some(title),
+        date: day.clone(),
+        body: body.to_string(),
+        followed_by_rule: false,
+        gap_after: 1,
+        rank: 0,
+    };
     if !summary.empty() || edited {
-        let body = text.split_once('\n').map(|(_, rest)| rest.trim()).unwrap_or_default();
-        let title = heading.map(str::trim).filter(|h| !h.is_empty()).map(|h| format!("{day} · {h}"));
-        db.write_session_diary(open.id, project.id, &day, title.as_deref(), body)?;
+        db.write_session_diary(open.id, project.id, &day, entry.heading.as_deref(), &entry.body)?;
     }
     let written = match diary {
-        Some(path) => Some(write_diary(path, &text)?),
+        Some(path) => Some(write_diary(&db, &project, path, &entry)?),
         None => None,
+    };
+    // The hub, brought up to date wherever that loses nothing: a file the
+    // record last wrote is written again, one somebody wrote in is named.
+    // A hub that will not be written must not fail the close any more than
+    // a copy that will not be taken: the session is already ended.
+    let hub = match hubfile::refresh(&db, &project) {
+        Ok(refreshed) => refreshed,
+        Err(e) => {
+            eprintln!("The session closed, but its hub was not brought up to date: {e:#}");
+            hubfile::Refreshed::default()
+        }
     };
 
     // The project's own closing command, after the record is written and
@@ -6576,6 +6618,13 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     let mut missing = summary.missing();
     if let Some(red) = red_gate_reminder(&db, &project, open.id)? {
         missing.push(red);
+    }
+    if !hub.edited.is_empty() {
+        missing.push(format!(
+            "the hub holds edits the record has not seen ({}): `rigger import {} --hub <dir>` takes them in, `rigger export` discards them",
+            hub.edited.join(", "),
+            project.name
+        ));
     }
     if let Some(run) = &hook
         && !run.passed
@@ -6590,6 +6639,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
                 "session": summary,
                 "missing": missing,
                 "diary": written,
+                "hub": hub,
                 "backup": insured,
                 "on_session_end": hook,
                 "kasl": kasl,
@@ -6641,6 +6691,9 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     if let Some(target) = &insured {
         println!("copied the database to {}", target.display());
     }
+    if !hub.written.is_empty() {
+        println!("brought the hub up to date: {}", hub.written.join(", "));
+    }
     if let Some(run) = &hook {
         println!("{}: {}", run.command, run.verdict);
     }
@@ -6653,16 +6706,19 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
         }
     }
 
+    // The diary of a hub the record writes takes the entry from the record,
+    // so only a project with no such hub is told how to keep one by hand.
     match written {
         Some(path) => println!(
             "
-Diary entry appended to {path}"
+Diary entry written to {path}"
         ),
-        None => println!(
+        None if hubfile::dir_of(&project).is_none() => println!(
             "
 Write it into a diary with: rigger session end {} --diary <file>",
             project.name
         ),
+        None => {}
     }
     Ok(())
 }
@@ -6696,8 +6752,9 @@ fn session_summary(db: &Db, project: &db::Project, open: &db::Session, at: &str)
 /// Reads an edited diary entry from a file, or from standard input as `-`.
 ///
 /// The entry keeps the shape a composed one has: a `## ` heading line, then
-/// the body. One that arrives without a heading gets today's, so that an
-/// edit of the body alone is still an entry the hub can place.
+/// the body. One that arrives without a heading is given one by `end`,
+/// which knows the day and the `--heading`, so that an edit of the body
+/// alone is still an entry the hub can place.
 fn read_entry(path: &Path) -> Result<String> {
     let text = match path.as_os_str() == "-" {
         true => body_argument("-")?,
@@ -6707,10 +6764,7 @@ fn read_entry(path: &Path) -> Result<String> {
     if text.is_empty() {
         bail!("the entry is empty; leave --entry out to write the composed one");
     }
-    Ok(match text.starts_with("## ") {
-        true => format!("{text}\n"),
-        false => format!("## {}\n\n{text}\n", db::today()),
-    })
+    Ok(format!("{}\n", db::lf(text)))
 }
 
 /// Shows the diary entry the open session would leave, without closing it.
@@ -6739,48 +6793,64 @@ fn session_draft(project: Option<&str>, heading: Option<&str>, json: bool) -> Re
     Ok(())
 }
 
-/// Appends the entry to a diary file, newest first.
+/// Puts a sitting's entry into a diary file.
 ///
-/// Newest-first is how the hub's diary is written, so a new entry goes
-/// under the heading and above what came before rather than at the end.
-fn write_diary(path: &Path, entry: &str) -> Result<String> {
+/// A diary the record generates is written from the record, by the
+/// function the export uses: appending into it gave the file an entry the
+/// record spelt differently, and the hub's diary drifted from the record on
+/// every sitting. The hub's own diary is left to the refresh that follows,
+/// which knows whether somebody has written in it; any other generated
+/// diary says at its top that edits there are overwritten, and is
+/// rewritten. A diary kept by hand gets the entry at the top, under its
+/// preamble and above what came before - newest first, as the hubs write
+/// it - in the shape the export would give it.
+fn write_diary(db: &Db, project: &db::Project, path: &Path, entry: &hub::DiaryEntry) -> Result<String> {
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
     };
+    if export::is_generated(&existing) {
+        let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let hub_diary = hubfile::dir_of(project).map(|dir| canonical(&dir.join(export::GENERATED[2])));
+        if hub_diary.as_deref() != Some(canonical(path).as_path()) {
+            let text = hubfile::generate(db, project, export::GENERATED[2])?;
+            let text = export::with_line_ending(&text, export::line_ending(&existing));
+            std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))?;
+        }
+        return Ok(path.display().to_string());
+    }
 
     // The preamble is whatever the file says before its first entry: a
     // title, a note about the format, a rule. A new entry goes after it and
     // above the entries, because that is where the newest one belongs.
-    let (preamble, entries) = match existing.find(
-        "
-## ",
-    ) {
+    let ending = export::line_ending(&existing);
+    let existing = db::lf(&existing);
+    let (preamble, entries) = match existing.find("\n## ") {
         Some(at) => existing.split_at(at + 1),
-        None => (existing.as_str(), ""),
+        None => (existing.as_ref(), ""),
     };
     let mut out = String::new();
     if !preamble.trim().is_empty() {
         out.push_str(preamble.trim_end());
-        out.push_str(
-            "
-
-",
-        );
+        out.push_str("\n\n");
     }
-    out.push_str(entry.trim_end());
-    out.push_str(
-        "
-
-",
-    );
+    out.push_str(&export::entry_heading(entry));
+    out.push_str("\n\n");
+    if !entry.body.trim().is_empty() {
+        out.push_str(entry.body.trim());
+        out.push_str("\n\n");
+    }
     if !entries.trim().is_empty() {
         out.push_str(entries.trim_start());
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
     }
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    let out = export::with_line_ending(&out, ending);
     std::fs::write(path, out).with_context(|| format!("cannot write {}", path.display()))?;
     Ok(path.display().to_string())
 }
@@ -6793,10 +6863,8 @@ fn first_line(text: &str) -> &str {
 /// Writes a hub back out of the record.
 ///
 /// The point at which the hub stops being where work is written down and
-/// becomes a view of what was written down somewhere else. Only the three
-/// files the record can rebuild are touched: Vision, the decision log's
-/// prose and the research notes are argument rather than record, and the
-/// record has no way to hold an argument that would survive being rebuilt.
+/// becomes a view of what was written down somewhere else. The generated
+/// files are always written; the handwritten texts only with `--docs`.
 fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, docs: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
@@ -6806,68 +6874,57 @@ fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, docs: boo
     // Spelt the way the platform spells it, the way import records it.
     let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
 
-    let mut files: Vec<(String, String)> = Vec::new();
-    for name in export::GENERATED {
-        files.push((name.to_string(), generate(&db, &project, name)?));
-    }
-    // The handwritten texts, when asked for. Off by default because they
-    // are a cache and nothing reads them back: the record is where they
-    // live now, and writing them every time would put four more files in
-    // every diff of every hub for no one's benefit.
-    if docs {
-        for document in db.documents(project.id, None)? {
-            let Some(name) = hub_file_for(&document) else { continue };
-            // Without the generated mark: these are the owner's prose, and
-            // a mark saying "edits here are overwritten" would be a lie -
-            // `import` reads an edit back in.
-            files.push((name, format!("{}\n", document.body.trim_end())));
-        }
-    }
+    // The handwritten texts are planned always and written only when asked
+    // for. Off by default because they are a cache and nothing reads them
+    // back: the record is where they live now, and writing them every time
+    // would put more files in every diff of every hub for no one's benefit.
+    // Planned all the same, so that one already saying what the record says
+    // is noted as such - an edit to it later is then told apart from a file
+    // of unknown history.
+    let planned = hubfile::planned(&db, &project, true, Some(hub_dir))?;
     if !check {
         db.set_hub_path(project.id, hub_dir)?;
     }
 
     let mut written = Vec::new();
     let mut diffs: Vec<(String, Vec<String>)> = Vec::new();
-    for (name, text) in &files {
-        let path = hub_dir.join(name);
-        // A document is the owner's prose written back out, not a file the
-        // record owns: it carries no mark, so the gate below would refuse
-        // it for ever.
-        let is_document = !export::GENERATED.contains(&name.as_str());
+    for file in &planned {
+        let path = hub_dir.join(&file.name);
         let before = std::fs::read_to_string(&path).unwrap_or_default();
+        if !file.generated && !docs {
+            if !check && !before.is_empty() && db::lf(&before) == file.text.as_str() {
+                hubfile::account(&db, project.id, file, &before)?;
+            }
+            continue;
+        }
         // Written in the ending the file already used. Every hub of this
         // line is CRLF, and a generated file in LF would differ from its
         // source on every line - which is not a diff anybody reads.
-        let text = &export::with_line_ending(text, export::line_ending(&before));
-        let unchanged = before == *text;
+        let text = export::with_line_ending(&file.text, export::line_ending(&before));
+        let unchanged = before == text;
 
         // A file a person has been writing in is not overwritten without
-        // being asked. The mark is what says the record owns it, and it is
-        // put there by an export - so the first one has to be deliberate.
-        // A file a person has been writing in is not overwritten without
         // being asked. The mark is what says the record owns it, and only
-        // an explicit `--adopt` puts the mark there the first time.
-        if !unchanged && !is_document && !before.is_empty() && !export::is_generated(&before) && !adopt && !check {
+        // an explicit `--adopt` puts the mark there the first time. A
+        // document carries no mark - it is the owner's prose written back
+        // out - so this would refuse it for ever.
+        if !unchanged && file.generated && !before.is_empty() && !export::is_generated(&before) && !adopt && !check {
             bail!(
                 "{} was written by hand and the record does not own it yet.
 Check what would change with `--check`, then hand it over with `--adopt`.",
                 path.display()
             );
         }
-        if !check && !unchanged {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
-            }
-            std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+        if !check {
+            hubfile::write(&db, project.id, hub_dir, file)?;
         }
         // What would change, not just which file: the question `--check`
         // answers is whether a hand-written line is about to be lost.
         if check && !unchanged {
-            diffs.push((name.clone(), export::diff(&before, text, 2)));
+            diffs.push((file.name.clone(), export::diff(&before, &text, 2)));
         }
         written.push(export::Written {
-            file: name.to_string(),
+            file: file.name.clone(),
             bytes: text.len(),
             unchanged,
         });
@@ -6907,103 +6964,74 @@ Check what would change with `--check`, then hand it over with `--adopt`.",
     Ok(())
 }
 
-/// The file a document is written back out to, mirroring what `import`
-/// reads. A kind with no place in a hub is not exported.
-fn hub_file_for(document: &db::Document) -> Option<String> {
-    // The file it was read from, when the record knows it. Composing a name
-    // from the title instead wrote a research note out beside the one it
-    // came from, under a second name, and one note became two.
-    if let Some(file) = document.source_file.as_deref()
-        && !file.is_empty()
-        && document.kind != "decisions"
-    {
-        return Some(file.to_string());
-    }
-    match document.kind.as_str() {
-        "vision" => Some("Видение.md".to_string()),
-        "rituals" => Some("Ритуалы.md".to_string()),
-        // The decisions preamble is the head of a file the record also
-        // writes the entries of, so it is not a file of its own.
-        "decisions" | "other" => None,
-        // The date the slug opens with is put back in front of the title,
-        // because that is what the filename is sorted and addressed by:
-        // writing out `Заметка.md` where `2026-09-04 — Заметка.md` came in
-        // would give the note a different address on the next import.
-        "research" => {
-            let title = sanitise(&document.title);
-            let date = document.slug.split('-').take(3).collect::<Vec<_>>().join("-");
-            let named = match date.len() == 10 && date.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-                true if !title.starts_with(&date) => format!("{date} — {title}"),
-                _ => title,
-            };
-            Some(format!("{}/{}.md", hub::RESEARCH_DIR, named))
-        }
-        _ => None,
-    }
+/// One file of a hub that `doctor --hubs` has something to say about.
+struct Drift {
+    project: String,
+    file: String,
+    state: &'static str,
+    why: &'static str,
 }
 
-/// A title as a filename: what a filesystem refuses, turned into spaces.
-fn sanitise(title: &str) -> String {
-    let cleaned: String = title.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) { ' ' } else { c }).collect();
-    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+/// How the hubs stand against the record.
+struct HubDrift {
+    /// The files it cannot vouch for.
+    drift: Vec<Drift>,
+    /// The files that are only behind it, by project and name.
+    behind: Vec<(String, String)>,
 }
 
-/// One generated file of a hub, from the record.
+/// How the hubs stand against the record: the files it cannot vouch for,
+/// and the files that are only behind it.
 ///
-/// The single place a hub file is produced, so that `export` and
-/// `doctor --hubs` cannot disagree about what the record says a file should
-/// contain - a check that generated the file a second way would eventually
-/// pass while the export wrote something else.
-fn generate(db: &Db, project: &db::Project, name: &str) -> Result<String> {
-    let prose = db.hub_prose(project.id, name)?;
-    Ok(match name {
-        n if n == export::GENERATED[0] => {
-            let questions: Vec<String> = db.open_events(project.id, "question")?.into_iter().map(|(_, text)| text).collect();
-            export::plan(&prose, &db.stages(project.id, false)?, &questions)
-        }
-        n if n == export::GENERATED[1] => export::changes(&prose, &db.stages(project.id, true)?),
-        n if n == export::GENERATED[3] => export::readme(&prose, &db.state_lines(project.id)?),
-        _ => export::diary(&prose, &db.diary_entries(project.id)?),
-    })
-}
-
-/// Where a generated hub file no longer matches the record.
-///
-/// A file the record owns is a view of the record; edited by hand it stops
-/// being one, and the next export would overwrite the edit without saying
-/// so. This is what tells the owner before that happens.
-fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
-    let mut out = Vec::new();
+/// Two lists, because they ask opposite things of the owner. A file that
+/// holds an edit is a decision to make - take the edit in, or let the
+/// export discard it. A file the record wrote and has since moved past is
+/// no decision at all: writing it again loses nothing, and the end of the
+/// project's next session does exactly that. Reported in one list, the
+/// second kind buried the first: 64 of the 66 files `doctor` once named on
+/// the line's hubs were only behind, and the two edits were lost in them.
+fn hub_drift(db: &Db) -> Result<HubDrift> {
+    let mut drift = Vec::new();
+    let mut behind = Vec::new();
     for project in db.projects()? {
         // A place the record keeps for itself has no hub to vouch for. A
         // folder does: it is worked on like any product.
         if !project.kind.has_a_place() {
             continue;
         }
+        let mut say = |file: String, state: &'static str, why: &'static str| {
+            drift.push(Drift {
+                project: project.name.clone(),
+                file,
+                state,
+                why,
+            })
+        };
         // Where the record says the hub is. It used to be guessed beside
         // the repository, and every hub of this line lives in a notes vault
         // instead - so the check read no files at all and reported that
         // every generated file matched, on hubs it had never opened.
-        let Some(dir) = project.hub_path.as_deref().map(std::path::PathBuf::from) else {
-            out.push((project.name.clone(), String::from("-"), "no hub recorded; import or export one"));
+        let Some(dir) = project.hub_path.as_deref().map(PathBuf::from) else {
+            say("-".to_string(), "no-hub", "no hub recorded; import or export one");
             continue;
         };
         if !dir.is_dir() {
-            out.push((project.name.clone(), String::from("-"), "the hub is not where the record says"));
+            say("-".to_string(), "hub-missing", "the hub is not where the record says");
             continue;
         }
         let mut by_hand = Vec::new();
-        for name in export::GENERATED {
-            let path = dir.join(name);
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            if !export::is_generated(&text) {
-                by_hand.push(name);
-                continue;
-            }
-            let want = generate(db, &project, name)?;
-            let want = export::with_line_ending(&want, export::line_ending(&text));
-            if want != text {
-                out.push((project.name.clone(), name.to_string(), "edited since it was generated"));
+        for file in hubfile::planned(db, &project, true, Some(&dir))? {
+            let on_disk = std::fs::read_to_string(dir.join(&file.name)).ok();
+            match hubfile::state(db, project.id, &file, on_disk.as_deref())? {
+                hubfile::State::Missing | hubfile::State::Current => {}
+                hubfile::State::Behind => behind.push((project.name.clone(), file.name)),
+                hubfile::State::Edited => say(file.name, "edited", "edited since the record wrote it; `rigger import` takes the edit in"),
+                hubfile::State::Unaccounted => say(
+                    file.name,
+                    "unaccounted",
+                    "differs, and the record has no note of writing it; `rigger export --check` shows how",
+                ),
+                hubfile::State::ByHand => by_hand.push(file.name),
             }
         }
         // A hub still kept by hand is one the record cannot vouch for
@@ -7011,33 +7039,10 @@ fn hub_drift(db: &Db) -> Result<Vec<(String, String, &'static str)>> {
         // left to do. Named as such, so the list says how far along the
         // line is rather than staying silent about the files it skipped.
         if !by_hand.is_empty() {
-            out.push((project.name.clone(), by_hand.join(", "), "kept by hand; `rigger export --adopt` hands it over"));
-        }
-
-        // The documents a hub also holds. These carry no generated mark -
-        // they are the owner's prose - so the question is not "was this
-        // edited" but "has the file drifted from what the record holds".
-        // An edit here is not a mistake to undo; it is something `import`
-        // should be told about before the next `export --docs` writes over
-        // it.
-        for document in db.documents(project.id, None)? {
-            let Some(name) = hub_file_for(&document) else { continue };
-            let path = dir.join(&name);
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let want = export::with_line_ending(
-                &format!(
-                    "{}
-",
-                    document.body.trim_end()
-                ),
-                export::line_ending(&text),
-            );
-            if want != text {
-                out.push((project.name.clone(), name, "the file differs; `rigger import` takes the edit in"));
-            }
+            say(by_hand.join(", "), "by-hand", "kept by hand; `rigger export --adopt` hands it over");
         }
     }
-    Ok(out)
+    Ok(HubDrift { drift, behind })
 }
 
 /// Hubs whose wishes file still holds something.
@@ -7127,6 +7132,13 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
         }
     }
 
+    // Read once, for whichever of the two shapes is printed. Off by
+    // default because it reads every hub from disk.
+    let drift = match hubs {
+        true => Some(hub_drift(&db)?),
+        false => None,
+    };
+
     if json {
         println!(
             "{}",
@@ -7146,15 +7158,23 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                     "copies": db.backups()?.len(),
                     "state": backup_state(backup_age),
                 },
-                "hubs": if hubs {
-                    serde_json::to_value(
-                        hub_drift(&db)?
+                "hubs": match &drift {
+                    Some(HubDrift { drift, .. }) => serde_json::to_value(
+                        drift
                             .iter()
-                            .map(|(project, file, why)| serde_json::json!({ "project": project, "file": file, "why": why }))
+                            .map(|d| serde_json::json!({ "project": d.project, "file": d.file, "state": d.state, "why": d.why }))
                             .collect::<Vec<_>>(),
-                    )?
-                } else {
-                    serde_json::Value::Null
+                    )?,
+                    None => serde_json::Value::Null,
+                },
+                "hubs_behind": match &drift {
+                    Some(HubDrift { behind, .. }) => serde_json::to_value(
+                        behind
+                            .iter()
+                            .map(|(project, file)| serde_json::json!({ "project": project, "file": file }))
+                            .collect::<Vec<_>>(),
+                    )?,
+                    None => serde_json::Value::Null,
                 },
                 "closed_without_a_tag": mismatches
                     .iter()
@@ -7252,24 +7272,38 @@ the plan and the tags look one step apart ({}):",
         println!("  the file is no longer read at every session: `rigger import <project> --hub <dir>` takes them in");
     }
 
-    // A generated file edited by hand has stopped being a view of the
-    // record, and the next export would overwrite the edit without saying
-    // so. Off by default because it reads every hub from disk.
-    if hubs {
-        let drift = hub_drift(&db)?;
+    // A file somebody wrote in has stopped being a view of the record, and
+    // the next export would overwrite the edit without saying so.
+    if let Some(HubDrift { drift, behind }) = &drift {
         println!();
-        if drift.is_empty() {
-            println!("hubs: every generated file matches the record");
-        } else {
-            println!("hubs the record cannot vouch for ({}):", drift.len());
-            for (project, file, why) in &drift {
-                println!("  {project:<12} {file:<14} {why}");
+        match (drift.is_empty(), behind.is_empty()) {
+            (true, true) => println!("hubs: every file says what the record says"),
+            (true, false) => println!("hubs: nothing written in by hand"),
+            _ => {
+                println!("hubs the record cannot vouch for ({}):", drift.len());
+                for d in drift {
+                    println!("  {:<12} {:<14} {}", d.project, d.file, d.why);
+                }
+                // The advice only fits an edit; a hub the record has never
+                // seen needs the other sentence.
+                if drift.iter().any(|d| d.state == "edited") {
+                    println!("  edited: `rigger import` takes the edit into the record; `rigger export` discards it");
+                }
             }
-            // The advice only fits an edit; a hub the record has never
-            // seen needs the other sentence.
-            if drift.iter().any(|(_, file, why)| file != "-" && why.starts_with("edited")) {
-                println!("  edited: `rigger import` takes the edit into the record; `rigger export` discards it");
-            }
+        }
+        // Behind is not a fault: the record wrote these and has moved on.
+        // Named by project, in one line each, because the list is long on
+        // a busy day and says the same thing about every file in it.
+        if !behind.is_empty() {
+            let mut projects: Vec<&str> = behind.iter().map(|(project, _)| project.as_str()).collect();
+            projects.dedup();
+            println!(
+                "behind the record ({} in {}): {}",
+                plural(behind.len(), "file", "files"),
+                plural(projects.len(), "hub", "hubs"),
+                projects.join(", ")
+            );
+            println!("  nothing in them is lost: the next session end, or `rigger export`, writes them again");
         }
     }
     Ok(())

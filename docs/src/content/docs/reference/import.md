@@ -24,10 +24,13 @@ sample:
 | --- | --- |
 | `План.md` | open stages and their tasks; the questions listed under "Ждёт решения владельца" |
 | `Изменения.md` | stages that shipped, with the date in their heading |
+| `README.md` | the dated lines of its "Состояние" block, and the prose around them |
+| `Дневник.md` | one sitting per entry |
 | `Решения.md` | one decision per dated heading, body and all; the prose above the first of them becomes the `decisions` [document](/rigger/reference/doc/) |
 | `Видение.md` | the `vision` document |
 | `Ритуалы.md` | the `rituals` document |
-| `Исследования/*.md` | one `research` document each |
+| `Исследования/**/*.md` | one `research` document each |
+| any other `.md`, in any folder | one `other` document each, at the path it was read from |
 
 A stage is any heading whose first word is a version - `v0.4.0` - at whatever heading level, so both `## v0.4.0 · Title` and `### v0.4.0 · Title` are found. The title is what follows the version up to the em dash; the tail after it is bookkeeping and is not part of the title. A date anywhere in that tail marks the stage as shipped, written `2026-09-03` or `03.09.2026`, after any of the words the hubs use.
 
@@ -35,7 +38,9 @@ A checkbox line under a stage is one of its tasks, until the next heading at the
 
 ### The handwritten texts
 
-The first five files are parsed into versions, tasks and events. The last four are not parsed at all: they are taken in whole, as [documents](/rigger/reference/doc/), because they are the files a hub kept that the record could not rebuild - and the reason a hub had to exist at all.
+The first files are parsed into versions, tasks, sittings and events. The rest are not parsed at all: they are taken in whole, as [documents](/rigger/reference/doc/), because they are the files a hub kept that the record could not rebuild - and the reason a hub had to exist at all.
+
+Every one of them, not only the ones with names the reader knows. Until v0.31.0 a text nobody had named a kind for - a mock-up of a screen, a list of stands, the format a story is written in - was left in the hub, and the record could not promise that deleting the hub would lose nothing. Now each is an `other` document, addressed by its path in whatever script the path is written (`Макеты/Экран.md` is `макеты-экран`), titled by its first heading or else by its filename, and found again by that path on the next import. A file that carries the generated mark is a view of the record wherever it lies, and is not taken in; nor is anything whose name starts with a dot, which is a tool's and not yours.
 
 ```console
 $ rigger import rigger --hub ~/vault/Projects/rigger
@@ -46,7 +51,9 @@ rigger:
 
 A research note is addressed by the date its filename opens with. Two notes from one day get a number after it, so neither is lost: the titles after the date are usually not typeable as an address.
 
-Re-reading an unchanged hub changes nothing, so a document edited with `doc edit` and not yet exported is not silently replaced by the older file it came from. A file that really changed is taken in and reported as updated.
+A text written through [`doc add`](/rigger/reference/doc/) or an assistant's tool has no file until an export gives it one, and the export remembers which; the same words found in the hub are that text, whether the export put them there or somebody did by hand, and not a second one. A text whose words did not change keeps the title it was given, even when its first heading says something else.
+
+Re-reading an unchanged hub changes nothing, so a document edited with `doc edit` and not yet exported is not silently replaced by the older file it came from. A file that really changed is taken in and reported as updated. Either way the record notes the file as one it has accounted for, so an edit to it afterwards is [told apart](/rigger/reference/doctor/#behind-is-not-edited) from a file nobody touched.
 
 ### The wishes file
 
@@ -110,6 +117,8 @@ Events are dated by `answered`, so the reasoning sits among the other events of 
 
 `--check` runs the whole import and takes all of it back: the same report, and nothing in the record changed - not the plan, not the events, not the hub path the project remembers.
 
+That path is recorded by an import only when the project has none yet. Reading a directory is not moving the hub there: before v0.31.0 an import from a scratch copy, or from a folder holding one file to take in, made that folder the project's hub until the next export. [`export`](/rigger/reference/export/) is what moves a hub, because it writes one.
+
 ```console
 $ rigger import sample --check --hub C:\dev\sample\hub
 sample - what an import would change; nothing was written:
@@ -149,7 +158,23 @@ A plan that has not been told a stage shipped is behind, not a decision. Its emp
 
 ## The diary
 
-`Дневник.md` is read into sittings: one entry per heading, with the heading exactly as written. An entry read once by an older reader - its date kept apart from its heading - is the same entry when read again, not a second one; the record keeps one row and the heading the hub writes now.
+`Дневник.md` is read into sittings: one entry per heading, with the heading exactly as written. Entries are matched to the sittings the record holds a day at a time, one to one, closest first: the same heading over the same text, then the same text under a heading edited in the file, then the same heading over edited text, then a heading an older reader spelt without its date. A day may hold any number of entries - two under the same heading included.
+
+Nothing an import reads deletes a sitting. Before v0.31.0 the second of two sittings headed by the same day found the first one's row, and a branch that merged "the same entry spelt twice" deleted the second: a release sitting vanished on an ordinary import. A sitting the file does not name stays, as everything else in the record does.
+
+The order of the diary and the blank lines and rules between its entries come from the file only when the file is the whole diary - when it names every sitting the record keeps an entry for. A file that names some of them speaks for what it says about those: an edited heading or body is taken in, and the rest of the diary keeps its order. Read as the whole diary, a file an older `--diary` had appended to, or a folder handed one entry to take in, moved every sitting it did not name above every one it did.
+
+## A file the record wrote
+
+A generated file still exactly what the record last wrote into it is not read back, and the import says so:
+
+```console
+$ rigger import sample --hub C:\dev\sample\hub
+note: not read back, still what the record wrote: План.md, Изменения.md, README.md
+sample: nothing changed
+```
+
+Such a file is the record as it stood at that export. Reading it back could only take the record there again - wiping a state line added since, or putting back the shape of a queue the record has answered. A file somebody has written in is read as before, and that is what an import of a generated hub is for: taking in an edit.
 
 ## When a file is missing
 
@@ -161,6 +186,8 @@ note: План.md is missing from C:\dev\sample
 note: Изменения.md is missing from C:\dev\sample
 sample: nothing changed
 ```
+
+And a missing file says nothing. A hub without its plan names no stage because it has no file to name them in, so nothing is struck and no question is withdrawn; one without its README leaves the state lines as they are. Until v0.31.0 a missing file read as an empty one, and a folder holding a diary alone, imported to take in that diary, struck every planned stage of the project.
 
 ## When the hub itself is missing
 
@@ -196,6 +223,8 @@ Reading a hub prints its report.
 | `prose_files` | integer | Files whose between-stage prose was taken in. |
 | `documents_added` | integer | Handwritten texts taken in as documents. |
 | `documents_updated` | integer | Documents replaced by a changed file. |
+| `untouched` | array | Generated files not read back, because they are still what the record last wrote. |
+| `untouched[]` | string | One file's name. |
 | `warnings` | array | Things the reading noticed and went on from. |
 | `warnings[]` | string | One warning. |
 

@@ -566,6 +566,36 @@ const MIGRATIONS: &[&str] = &[
     // copy beside the manifest's would be a second truth, and the first
     // edit to either would make them disagree without saying so.
     "ALTER TABLE projects ADD COLUMN about TEXT;",
+    // v30: what the record last accounted for in each file of a hub - the
+    // digest of the text an export wrote there, or an import took in.
+    //
+    // Without it a hub file that differed from the record could mean two
+    // opposite things, and `doctor --hubs` could not tell them apart: the
+    // record moved on since the export (nothing to lose, export again), or
+    // somebody wrote in the file (an edit the next export throws away).
+    // Measured on the line's hubs: of 66 files it named, two held an edit.
+    // A digest rather than the text: "was this file touched" needs nothing
+    // more, and a copy of every hub would double the record for a diff that
+    // `export --check` already prints.
+    //
+    // And the text the record holds, rid of carriage returns. A document
+    // read from a CRLF file kept them, and the export, converting the line
+    // endings the file used, wrote each one back as `\r\r\n`. The record
+    // keeps LF; the ending is a property of the file, applied on the way out.
+    "
+    CREATE TABLE hub_files (
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        file       TEXT NOT NULL,
+        digest     TEXT NOT NULL,
+        at         TEXT NOT NULL,
+        PRIMARY KEY (project_id, file)
+    );
+    UPDATE documents SET body = replace(body, char(13) || char(10), char(10)) WHERE instr(body, char(13)) > 0;
+    UPDATE documents SET body = rtrim(body, char(13) || char(10) || char(32) || char(9))
+        WHERE body <> rtrim(body, char(13) || char(10) || char(32) || char(9));
+    UPDATE sessions SET notes = replace(notes, char(13) || char(10), char(10)) WHERE instr(notes, char(13)) > 0;
+    UPDATE events SET body = replace(body, char(13) || char(10), char(10)) WHERE instr(body, char(13)) > 0;
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -1094,6 +1124,30 @@ struct Shape {
     rank: Option<i64>,
 }
 
+/// Text as the record keeps it: with LF line endings, whatever it came in
+/// with.
+///
+/// A file written on Windows, an editor's scratch file, a body piped in
+/// from a shell - each may carry CRLF, and the record kept it. The export
+/// then converted the endings of the file it was writing and turned every
+/// kept `\r\n` into `\r\r\n`. The ending is the file's, not the text's.
+pub fn lf(text: &str) -> std::borrow::Cow<'_, str> {
+    match text.contains('\r') {
+        true => std::borrow::Cow::Owned(text.replace("\r\n", "\n")),
+        false => std::borrow::Cow::Borrowed(text),
+    }
+}
+
+/// A diary heading as the export writes it: the date alone when the entry
+/// has none of its own.
+///
+/// So that `## 2026-10-19` read back from a file is the same heading as a
+/// sitting the record holds with no title - which is how the export came
+/// to write that line in the first place.
+pub fn written_heading<'a>(heading: Option<&'a str>, date: &'a str) -> &'a str {
+    heading.map(str::trim).filter(|h| !h.is_empty()).unwrap_or(date)
+}
+
 /// A diary heading without the date it opens with, for telling one entry
 /// from another when the same entry was read with and without its date.
 fn heading_sans_date(heading: Option<&str>) -> String {
@@ -1124,6 +1178,9 @@ type Recorded = (i64, Option<String>, String, Option<String>, Option<String>, Op
 /// came after that rule, and its rank. Named because an upsert compares
 /// all of it at once.
 type RecordedEntry = (i64, Option<String>, Option<String>, Option<bool>, Option<i64>, Option<i64>);
+
+/// One way a diary entry read from a file can be the entry a row holds.
+type Criterion<'a> = &'a dyn Fn(&RecordedEntry, &crate::hub::DiaryEntry) -> bool;
 
 impl Shape {
     fn of(stage: &crate::hub::Stage) -> Shape {
@@ -1379,6 +1436,23 @@ impl Db {
             .optional()?)
     }
 
+    /// The document read from one file of the hub, by that file's path.
+    ///
+    /// A text that has no kind of its own is addressed by the file it came
+    /// from, which is the one name it has: the slug is made from it, but a
+    /// slug can collide and a path within one hub cannot.
+    pub fn document_by_source(&self, project_id: i64, source_file: &str) -> Result<Option<Document>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, project_id, kind, slug, title, body, created_at, updated_at, source_file
+                 FROM documents WHERE project_id = ?1 AND source_file = ?2 ORDER BY id LIMIT 1",
+                params![project_id, source_file],
+                Document::from_row,
+            )
+            .optional()?)
+    }
+
     /// The one document of a kind a project has at most one of.
     ///
     /// By kind rather than by slug: the slug comes from the title, and a
@@ -1405,6 +1479,10 @@ impl Db {
         if !DOC_KINDS.contains(&kind) {
             bail!("'{kind}' is not a kind of document; rigger knows {}", DOC_KINDS.join(", "));
         }
+        // Without the blank lines a file ends with: the file is the body and
+        // one newline, and a body that kept them read back as changed.
+        let body = lf(body);
+        let body = body.trim_end();
         let at = now();
         self.conn.execute(
             "INSERT INTO documents (project_id, kind, slug, title, body, created_at, updated_at, source_file)
@@ -1544,74 +1622,133 @@ impl Db {
     /// a second table for "diary entries" beside `sessions` would leave the
     /// record with two answers to what a sitting is.
     ///
-    /// Identified by its day and heading, so importing the same hub twice is
-    /// quiet - a day may hold two entries, but not two with the same title.
-    pub fn upsert_diary_entry(&self, project_id: i64, entry: &crate::hub::DiaryEntry) -> Result<Change> {
-        let at = format!("{}T00:00:00Z", entry.date);
-        // Every entry of that day. Matched by heading exactly first, and
-        // then by the heading without its date: an earlier reader kept the
-        // date apart from the heading, so a hub read by it and read again
-        // now held every entry twice - once as `(ночь) · v0.2.1` and once
-        // as `2026-09-03 (ночь) · v0.2.1` - and the export wrote both.
-        let mut stmt = self.conn.prepare(
-            "SELECT id, heading, notes, followed_by_rule, gap_after, rank FROM sessions \
-             WHERE project_id = ?1 AND COALESCE(day, substr(started_at, 1, 10)) = ?2 AND notes IS NOT NULL ORDER BY id",
-        )?;
-        let rows: Vec<RecordedEntry> = stmt
-            .query_map(params![project_id, entry.date], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-            })?
-            .collect::<rusqlite::Result<_>>()?;
-        let wanted = heading_sans_date(entry.heading.as_deref());
-        let same = |heading: &Option<String>| heading_sans_date(heading.as_deref()) == wanted;
-        let matched = rows.iter().find(|r| r.1 == entry.heading).or_else(|| rows.iter().find(|r| same(&r.1)));
-
-        let notes = (!entry.body.trim().is_empty()).then(|| entry.body.clone());
-        let Some((id, heading, was, rule, gap, rank)) = matched else {
-            self.conn.execute(
-                "INSERT INTO sessions (project_id, started_at, ended_at, day, heading, notes, followed_by_rule, gap_after, rank) \
-                 VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    project_id,
-                    at,
-                    entry.date,
-                    entry.heading,
-                    notes,
-                    entry.followed_by_rule,
-                    entry.gap_after as i64,
-                    entry.rank as i64
-                ],
+    /// Identified within its day, one entry to one row: importing the same
+    /// hub twice is quiet, and a day may hold any number of entries - two
+    /// with the same heading included.
+    ///
+    /// Matched a day at a time rather than an entry at a time, because the
+    /// match has to be one-to-one. Entry by entry, the second of two
+    /// sittings headed `2026-09-24` found the first one's row, and a branch
+    /// that merged "the same entry under another spelling" then deleted the
+    /// row of the second: the release sitting of a real project vanished on
+    /// an ordinary import. Now a row is taken once, the closest match takes
+    /// it first, and nothing an import reads can delete a sitting - a row
+    /// the file does not name stays, as everything else in the record does.
+    ///
+    /// Returns how many entries were added and how many updated.
+    pub fn import_diary(&self, project_id: i64, entries: &[crate::hub::DiaryEntry]) -> Result<(u32, u32)> {
+        let mut days: Vec<&str> = entries.iter().map(|e| e.date.as_str()).collect();
+        days.sort_unstable();
+        days.dedup();
+        // The row each entry is, by the entry's place in the file.
+        let mut found: Vec<Option<RecordedEntry>> = vec![None; entries.len()];
+        for day in days {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, heading, notes, followed_by_rule, gap_after, rank FROM sessions \
+                 WHERE project_id = ?1 AND COALESCE(day, substr(started_at, 1, 10)) = ?2 AND notes IS NOT NULL ORDER BY id",
             )?;
-            return Ok(Change::Added);
-        };
-        // The same entry under another spelling of its heading is one
-        // entry, and the record keeps one row for it.
-        let mut merged = 0;
-        for (other, ..) in rows.iter().filter(|r| r.0 != *id && same(&r.1)) {
-            merged += self.conn.execute("DELETE FROM sessions WHERE id = ?1", [other])?;
+            let rows: Vec<RecordedEntry> = stmt
+                .query_map(params![project_id, day], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            let wanted: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].date == day).collect();
+
+            // Closest first: the same heading over the same text, then the
+            // same text under a heading edited in the file, then the same
+            // heading over edited text, and last the heading an earlier
+            // reader spelt without its date.
+            let heading = |h: &Option<String>| written_heading(h.as_deref(), day).to_string();
+            let body = |b: Option<&str>| b.map(|b| lf(b).trim().to_string()).unwrap_or_default();
+            let criteria: [Criterion; 4] = [
+                &|r, e| heading(&r.1) == heading(&e.heading) && body(r.2.as_deref()) == body(Some(&e.body)),
+                &|r, e| body(r.2.as_deref()) == body(Some(&e.body)),
+                &|r, e| heading(&r.1) == heading(&e.heading),
+                &|r, e| heading_sans_date(r.1.as_deref()) == heading_sans_date(e.heading.as_deref()),
+            ];
+            let mut taken = vec![false; rows.len()];
+            for criterion in criteria {
+                for &i in &wanted {
+                    if found[i].is_some() {
+                        continue;
+                    }
+                    if let Some(j) = (0..rows.len()).find(|&j| !taken[j] && criterion(&rows[j], &entries[i])) {
+                        taken[j] = true;
+                        found[i] = Some(rows[j].clone());
+                    }
+                }
+            }
         }
-        if merged == 0
-            && *heading == entry.heading
-            && *was == notes
-            && *rule == Some(entry.followed_by_rule)
-            && *gap == Some(entry.gap_after as i64)
-            && *rank == Some(entry.rank as i64)
-        {
-            return Ok(Change::Unchanged);
+
+        // Whether the file is the whole diary: every sitting the record
+        // keeps an entry for is named in it. Only then does it speak for the
+        // diary's shape - the order of the entries and what separates them.
+        // A file that names some of them - one an older `--diary` appended
+        // to, one that was handed a single entry to take in - places each
+        // entry among the entries it holds, not among the record's, and
+        // reading its order as the diary's moved every sitting it did not
+        // name above every one it did.
+        let recorded: i64 = self
+            .conn
+            .query_row("SELECT count(*) FROM sessions WHERE project_id = ?1 AND notes IS NOT NULL", [project_id], |r| {
+                r.get(0)
+            })?;
+        let whole = found.iter().filter(|f| f.is_some()).count() as i64 == recorded;
+        let newest = self
+            .conn
+            .query_row(
+                "SELECT MIN(COALESCE(rank, 0)) FROM sessions WHERE project_id = ?1 AND notes IS NOT NULL",
+                [project_id],
+                |r| r.get::<_, Option<i64>>(0),
+            )?
+            .unwrap_or(0);
+
+        let (mut added, mut updated) = (0, 0);
+        // The rank of the entry above, in a file that is not the whole
+        // diary: an entry it brings in goes right after it.
+        let mut above: Option<i64> = None;
+        for (entry, held) in entries.iter().zip(found) {
+            let notes = (!entry.body.trim().is_empty()).then(|| lf(&entry.body).into_owned());
+            let (rule, gap) = (entry.followed_by_rule, entry.gap_after as i64);
+            let Some((id, held_heading, was, held_rule, held_gap, held_rank)) = held else {
+                let rank = match whole {
+                    true => entry.rank as i64,
+                    false => above.unwrap_or(newest - 1),
+                };
+                self.conn.execute(
+                    "INSERT INTO sessions (project_id, started_at, ended_at, day, heading, notes, followed_by_rule, gap_after, rank) \
+                     VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        project_id,
+                        format!("{}T00:00:00Z", entry.date),
+                        entry.date,
+                        entry.heading,
+                        notes,
+                        rule,
+                        gap,
+                        rank
+                    ],
+                )?;
+                above = Some(rank);
+                added += 1;
+                continue;
+            };
+            // The shape is the file's only when the file is the diary.
+            let (rule, gap, rank) = match whole {
+                true => (Some(rule), Some(gap), Some(entry.rank as i64)),
+                false => (held_rule, held_gap, held_rank),
+            };
+            above = rank.or(above);
+            if held_heading == entry.heading && was == notes && held_rule == rule && held_gap == gap && held_rank == rank {
+                continue;
+            }
+            self.conn.execute(
+                "UPDATE sessions SET day = ?2, heading = ?3, notes = ?4, followed_by_rule = ?5, gap_after = ?6, rank = ?7 WHERE id = ?1",
+                params![id, entry.date, entry.heading, notes, rule, gap, rank],
+            )?;
+            updated += 1;
         }
-        self.conn.execute(
-            "UPDATE sessions SET day = ?2, heading = ?3, notes = ?4, followed_by_rule = ?5, gap_after = ?6, rank = ?7 WHERE id = ?1",
-            params![
-                id,
-                entry.date,
-                entry.heading,
-                notes,
-                entry.followed_by_rule,
-                entry.gap_after as i64,
-                entry.rank as i64
-            ],
-        )?;
-        Ok(Change::Updated)
+        Ok((added, updated))
     }
 
     /// Leaves a session's diary entry in the record, where an export of the
@@ -1623,25 +1760,20 @@ impl Db {
     /// The entry takes the newest rank, and the rule and spacing the diary
     /// already uses between its entries.
     pub fn write_session_diary(&self, session_id: i64, project_id: i64, day: &str, heading: Option<&str>, notes: &str) -> Result<()> {
-        let (rule, gap, rank): (Option<bool>, Option<i64>, Option<i64>) = self
-            .conn
-            .query_row(
-                "SELECT followed_by_rule, gap_after, MIN(COALESCE(rank, 0)) FROM sessions WHERE project_id = ?1 AND notes IS NOT NULL",
-                [project_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .unwrap_or((None, None, None));
+        let notes = lf(notes);
+        // The separator is the one the diary writes between two entries,
+        // read off its newest entry - unless that entry is also its last,
+        // which has nothing after it: its gap is the end of the file, and
+        // copying it glued the new entry to the old one with no blank line.
+        let entries = self.diary_entries(project_id)?;
+        let (rule, gap) = match entries.as_slice() {
+            [newest, _, ..] => (newest.followed_by_rule, newest.gap_after as i64),
+            _ => (false, 1),
+        };
+        let rank = entries.iter().map(|e| e.rank as i64).min().map(|r| r - 1).unwrap_or(0);
         self.conn.execute(
             "UPDATE sessions SET day = ?2, heading = ?3, notes = ?4, followed_by_rule = ?5, gap_after = ?6, rank = ?7 WHERE id = ?1",
-            params![
-                session_id,
-                day,
-                heading,
-                notes,
-                rule.unwrap_or(false),
-                gap.unwrap_or(1),
-                rank.map(|r| r - 1).unwrap_or(0)
-            ],
+            params![session_id, day, heading, notes, rule, gap, rank],
         )?;
         Ok(())
     }
@@ -1995,6 +2127,31 @@ impl Db {
         Ok(())
     }
 
+    /// The digest of what the record last accounted for in one file of a
+    /// project's hub: the text an export wrote there, or a document an
+    /// import took in from there. `None` for a file the record has not
+    /// written or read since it began keeping these.
+    pub fn hub_file_digest(&self, project_id: i64, file: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT digest FROM hub_files WHERE project_id = ?1 AND file = ?2",
+                params![project_id, file],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Remembers that the record now accounts for a hub file as it stands.
+    pub fn set_hub_file_digest(&self, project_id: i64, file: &str, digest: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO hub_files (project_id, file, digest, at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (project_id, file) DO UPDATE SET digest = excluded.digest, at = excluded.at",
+            params![project_id, file, digest, now()],
+        )?;
+        Ok(())
+    }
+
     /// Records a stage, or updates the one already recorded under that
     /// version. Returns its id and whether anything changed - the import
     /// report counts on the difference, and a second import of an unchanged
@@ -2306,6 +2463,7 @@ impl Db {
     /// on every run - so the text alone identifies it, and re-importing a hub
     /// does not pile up copies of the same open question.
     pub fn record_event(&self, project_id: i64, kind: &str, body: &str, created_at: &str, author: &str) -> Result<Change> {
+        let body = &*lf(body);
         // A gate run is a measurement, not a statement: two runs of the
         // same command with the same result are two facts, and collapsing
         // them would lose the one that says the gate is still green today.
@@ -3741,6 +3899,7 @@ impl Db {
 
     /// Records an event against a card as well as a project.
     pub fn record_task_event(&self, project_id: i64, task_id: i64, kind: &str, body: &str, at: &str, author: &str) -> Result<Change> {
+        let body = &*lf(body);
         let seen: Option<i64> = self
             .conn
             .query_row(
@@ -4386,6 +4545,9 @@ impl Db {
     /// kind and this text: how a write finds the row it just made, or the
     /// one that already held what it was asked to write.
     pub fn event_id_by_body(&self, project_id: i64, task_id: Option<i64>, kind: &str, body: &str) -> Result<Option<i64>> {
+        // Spelt the way the write stored it, or a body that came in with
+        // CRLF would never find the row it had just made.
+        let body = &*lf(body);
         Ok(self
             .conn
             .query_row(

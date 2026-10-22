@@ -192,6 +192,23 @@ pub struct Hub {
     /// overrule the record it came from: its boxes are a picture of the
     /// record as it stood at the last export, not a decision about it.
     pub plan_is_generated: bool,
+    /// The files of `FILES` that were there to read, each with the digest
+    /// of the text it held.
+    ///
+    /// A file that is missing is not a file that is empty. Read as one, a
+    /// hub without its plan said "no stage is planned" and the import
+    /// struck every planned stage; one without its README said "no state
+    /// lines" and the import wiped them. What a file can strike or replace
+    /// it does only when it was read - and the digest lets the import skip
+    /// a generated file the record wrote and nobody has touched since.
+    pub read: Vec<(String, String)>,
+}
+
+impl Hub {
+    /// The digest of the text a file held when it was read.
+    pub fn digest_of(&self, file: &str) -> Option<&str> {
+        self.read.iter().find(|(name, _)| name == file).map(|(_, digest)| digest.as_str())
+    }
 }
 
 /// A handwritten text read from a hub, on its way into the record.
@@ -203,6 +220,9 @@ pub struct Document {
     pub body: String,
     /// The file it was read from, relative to the hub.
     pub source_file: String,
+    /// The digest of that file as it stood when it was read, so the record
+    /// can say later whether anybody has written in it since.
+    pub digest: String,
 }
 
 /// The files a hub is read from.
@@ -212,7 +232,8 @@ pub const FILES: [&str; 5] = ["План.md", "Изменения.md", "README.md
 ///
 /// `Решения.md` is not here: its prose preamble is a document but its
 /// entries are events, so it is read by the decisions parser and its
-/// preamble taken separately.
+/// preamble taken separately. Every other `.md` of a hub that none of these
+/// names is a document too, of the kind `other` - see `read_documents`.
 pub const DOCUMENT_FILES: [(&str, &str); 2] = [("Видение.md", "vision"), ("Ритуалы.md", "rituals")];
 
 /// The directory a hub keeps its research notes in.
@@ -286,7 +307,13 @@ pub fn read(dir: &Path) -> Result<Hub> {
 }
 
 /// The handwritten texts of a hub: the vision, the rituals, the preamble of
-/// the decisions journal, and every research note.
+/// the decisions journal, every research note - and every other `.md` the
+/// hub holds, as a document of the kind `other`.
+///
+/// Every other one, because a hub kept texts nobody had named a kind for:
+/// a mock-up of a web screen, a list of stands, the format a novella is
+/// written in. Read only by name, those lived in the vault alone, and the
+/// record could not promise that deleting `Projects/` would lose nothing.
 ///
 /// A missing one is not a warning the way a missing `План.md` is: most
 /// projects have no rituals file and several have no research at all.
@@ -308,51 +335,119 @@ fn read_documents(dir: &Path) -> Vec<Document> {
             out.push(document_from("decisions", "decisions", &preamble, "Решения.md"));
         }
     }
-    if let Ok(entries) = std::fs::read_dir(dir.join(RESEARCH_DIR)) {
-        let mut notes: Vec<_> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "md"))
-            .collect();
-        // By name, which for these begins with the date they were asked.
-        notes.sort();
-        // Addresses handed out so far, so two notes of one day cannot share.
-        let mut seen: Vec<String> = Vec::new();
-        for path in notes {
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            if text.trim().is_empty() {
-                continue;
-            }
-            let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            // `2026-09-04 — Инструмент проектов` slugs to `2026-09-04`:
-            // slugify keeps only ASCII, and these titles are Russian after
-            // the date. Two notes from one day would then share an address
-            // and the second would overwrite the first - a research note
-            // lost without a word. The date is kept because it is what
-            // these sort by, and a number after it keeps them apart.
-            let mut slug = crate::db::slugify(&stem);
-            if slug.is_empty() {
-                slug = "research".to_string();
-            }
-            if seen.iter().any(|taken| taken == &slug) {
-                let base = slug.clone();
-                for n in 2.. {
-                    let candidate = format!("{base}-{n}");
-                    if !seen.iter().any(|taken| taken == &candidate) {
-                        slug = candidate;
-                        break;
-                    }
-                }
-            }
-            seen.push(slug.clone());
-            let file = format!(
-                "{RESEARCH_DIR}/{}",
-                path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-            );
-            out.push(document_from("research", &slug, &text, &file));
+
+    // Every markdown file under the hub, by its path within it, sorted -
+    // which for research notes is by the date their names begin with.
+    let files = markdown_files(dir);
+    let research_prefix = format!("{RESEARCH_DIR}/");
+    let (research, rest): (Vec<String>, Vec<String>) = files.into_iter().partition(|rel| rel.starts_with(&research_prefix));
+    // Addresses handed out so far, so that no two texts share one.
+    let mut seen: Vec<String> = out.iter().map(|d| d.slug.clone()).collect();
+
+    // Research first, as it always was read, so that what follows cannot
+    // move a note to another address.
+    for rel in research {
+        let Some(text) = handwritten(dir, &rel) else { continue };
+        let name = rel.rsplit('/').next().unwrap_or(&rel);
+        let stem = name.strip_suffix(".md").unwrap_or(name);
+        // `2026-09-04 — Инструмент проектов` slugs to `2026-09-04`:
+        // slugify keeps only ASCII, and these titles are Russian after
+        // the date. Two notes from one day would then share an address
+        // and the second would overwrite the first - a research note
+        // lost without a word. The date is kept because it is what
+        // these sort by, and a number after it keeps them apart.
+        let slug = unique_slug(crate::db::slugify(stem), "research", &mut seen);
+        out.push(document_from("research", &slug, &text, &rel));
+    }
+    for rel in rest {
+        // The files the hub is read from, the wishes file and the named
+        // texts at the top are each read for what they are, above.
+        let reserved = FILES.contains(&rel.as_str()) || rel == WISHES_FILE || DOCUMENT_FILES.iter().any(|(name, _)| *name == rel);
+        if reserved {
+            continue;
         }
+        let Some(text) = handwritten(dir, &rel) else { continue };
+        let slug = unique_slug(path_slug(&rel), "other", &mut seen);
+        out.push(document_from("other", &slug, &text, &rel));
     }
     out
+}
+
+/// The text of a hub file worth keeping as a document: not empty, and not
+/// one the record generated - a generated file in an unexpected place is
+/// still a view of the record, and reading it back would make one.
+fn handwritten(dir: &Path, rel: &str) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(rel)).ok()?;
+    (!text.trim().is_empty() && !crate::export::is_generated(&text)).then_some(text)
+}
+
+/// Every `.md` file under a hub, as sorted paths relative to it.
+pub fn markdown_files(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    markdown_under(dir, "", &mut files);
+    files.sort();
+    files
+}
+
+/// Collects the `.md` files under a directory as paths relative to the hub,
+/// written with `/` whatever the platform: the path is how the document is
+/// found again, so it has to read the same on every machine.
+///
+/// A name starting with a dot is a tool's, not the owner's - an editor's
+/// settings, a sync client's trash.
+fn markdown_under(root: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(root.join(prefix)) else { return };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let rel = match prefix {
+            "" => name.clone(),
+            _ => format!("{prefix}/{name}"),
+        };
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            markdown_under(root, &rel, out);
+        } else if name.ends_with(".md") {
+            out.push(rel);
+        }
+    }
+}
+
+/// An address made from a path within the hub: its letters and digits in
+/// any script, lowercased, and one hyphen for everything between them.
+///
+/// Not `slugify`, which keeps ASCII alone: every one of these files is
+/// named in Russian, and `Макет веб-морды.md` would have had no address at
+/// all. The path rather than the title, because the path is unique within
+/// a hub and a title need not be.
+fn path_slug(rel: &str) -> String {
+    let stem = rel.strip_suffix(".md").unwrap_or(rel);
+    let mut out = String::with_capacity(stem.len());
+    for ch in stem.chars() {
+        if ch.is_alphanumeric() {
+            out.extend(ch.to_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// A slug no other text of this hub has taken: the base, or the base with
+/// the first free number after it. An empty base becomes the fallback.
+fn unique_slug(base: String, fallback: &str, seen: &mut Vec<String>) -> String {
+    let base = if base.is_empty() { fallback.to_string() } else { base };
+    let mut slug = base.clone();
+    for n in 2.. {
+        if !seen.contains(&slug) {
+            break;
+        }
+        slug = format!("{base}-{n}");
+    }
+    seen.push(slug.clone());
+    slug
 }
 
 /// The prose above the first entry of a decisions journal.
@@ -376,17 +471,30 @@ fn decisions_preamble(text: &str) -> String {
 /// A document from a file: its first heading is the title, and the whole
 /// text is the body - a hub file is edited as a whole.
 fn document_from(kind: &str, slug: &str, text: &str, source_file: &str) -> Document {
+    // Without a heading a text is called what its file is called - which
+    // for a text of no kind is the only name it has; the others keep the
+    // address they were always given.
+    let fallback = match kind {
+        "other" => {
+            let name = source_file.rsplit('/').next().unwrap_or(source_file);
+            name.strip_suffix(".md").unwrap_or(name).to_string()
+        }
+        _ => slug.to_string(),
+    };
     let title = text
         .lines()
         .find(|l| l.starts_with("# "))
         .map(|l| l.trim_start_matches('#').trim().to_string())
-        .unwrap_or_else(|| slug.to_string());
+        .unwrap_or(fallback);
     Document {
         kind: kind.to_string(),
         slug: slug.to_string(),
         title,
-        body: text.trim_end().to_string(),
+        // In the endings the record keeps: the file's own are put back on
+        // the way out.
+        body: crate::db::lf(text.trim_end()).into_owned(),
         source_file: source_file.to_string(),
+        digest: crate::export::digest(text),
     }
 }
 
@@ -394,6 +502,7 @@ fn read_file(dir: &Path, name: &str, hub: &mut Hub, parse: impl FnOnce(&str, &mu
     let path = dir.join(name);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
+            hub.read.push((name.to_string(), crate::export::digest(&text)));
             parse(&text, hub);
             Ok(())
         }
@@ -1402,6 +1511,19 @@ mod tests {
         assert!(all.contains("cargo build"), "{all:?}");
         // And the fence did not start a heading of its own.
         assert!(!runs.iter().any(|r| r.heading.as_deref() == Some("# и потом")), "{runs:?}");
+    }
+
+    /// A text of no kind is addressed by its path, in whatever script the
+    /// path is written: every such file of this line is named in Russian,
+    /// and the ASCII slug gave them no address at all.
+    #[test]
+    fn a_path_makes_an_address_in_any_script() {
+        assert_eq!(path_slug("Макет веб-морды.md"), "макет-веб-морды");
+        assert_eq!(path_slug("Сиды-данные/README.md"), "сиды-данные-readme");
+        let mut seen = vec!["vision".to_string()];
+        assert_eq!(unique_slug("vision".into(), "other", &mut seen), "vision-2");
+        assert_eq!(unique_slug(String::new(), "other", &mut seen), "other");
+        assert_eq!(unique_slug(String::new(), "other", &mut seen), "other-2");
     }
 
     #[test]

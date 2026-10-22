@@ -906,6 +906,15 @@ fn fill(r: &mut Record, data: &Path) {
     std::fs::create_dir_all(&out_hub).unwrap();
     r.json("export", &["export", "alpha", "--hub", out_hub.to_str().unwrap(), "--docs"]);
     r.json("export", &["export", "alpha", "--hub", out_hub.to_str().unwrap(), "--check"]);
+    // A hub the record wrote: read back, its files are untouched and not
+    // taken in; then a sitting ends and brings it up to date, past the one
+    // file somebody wrote in.
+    r.json("import", &["import", "alpha", "--hub", out_hub.to_str().unwrap()]);
+    let changes = out_hub.join("Изменения.md");
+    std::fs::write(&changes, format!("{}\nWritten in by hand.\n", std::fs::read_to_string(&changes).unwrap())).unwrap();
+    r.json("session start", &["session", "start", "alpha"]);
+    r.json("note", &["note", "alpha", "Read the hub back as a view.", "--kind", "decision"]);
+    r.json("session end", &["session", "end", "alpha"]);
     r.json("export", &["export", "--line"]);
     r.json("export", &["export", "--line", "--to", data.join("line.json").to_str().unwrap()]);
     r.json("open", &["open", "alpha"]);
@@ -944,6 +953,8 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("backup", &["backup"]);
     r.json("backup", &["backup", "--keep", "1"]);
     r.json("backup", &["backup", "--list"]);
+    // The record moves past a file it wrote: the plan gains a stage.
+    r.json("version add", &["version", "add", "alpha", "v0.9.0", "--title", "Later", "--task", "one more"]);
     r.json("doctor", &["doctor"]);
     r.json("doctor", &["doctor", "--hubs"]);
 

@@ -265,7 +265,7 @@ fn the_diary_entry_is_written_from_what_was_recorded() {
 
     let text = std::fs::read_to_string(&diary).unwrap();
     // The preamble survives, the new entry is above the old one, and the old
-    // one is untouched: a diary is appended to, never rewritten.
+    // one is untouched: a diary kept by hand is added to, never rewritten.
     assert!(text.starts_with("# Дневник работы"), "{text}");
     let new_at = text.find("v0.1.0 «First»").unwrap_or_else(|| panic!("no new entry: {text}"));
     let old_at = text.find("## 2026-09-01 · раньше").unwrap_or_else(|| panic!("the old entry was lost: {text}"));

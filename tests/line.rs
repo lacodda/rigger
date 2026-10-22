@@ -267,5 +267,5 @@ fn doctor_names_the_hubs_still_kept_by_hand() {
         .assert()
         .success();
     let after = output(data.path(), &["doctor", "--hubs"]);
-    assert!(after.contains("every generated file matches the record"), "{after}");
+    assert!(after.contains("every file says what the record says"), "{after}");
 }

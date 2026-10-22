@@ -69,8 +69,7 @@ Session on sample closed, open since 2026-09-05T09:12:44Z.
 
 recorded 1 decision, 1 change
 next: ship the retro next
-
-Write it into a diary with: rigger session end sample --diary <file>
+brought the hub up to date: План.md, Дневник.md
 ```
 
 The chronicle [`sync`](/rigger/reference/sync/) reads out of commit messages is not counted: it is what git already says, and counting it would make any session that happened to run `sync` look productive.
@@ -108,7 +107,12 @@ Under `--json` it prints the sitting's summary, then what came of closing it:
 | --- | --- | --- |
 | `missing` | array | What the ritual would have asked for and did not get, as sentences; empty when nothing is missing. |
 | `missing[]` | string | One reminder. |
-| `diary` | string or null | The diary file the entry was appended to with `--diary`; `null` without it. |
+| `diary` | string or null | The diary file the entry was written to with `--diary`; `null` without it. |
+| `hub` | object | What bringing the project's hub up to date did; both lists are empty for a project with no hub. |
+| `hub.written` | array | Files of the hub written again because the record had moved on since it last wrote them. |
+| `hub.written[]` | string | One file, relative to the hub. |
+| `hub.edited` | array | Files left as they were because somebody has written in them since the record did. |
+| `hub.edited[]` | string | One file, relative to the hub. |
 | `backup` | string or null | The backup file taken at close; `null` when today's or a recent copy already exists, or the copy failed. |
 | `on_session_end` | object or null | What the project's closing command came to; `null` when the project has none. |
 | `on_session_end.command` | string | The command that ran. |
@@ -166,7 +170,9 @@ edits it - a list of what happened, rather than a blank page - and hands the edi
 $ rigger session end sample --heading "v0.3.0 «Search»" --entry entry.md
 ```
 
-`--entry` takes a file, or `-` for standard input. The edited entry replaces the composed one in the record and, with `--diary`, in the file. One without a `## ` heading line gets today's. It is read before the sitting closes, so an entry that cannot be read leaves the session open to try again rather than closed without its diary.
+`--entry` takes a file, or `-` for standard input. The edited entry replaces the composed one in the record and in the file alike. Its own `## ` heading is the heading - in the record and in the hub's diary, whatever `--heading` said; one without a heading line gets the heading a composed entry would have had, the day and `--heading`. It is read before the sitting closes, so an entry that cannot be read leaves the session open to try again rather than closed without its diary.
+
+Until v0.31.0 the heading came from two places: the file got the one the entry's text carried, the record one made from `--heading`. After any sitting that gave one and not the other, the hub's diary read differently from the record it was generated from, and `doctor --hubs` called the file edited.
 
 Under `--json` it prints the same `session` summary as `end`, then the entry:
 
@@ -179,11 +185,26 @@ Under `--json` it prints the same `session` summary as `end`, then the entry:
 
 ### In the record
 
-The sitting's entry goes into the record whatever else happens to it, dated the day the session ended and titled by `--heading` when one is given. A hub written from the record reads its diary from there, so the next [`export`](/rigger/reference/export/) writes the entry at the top of `Дневник.md` - in the rule and spacing the diary already uses. Before this, `end` could only append to a file, and once that file was generated the entry went into a file the next export rewrote without it.
+The sitting's entry goes into the record whatever else happens to it, dated the day the session ended. A hub written from the record reads its diary from there - in the rule and spacing the diary already uses between its entries. Before this, `end` could only append to a file, and once that file was generated the entry went into a file the next export rewrote without it.
+
+### The hub, kept up
+
+Since v0.31.0 `end` then brings the project's hub up to date itself, wherever that loses nothing. The record notes what it last wrote into each file of the hub; a file still exactly that is written again from the record, and the entry is at the top of `Дневник.md` without anybody running [`export`](/rigger/reference/export/). A file somebody has written in since is left as it is, and named:
+
+```console
+$ rigger session end sample
+...
+brought the hub up to date: Дневник.md
+
+The ritual asks for:
+  the hub holds edits the record has not seen (Изменения.md): `rigger import sample --hub <dir>` takes them in, `rigger export` discards them
+```
+
+A file the hub does not have is not made - a hub that keeps no rituals file has not asked for one - and a file the record has no note of yet is left for [`doctor --hubs`](/rigger/reference/doctor/#hubs---hubs) to raise. A hub that cannot be written does not fail the close: the session is already ended, and the line says why the hub was left.
 
 ## `--diary`
 
-For a hub still kept by hand. Appends the same entry to a diary file, newest first, under whatever preamble the file already has:
+For a diary the record does not write. A diary kept by hand gets the entry at the top, newest first, under whatever preamble the file already has, with the heading the record holds:
 
 ```markdown
 # Дневник работы
@@ -205,7 +226,9 @@ For a hub still kept by hand. Appends the same entry to a diary file, newest fir
 **Следующий шаг.** ship the retro next
 ```
 
-`--heading` names the entry; without one it is titled by its day alone. A file that does not exist yet is created rather than being a reason to fail at the end of a session. A hub that has been handed to the record (`export --adopt`) does not need this: the file is generated, and appending to it would be an edit the next export discards.
+`--heading` names the entry; without one it is titled by its day alone. A file that does not exist yet is created rather than being a reason to fail at the end of a session.
+
+A generated diary is not appended to: an entry added by hand there is an edit, and before v0.31.0 every sitting that did it left the hub's diary differing from the record. The hub's own diary is brought up to date with the rest of the hub, as above; any other generated diary says at its top that edits there are overwritten, and is written whole from the record.
 
 The entry is the session's **own sentences, arranged** — rigger has no opinion about the day, and inventing one would put words in your diary that nobody said. Empty sections are left out rather than printed as bare headings.
 
