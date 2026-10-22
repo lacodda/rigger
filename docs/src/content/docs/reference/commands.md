@@ -47,6 +47,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project retire`](/rigger/reference/project/#project-retire) | v0.29.0 | Take a project out of the work for good, keeping its history readable; `unretire` brings it back |
 | [`rigger project add`](/rigger/reference/project/#project-add) on a folder | v0.30.0 | Record work that lives in a folder with no repository; git is never asked, and its skill has a template of its own |
 | [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
+| [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
 
 ## Common to all commands
 

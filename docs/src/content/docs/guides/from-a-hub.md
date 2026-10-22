@@ -15,8 +15,10 @@ The hub format is the one the line rigger was built in kept, file names and all:
 | `Изменения.md` | the stages that shipped, with their dates |
 | `Решения.md` | one decision per dated heading |
 | `Дневник.md` | one finished session per entry |
+| `README.md` | the dated lines of its "Состояние" block |
 | `Хотелки.md` | wishes, taken in once |
 | `Видение.md`, `Ритуалы.md`, `Исследования/*.md` | documents, kept whole |
+| every other `.md`, in any folder | a document of the kind `other`, at the path it was read from |
 
 A stage is any heading whose first word is a version (`## v0.2.0 · Charts`), and a task is a checkbox under it. [`import`](/rigger/reference/import/#what-it-reads) has the details. A project without such a hub needs none of this: [`version add`](/rigger/reference/version/#version-add) plans a stage directly.
 
@@ -161,7 +163,7 @@ $ rigger export sample --hub C:\dev\notes\sample
 sample wrote 1 of 4 files.
 ```
 
-The handwritten texts - vision, rituals, research - stay yours: `--docs` writes them back out, `import` takes an edit to them in, and [`doctor --hubs`](/rigger/reference/doctor/) says when a file and the record have parted. The wishes file is read once; a wish left in it afterwards is named by `doctor`, and a new wish goes through [`wish`](/rigger/reference/note/).
+The handwritten texts - vision, rituals, research, and every other note the hub kept - stay yours: `--docs` writes them back out, `import` takes an edit to them in, and [`doctor --hubs`](/rigger/reference/doctor/) says when somebody has written in a file since the record did, apart from a file that is only behind it. From then on the end of each [session](/rigger/reference/session/#the-hub-kept-up) writes the hub again wherever nobody touched it, so the markdown stays a view of the record without anybody running `export`. The wishes file is read once; a wish left in it afterwards is named by `doctor`, and a new wish goes through [`wish`](/rigger/reference/note/).
 
 ## When the hub is no longer read
 
