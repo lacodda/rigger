@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.31.0] - 2026-10-22
+
+### Breaking Changes
+
+- **Keep the hub a view of the record**
+`doctor --hubs --json` lists in `hubs` only files the
+record cannot vouch for; files that are only behind move to
+`hubs_behind`. `import` records a hub path only when the project has
+none, and no longer reads back generated files the record wrote.
+
+### Documentation
+- Name the hub kept as a view on the shopfront
+
+### Features
+- Keep the hub a view of the record
+
 ## [0.30.1] - 2026-10-18
 
 ### Bug Fixes
