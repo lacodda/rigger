@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.32.0] - 2026-10-27
+
+### Build
+- Take rusqlite 0.41 and furca-core 0.8, and Rust 1.89 with them
+
+### Features
+- Name the project to work on now, and the reason it comes first
+
 ## [0.31.0] - 2026-10-22
 
 ### Breaking Changes
