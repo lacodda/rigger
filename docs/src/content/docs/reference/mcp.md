@@ -41,6 +41,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | Tool | What it does |
 | --- | --- |
 | `context` | Where the project stands - the packet, as a session's first read |
+| `pick` | Which project to work on now, when none was named - the answer [`rigger pick`](/rigger/reference/pick/) prints, read from git first |
 | `event` | One recorded event whole, by the `[id]` the packet printed: a wish before building it, a decision the packet cut to its first sentence |
 | `plan` | The stage being built and its open tasks, each with an id |
 | `record_decision` | A decision and the reason behind it |

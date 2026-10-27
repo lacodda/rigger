@@ -141,6 +141,11 @@ fn a_session_reads_the_record_and_writes_to_it() {
     assert!(packet.contains("Which tier is this project?"), "{packet}");
     assert!(packet.contains("Count days without a commit."), "{packet}");
 
+    // With no project named, the tool says which one, as `rigger pick` does.
+    let picked = server.call(9, "pick", json!({}));
+    assert!(picked.starts_with("Work on proj  v0.2.0 · Second stage"), "{picked}");
+    assert!(picked.contains("2 questions wait on the owner"), "{picked}");
+
     server.finish();
 }
 

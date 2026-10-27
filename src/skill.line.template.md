@@ -9,6 +9,8 @@ One skill for every project of the line. The record knows where each one stands 
 
 Name the project in the request, or work in its directory - every path below is recorded, and `rigger` finds the project from the working directory when no name is given.
 
+When the request names no project - "what is next", "get on with the line" - `rigger pick` (the `pick` tool over MCP) names one: the project, the stage it is on, and the reason it comes first. Take that project and work its stage to a release, starting below.
+
 ## The projects
 
 {{projects}}

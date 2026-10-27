@@ -115,7 +115,7 @@ fn named(line: &str) -> String {
 pub fn line_description(line: &str, projects: &[Listed]) -> String {
     let line = named(line);
     let mut out = format!(
-        "Work on any project of {line}: the record says where a project stands, what the current stage is, and how the work is done there. Name the project in the request, or work in its directory - the path is recorded. Triggers on \"work on NAME\", \"continue NAME\", \"what is next for NAME\", \"wishes for NAME\", and any change under a recorded project's directory."
+        "Work on any project of {line}: the record says where a project stands, what the current stage is, and how the work is done there. Name the project in the request, or work in its directory - the path is recorded. Triggers on \"work on NAME\", \"continue NAME\", \"what is next for NAME\", \"wishes for NAME\", \"what is next\" or \"get on with the line\" with no project named - `rigger pick` then names one - and any change under a recorded project's directory."
     );
     // The names themselves, while they fit. A router matching "continue
     // midda" has to see the word `midda` somewhere, and the body is not

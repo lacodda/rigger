@@ -112,7 +112,7 @@ $ rigger skill --line --install
 Wrote C:\Users\me\.claude\skills\line\SKILL.md from the built-in template: 18 projects, description 512 of 1024 characters.
 ```
 
-It is named after the [profile](/rigger/reference/profile/), because a line of products and a ticket desk are different ways of working and should not answer to one skill. The project is named in the request, or taken from the working directory - every recorded path is one rigger knows.
+It is named after the [profile](/rigger/reference/profile/), because a line of products and a ticket desk are different ways of working and should not answer to one skill. The project is named in the request, or taken from the working directory - every recorded path is one rigger knows. A request that names none - "what is next", "get on with the line" - is sent to [`rigger pick`](/rigger/reference/pick/), which names the project and the reason.
 
 The body carries the table of projects, and `project add` rewrites it when a skill is already installed. A project added after the skill was written would otherwise leave it describing a line one short, and an assistant asked to work on that project would read a skill that has never heard of it.
 

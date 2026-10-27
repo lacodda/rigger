@@ -32,7 +32,14 @@ The heading names the Monday and the Friday, because a week number is not a date
 
 ## Focus
 
-The versions [aimed](/rigger/reference/version/) at this week that have no tag yet, in tier order. A week nobody planned says so rather than showing an empty heading.
+The versions [aimed](/rigger/reference/version/) at this week that have no tag yet, in tier order. A week nobody planned says so rather than showing an empty heading - and names what [`pick`](/rigger/reference/pick/) would work on instead, with its reason in a few words:
+
+```console
+Focus
+  nothing is aimed at this week - rigger pick names widget v0.2.0 (1 change unseen)
+```
+
+The pick is about now, so only the brief of the current week names it; like `pick`, that brief reads git first.
 
 ## Ships on Friday
 
@@ -114,6 +121,11 @@ Pairs are recorded with [`rigger link`](/rigger/reference/link/), which also pri
 | `focus[].title` | string or null | The stage's title, or `null`. |
 | `focus[].planned` | string | The week it was aimed at, as `2026-W41`. |
 | `focus[].overdue_weeks` | integer or null | Always `null` in `focus`. |
+| `pick` | object or null | What [`pick`](/rigger/reference/pick/) names, for the current week; `null` for another week, or when every project is left out. |
+| `pick.project` | string | The project. |
+| `pick.version` | string | The version to work on. |
+| `pick.title` | string or null | Its title, or `null`. |
+| `pick.reason` | string | `late`, `due`, `unseen`, `answered`, `behind` or `turn`. |
 | `overdue` | array | The versions aimed at a week already gone, with no tag. |
 | `overdue[]` | object | A version aimed at a week already gone, with no tag. |
 | `overdue[].project` | string | The project. |

@@ -166,6 +166,7 @@ fn initialize() -> Value {
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": "The record of this project: what is done, what is next, what waits for the owner. \
+    When the owner names no project, `pick` says which one to work on and why. \
     Start a session with the `context` tool, or the `start session` prompt; it names each question, wish and \
     event in one line, and `event` reads one whole by its id. Record what you decide, find or \
     break with `record_decision`, `record_finding`, `record_pitfall` and `record_change` as it happens, not \
@@ -220,6 +221,12 @@ fn tools() -> Vec<Value> {
                 "budget": { "type": "integer", "description": "Token budget for the packet; the default is 3000" },
             }),
             &["project"],
+        ),
+        tool(
+            "pick",
+            "What to work on now across the whole line: one project and its stage, the reason it comes first, and the order the rest wait in. Reads git first. Use it when the owner asks to get on with the line without naming a project - then read that project's `context` and take its stage to a release.",
+            json!({}),
+            &[],
         ),
         tool(
             "event",
@@ -495,6 +502,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             let project = project(db)?;
             Ok(render_plan(db, &project)?)
         }
+        "pick" => Ok(crate::pick::render(&crate::pick_now(db, crate::calendar::Week::current())?)),
         "record_shipped" => {
             let project = working(db)?;
             let Some(tag) = args.get("tag").and_then(Value::as_str) else {
@@ -1024,6 +1032,7 @@ mod tests {
         let names: Vec<String> = tools().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         for promised in [
             "context",
+            "pick",
             "event",
             "plan",
             "record_decision",

@@ -958,6 +958,18 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("doctor", &["doctor"]);
     r.json("doctor", &["doctor", "--hubs"]);
 
+    // ---- the pick ----------------------------------------------------------------
+    // gamma has a change no sitting has seen and a tier that asks for more;
+    // alpha is aimed at this week, so it comes first and gamma follows.
+    r.json("project tier", &["project", "tier", "gamma", "A"]);
+    r.json("pick", &["pick"]);
+    // Nothing aimed: gamma itself is the pick, with all it carries.
+    r.json("version plan", &["version", "plan", "alpha", "v0.4.0", "--clear"]);
+    r.json("pick", &["pick"]);
+    // A promise broken comes before everything.
+    r.json("version plan", &["version", "plan", "beta", "v0.2.0", "--week", "2026-W30"]);
+    r.json("pick", &["pick"]);
+
     // ---- profiles, last: `use` moves every command after it ------------------
     r.json("profile list", &["profile", "list"]);
     r.json("profile show", &["profile", "show"]);

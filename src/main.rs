@@ -30,6 +30,7 @@ mod open;
 mod owner;
 mod paint;
 mod paths;
+mod pick;
 mod profile;
 mod repo;
 mod retro;
@@ -251,6 +252,8 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         ics: Option<PathBuf>,
     },
+    /// What to work on now: one project and its stage, the reason it comes first, and the order of the rest
+    Pick,
     /// This week's focus: what is aimed at it, and what is already late
     Next {
         /// Read a week other than the current one
@@ -1366,6 +1369,7 @@ fn run(cli: Cli) -> Result<()> {
             Some(path) => write_ics(weeks, from.as_deref(), &path, json),
             None => show_calendar(weeks, from.as_deref(), json),
         },
+        Command::Pick => show_pick(json),
         Command::Next { week } => show_next(week.as_deref(), json),
         Command::Week { week } => show_week(week.as_deref(), json),
         Command::ReleaseDay { week } => show_release_day(week.as_deref(), json),
@@ -5822,6 +5826,34 @@ fn week_or_now(week: Option<&str>) -> Result<calendar::Week> {
     }
 }
 
+/// The pick as it stands now: git read first, so that a commit made since
+/// the last sitting counts, then the week's facts, then the rule.
+pub(crate) fn pick_now(db: &Db, now: calendar::Week) -> Result<pick::Pick> {
+    let unread = pick::read_git(db)?;
+    let facts = week_facts(db, now)?;
+    pick_from(db, now, &facts, unread)
+}
+
+/// The pick from facts already gathered. One function for every screen
+/// that names it, so the brief and `pick` cannot name two projects.
+fn pick_from(db: &Db, now: calendar::Week, facts: &WeekFacts, unread: Vec<String>) -> Result<pick::Pick> {
+    let standings = pick::gather(db, &facts.focus, &facts.overdue, &facts.lapsed, &facts.signals)?;
+    let mut chosen = pick::choose(&standings, now);
+    chosen.unread = unread;
+    Ok(chosen)
+}
+
+/// What to work on now, across the line.
+fn show_pick(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let chosen = pick_now(&db, calendar::Week::current())?;
+    if json {
+        return print_json(&chosen);
+    }
+    print!("{}", pick::render(&chosen));
+    Ok(())
+}
+
 /// The focus of a week: what is aimed at it, and what should have shipped
 /// before it.
 fn show_next(week_arg: Option<&str>, json: bool) -> Result<()> {
@@ -5966,7 +5998,16 @@ fn print_signals(signals: &[week::Raised]) {
 fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let now = week_or_now(week_arg)?;
+    // The pick is about now, so only the week being lived in names it; a
+    // brief read for another week would name today's work under it. Git is
+    // read before the facts, as `pick` reads it, so the two cannot differ.
+    let current = now == calendar::Week::current();
+    let unread = if current { pick::read_git(&db)? } else { Vec::new() };
     let facts = week_facts(&db, now)?;
+    let chosen = match current {
+        true => pick_from(&db, now, &facts, unread)?.pick,
+        false => None,
+    };
     let waiting = db.open_questions()?;
     let shared = owner::shared_subjects(&waiting);
 
@@ -5978,6 +6019,7 @@ fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
                 "monday": now.monday().to_string(),
                 "friday": now.friday().to_string(),
                 "focus": facts.focus,
+                "pick": chosen.as_ref().map(pick::Candidate::named),
                 "overdue": facts.overdue,
                 "shipping": facts.release_day.queued,
                 "shipped": facts.release_day.shipped,
@@ -5996,7 +6038,15 @@ fn show_week(week_arg: Option<&str>, json: bool) -> Result<()> {
 
     println!("Focus");
     if facts.focus.is_empty() {
-        println!("  nothing is aimed at this week");
+        match &chosen {
+            Some(first) => println!(
+                "  nothing is aimed at this week - rigger pick names {} {} ({})",
+                first.project,
+                first.version,
+                pick::short(first)
+            ),
+            None => println!("  nothing is aimed at this week"),
+        }
     } else {
         for item in &facts.focus {
             let tier = item.tier.map(|t| format!(" [{t}]")).unwrap_or_default();

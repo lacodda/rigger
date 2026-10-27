@@ -48,6 +48,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project add`](/rigger/reference/project/#project-add) on a folder | v0.30.0 | Record work that lives in a folder with no repository; git is never asked, and its skill has a template of its own |
 | [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
 | [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
+| [`rigger pick`](/rigger/reference/pick/) | v0.32.0 | What to work on now, across the line: one project and its stage, the reason it comes first, the order of the rest; the Monday brief names it, and so does the MCP tool |
 
 ## Common to all commands
 

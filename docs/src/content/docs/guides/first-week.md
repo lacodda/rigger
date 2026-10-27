@@ -193,7 +193,7 @@ sample   <v0.1.0
 sample   v0.1.0 — aimed at 2026-W43, 2 weeks early
 ```
 
-On Monday, [`rigger week`](/rigger/reference/week/) gathers the focus, what ships on Friday and what waits on you into one screen; [`rigger digest`](/rigger/reference/digest/) says what moved, five lines per project.
+On Monday, [`rigger week`](/rigger/reference/week/) gathers the focus, what ships on Friday and what waits on you into one screen; [`rigger digest`](/rigger/reference/digest/) says what moved, five lines per project. On any day, [`rigger pick`](/rigger/reference/pick/) says which project to take up next, and why.
 
 ## For a program rather than a person
 

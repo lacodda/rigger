@@ -877,7 +877,7 @@ pub struct Task {
 
 impl Task {
     /// Whether the task is out of the way: frozen on purpose, or asleep.
-    fn is_put_down(&self) -> bool {
+    pub fn is_put_down(&self) -> bool {
         self.status == "frozen" || self.snoozed_until.is_some()
     }
 }
@@ -4194,6 +4194,52 @@ impl Db {
             .into_iter()
             .map(|body| body.lines().next().unwrap_or_default().trim().to_string())
             .collect())
+    }
+
+    /// The changes git recorded after a moment - all of them for `None` -
+    /// oldest first, each with its moment and its subject line.
+    pub fn changes_after(&self, project_id: i64, after: Option<&str>) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT created_at, body FROM events
+             WHERE project_id = ?1 AND commit_hash IS NOT NULL AND created_at > ?2
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, after.unwrap_or("")], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<(String, String)>>>()?
+            .into_iter()
+            .map(|(at, body)| (at, body.lines().next().unwrap_or_default().trim().to_string()))
+            .collect())
+    }
+
+    /// When the newest release went out: its tag's moment, or its day where
+    /// the record knows no more than the day a changelog gave it.
+    pub fn last_release_moment(&self, project_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT MAX(COALESCE(shipped_ts, shipped_at)) FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL",
+                [project_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// The moments of what the owner decided after a moment - ever, for
+    /// `None` - outside any sitting: an answer given from the inbox, a
+    /// questionnaire read in. What was said inside a sitting, that sitting
+    /// already heard.
+    pub fn owner_words_after(&self, project_id: i64, after: Option<&str>) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT created_at FROM events
+             WHERE project_id = ?1 AND kind = 'decision' AND author = 'owner' AND session_id IS NULL AND created_at > ?2
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, after.unwrap_or("")], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Tasks closed between two moments.
