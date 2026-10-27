@@ -2,7 +2,7 @@
 name = "rigger"
 version = "0.31.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "One seat for all your projects and tasks: a local record of what is done, what is next and when it ships - read by you and your coding assistant"
 license = "MIT"
 repository = "https://github.com/lacodda/rigger"
@@ -41,12 +41,12 @@ directories = "6"
 dunce = "1"
 # Every read of git goes through the line's git library, so that what the
 # line has learnt about gitoxide lives in one crate (see src/git.rs).
-furca-core = "0.3"
+furca-core = "0.8"
 jiff = "0.2"
 # bundled: no system SQLite to find or version-match on any platform.
 # backup: the database is copied through SQLite's own API before a migration,
 # which is consistent even while another process holds it open.
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+rusqlite = { version = "0.41", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The profile config is a file a person edits, so it is TOML rather than JSON.
@@ -62,7 +62,7 @@ jiff = "0.2"
 serde_json = "1"
 # The integration tests open the database directly to set up a state the
 # CLI cannot make on its own - a schema an edited migration left short.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 predicates = "3"
 tempfile = "3"
 
