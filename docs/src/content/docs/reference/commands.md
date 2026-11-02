@@ -49,6 +49,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
 | [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
 | [`rigger pick`](/rigger/reference/pick/) | v0.32.0 | What to work on now, across the line: one project and its stage, the reason it comes first, the order of the rest; the Monday brief names it, and so does the MCP tool |
+| [`rigger doc files`](/rigger/reference/doc/#the-files-that-are-not-texts), [`export --all`](/rigger/reference/export/#--all-every-hub-back-where-it-lay), [`doctor --hubs`](/rigger/reference/doctor/#can-the-hubs-go) verdict | v0.33.0 | The record keeps every file of a hub - the files that are not texts byte for byte, a retired project's texts, the line's own files beside the hubs; `doctor --hubs` says whether the hubs may go, and `export --all` writes them back |
 
 ## Common to all commands
 

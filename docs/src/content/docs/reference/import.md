@@ -4,10 +4,10 @@ description: Read a notes hub into versions, tasks and events.
 ---
 
 ```
-rigger import <PROJECT> --hub <DIR> [--check] [--json]
+rigger import <PROJECT> [--hub <DIR>] [--check] [--json]
 ```
 
-Reads a project's notes hub - the plan, the changelog and the decision log - and records what it finds. This is how a project that has been run by hand for months arrives in the database with its history intact.
+Reads a project's notes hub - the plan, the changelog and the decision log - and records what it finds. This is how a project that has been run by hand for months arrives in the database with its history intact. Without `--hub` it reads the hub the record already knows.
 
 ```console
 $ rigger import sample --hub C:\dev\sample\hub
@@ -31,6 +31,7 @@ sample:
 | `Ритуалы.md` | the `rituals` document |
 | `Исследования/**/*.md` | one `research` document each |
 | any other `.md`, in any folder | one `other` document each, at the path it was read from |
+| every other file | kept whole, byte for byte, at the path it was read from - see [below](#the-files-that-are-not-texts) |
 
 A stage is any heading whose first word is a version - `v0.4.0` - at whatever heading level, so both `## v0.4.0 · Title` and `### v0.4.0 · Title` are found. The title is what follows the version up to the em dash; the tail after it is bookkeeping and is not part of the title. A date anywhere in that tail marks the stage as shipped, written `2026-09-03` or `03.09.2026`, after any of the words the hubs use.
 
@@ -54,6 +55,56 @@ A research note is addressed by the date its filename opens with. Two notes from
 A text written through [`doc add`](/rigger/reference/doc/) or an assistant's tool has no file until an export gives it one, and the export remembers which; the same words found in the hub are that text, whether the export put them there or somebody did by hand, and not a second one. A text whose words did not change keeps the title it was given, even when its first heading says something else.
 
 Re-reading an unchanged hub changes nothing, so a document edited with `doc edit` and not yet exported is not silently replaced by the older file it came from. A file that really changed is taken in and reported as updated. Either way the record notes the file as one it has accounted for, so an edit to it afterwards is [told apart](/rigger/reference/doctor/#behind-is-not-edited) from a file nobody touched.
+
+### The files that are not texts
+
+Everything else in the hub is kept as it is: a sound beside the note that compares it, a scrape a list was cut from, a script an import was run with, a picture. Each becomes a file the record keeps, at the path it lay at, byte for byte - no line ending turned, no encoding guessed. So does a markdown file with nothing in it to read as a text: an empty note, or a view the record wrote that somebody copied elsewhere.
+
+```console
+$ rigger import sample
+sample:
+  files      3 added, 0 updated
+```
+
+A file whose bytes changed is taken in again and reported as updated; one the hub no longer has stays in the record - nothing an import reads deletes. [`doc files`](/rigger/reference/doc/#the-files-that-are-not-texts) lists them, and [`export --docs`](/rigger/reference/export/#the-handwritten-texts) writes them back. A file larger than 64 MB is passed over and named, because it would weigh on every backup copy:
+
+```console
+note: video.mp4 is 120 MB, more than the record keeps (64 MB); it stays in the hub alone
+```
+
+Until v0.33.0 these lived in the hub alone, and deleting a hub lost them without a word.
+
+## A retired project
+
+A [retired](/rigger/reference/project/#project-retire) project is read for its texts and files alone: no stages, sittings, questions, decisions or wishes, because its history is closed and the schema refuses new rows of it. What it wrote is not new history, though - it is the history kept - so its vision, research, every other text and every file are taken in as for any project:
+
+```console
+$ rigger import attic
+note: attic is retired since 2026-10-13: only its texts and files were read
+attic:
+  documents  3 added, 0 updated
+  files      5 added, 0 updated
+```
+
+There is no flag for this: a retired project has no other way to be read. Until v0.33.0 the import refused a retired project whole, and the texts its hub held were in no record.
+
+## The line's own place
+
+The directory a [profile](/rigger/reference/profile/) keeps its hubs in holds more than the hubs: a register of the marks, research about the whole line, a calendar. Those belong to no project. They belong to the line's own place - the service project named after the profile - and its hub is that directory:
+
+```console
+$ rigger import line
+note: line is the line's own place: only its texts and files were read
+line:
+  documents  12 added, 0 updated
+  files      40 added, 0 updated
+```
+
+Without `--hub` it reads the directory the profile names. It is read for texts and files alone, like a retired project, and no name in it is a part of the record: a `README.md` there is your prose, and `_Исследования/` is the line's research. Every directory that is the hub of a recorded project is left out of it - and so is a directory at its top that holds a plan or a changelog and that no project names, which is somebody's hub the record has not been told about rather than a text of the line's:
+
+```console
+note: C:\dev\hubs\newcomer holds a plan or a changelog and no project names it as its hub; left out - `rigger import <project> --hub C:\dev\hubs\newcomer` reads it
+```
 
 ### The wishes file
 
@@ -198,7 +249,7 @@ $ rigger import sample --hub C:\dev	ypo
 error: C:\dev	ypo is not there; a hub that cannot be read is not an empty hub
 ```
 
-An empty reading names no stage, and what no reading names is struck - so a mistyped path, or a shell that left a variable unexpanded, would arrive as an instruction to strike every version of the project. A hub that holds only its handwritten texts is still a hub and is read as usual.
+An empty reading names no stage, and what no reading names is struck - so a mistyped path, or a shell that left a variable unexpanded, would arrive as an instruction to strike every version of the project. A hub that holds only its handwritten texts is still a hub and is read as usual. A reading of texts alone - a retired project, the line's own place - strikes nothing, so it asks only that the directory be there.
 
 ## As JSON
 
@@ -223,6 +274,9 @@ Reading a hub prints its report.
 | `prose_files` | integer | Files whose between-stage prose was taken in. |
 | `documents_added` | integer | Handwritten texts taken in as documents. |
 | `documents_updated` | integer | Documents replaced by a changed file. |
+| `files_added` | integer | Files that are not texts, kept for the first time. |
+| `files_updated` | integer | Kept files whose bytes changed. |
+| `texts_only` | boolean | Whether only texts and files were read: a retired project, or the line's own place. |
 | `untouched` | array | Generated files not read back, because they are still what the record last wrote. |
 | `untouched[]` | string | One file's name. |
 | `warnings` | array | Things the reading noticed and went on from. |

@@ -74,8 +74,8 @@ enum Command {
     Import {
         /// Project name
         project: String,
-        /// Directory of the hub to read
-        #[arg(long, required_unless_present = "answers", conflicts_with = "answers")]
+        /// Directory of the hub to read; the one the record knows when omitted
+        #[arg(long, conflicts_with = "answers")]
         hub: Option<PathBuf>,
         /// A questionnaire the owner answered, as JSON: its choices become decisions and wishes
         #[arg(long, value_name = "FILE")]
@@ -294,12 +294,15 @@ enum Command {
     },
     /// Write a hub back out of the record
     Export {
-        /// Project name; omitted with --line
-        #[arg(required_unless_present = "line")]
+        /// Project name; omitted with --line or --all
+        #[arg(required_unless_present_any = ["line", "all"], conflicts_with_all = ["line", "all"])]
         project: Option<String>,
-        /// Directory of the hub to write
-        #[arg(long, required_unless_present = "line", conflicts_with = "line")]
+        /// Directory of the hub to write; the one the record knows when omitted
+        #[arg(long, conflicts_with_all = ["line", "all"])]
         hub: Option<PathBuf>,
+        /// Write every hub the record knows, each where it lies, making the ones that are gone
+        #[arg(long, conflicts_with = "line")]
+        all: bool,
         /// Write the line's public registry instead of a hub
         #[arg(long)]
         line: bool,
@@ -312,7 +315,7 @@ enum Command {
         /// Take over files written by hand, so the record owns them from now on
         #[arg(long)]
         adopt: bool,
-        /// Also write the handwritten texts back out: vision, rituals, research
+        /// Also write the handwritten texts and the kept files back out: vision, rituals, research, attachments
         #[arg(long)]
         docs: bool,
     },
@@ -535,12 +538,17 @@ enum DocCommand {
         #[arg(long)]
         body: Option<String>,
     },
-    /// Remove a document from the record
+    /// Remove a document, or a kept file, from the record
     Remove {
         /// Project name
         project: String,
-        /// The document's address, as `list` prints it
+        /// The document's address, as `list` prints it, or a file's path, as `files` prints it
         slug: String,
+    },
+    /// List the files the record keeps for a project's hub that are not texts
+    Files {
+        /// Project name
+        project: String,
     },
     /// The skeleton a new document of a kind starts from
     Template {
@@ -1223,7 +1231,7 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Import { project, hub, answers, check } => match answers {
             Some(answers) => import_answers(&project, &answers, check, json),
-            None => import_hub(&project, &hub.expect("clap requires --hub without --answers"), check, json),
+            None => import_hub(&project, hub.as_deref(), check, json),
         },
         Command::Profile { command } => match command {
             ProfileCommand::List {} => profile_list(json),
@@ -1388,16 +1396,18 @@ fn run(cli: Cli) -> Result<()> {
         Command::Export {
             project,
             hub,
+            all,
             line,
             to,
             check,
             adopt,
             docs,
-        } => match line {
-            true => export_line(to.as_deref(), check, json),
-            false => export_hub(
-                &project.expect("clap requires a project without --line"),
-                &hub.expect("clap requires --hub without --line"),
+        } => match (line, all) {
+            (true, _) => export_line(to.as_deref(), check, json),
+            (false, true) => export_all(check, adopt, docs, json),
+            (false, false) => export_hub(
+                &project.expect("clap requires a project without --line or --all"),
+                hub.as_deref(),
                 check,
                 adopt,
                 docs,
@@ -1426,6 +1436,7 @@ fn run(cli: Cli) -> Result<()> {
             } => doc_add(&project, &title, &kind, slug.as_deref(), body.as_deref(), json),
             DocCommand::Edit { project, slug, title, body } => doc_edit(&project, &slug, title.as_deref(), body.as_deref(), json),
             DocCommand::Remove { project, slug } => doc_remove(&project, &slug, json),
+            DocCommand::Files { project } => doc_files(&project, json),
             DocCommand::Template { kind, write } => doc_template(&kind, write, json),
         },
         Command::Gate { project, check } => gate(project.as_deref(), check, json),
@@ -1495,17 +1506,41 @@ fn import_answers(project: &str, path: &Path, check: bool, json: bool) -> Result
     Ok(())
 }
 
-fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<()> {
+/// The hub a command reads or writes when none is named: the one the record
+/// knows, or - for the line's own place - the directory the profile keeps
+/// every hub in, which is where the line's own files lie.
+fn recorded_hub(project: &db::Project) -> Result<PathBuf> {
+    if let Some(dir) = &project.hub_path {
+        return Ok(PathBuf::from(dir));
+    }
+    if !hubfile::has_record_files(project) {
+        let config = profile::Config::load()?;
+        if project.name == config.current_name()
+            && let Some(hubs) = config.current()?.1.hubs.clone()
+        {
+            return Ok(hubs);
+        }
+    }
+    bail!("the record knows no hub for {}; name one with --hub", project.name)
+}
+
+fn import_hub(project: &str, hub_dir: Option<&Path>, check: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let Some(project) = db.project_by_name(project)? else {
-        bail!("no project named '{project}'; see `rigger project list`");
+    let project = open_project(&db, project)?;
+    let hub_dir = match hub_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => recorded_hub(&project)?,
     };
-    project.ensure_working()?;
-    let hub = hub::read(hub_dir)?;
+    // A retired project is read for its texts and files alone: its history
+    // is closed, and the schema refuses new stages, sittings and events for
+    // it - but what it wrote is not new history, it is the history kept.
+    // The line's own place, the same: it has no plan to read.
+    let reading = hubfile::reading_for(&db, &project, &hub_dir)?;
+    let hub = hub::read_with(&hub_dir, &reading)?;
     // Where the hub is, so a later check can find it. Not guessed from the
     // repository path: the hubs of this line live in a notes vault. Spelt
     // the way the platform spells it, not the way the shell happened to.
-    let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
+    let hub_dir = &dunce::canonicalize(&hub_dir).unwrap_or(hub_dir);
     let run = |db: &Db| {
         // Only when the record knows no hub yet. Reading a directory is not
         // moving the hub there: an import from a scratch copy, or from a
@@ -1517,14 +1552,36 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
         }
         import::import(db, project.id, &hub)
     };
-    let report = match check {
+    let mut report = match check {
         true => db.rehearse(run)?,
         false => run(&db)?,
     };
+    report.texts_only = reading.texts_only;
+    // A hub inside this one that no project names is left out of it, and
+    // said: it is somebody's hub, not this place's texts.
+    if !hubfile::has_record_files(&project) {
+        for stray in hubfile::unrecorded_hubs(hub_dir, &hubfile::recorded_inside(&db, &project, hub_dir)?) {
+            report.warnings.push(format!(
+                "{} holds a plan or a changelog and no project names it as its hub; left out - `rigger import <project> --hub {}` reads it",
+                stray.display(),
+                stray.display()
+            ));
+        }
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
+    }
+    if reading.texts_only {
+        match &project.retired_at {
+            Some(at) => println!(
+                "note: {} is retired since {}: only its texts and files were read",
+                project.name,
+                at.split('T').next().unwrap_or(at)
+            ),
+            None => println!("note: {} is the line's own place: only its texts and files were read", project.name),
+        }
     }
     for warning in &report.warnings {
         println!("note: {warning}");
@@ -1573,6 +1630,7 @@ fn import_hub(project: &str, hub_dir: &Path, check: bool, json: bool) -> Result<
     }
     line("diary", report.diary_added, report.diary_updated);
     line("documents", report.documents_added, report.documents_updated);
+    line("files", report.files_added, report.files_updated);
     Ok(())
 }
 
@@ -3076,6 +3134,19 @@ fn doc_edit(project: &str, slug: &str, title: Option<&str>, body: Option<&str>, 
 fn doc_remove(project: &str, slug: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
+    // A kept file is named by its path, which no address can be: an
+    // address has no `/` and no extension of a file that is not a text.
+    // Tried when no document answers, so a document always wins its name.
+    if db.document(project.id, slug)?.is_none() && db.delete_attachment(project.id, slug)? {
+        if json {
+            return print_json(&serde_json::json!({ "removed": { "project": project.name, "file": slug } }));
+        }
+        println!(
+            "Removed the file {slug} from {}; while the hub still has it, the next import takes it in again",
+            project.name
+        );
+        return Ok(());
+    }
     let doc = open_document(&db, &project, slug)?;
     db.delete_document(project.id, &doc.slug)?;
     if json {
@@ -3083,6 +3154,42 @@ fn doc_remove(project: &str, slug: &str, json: bool) -> Result<()> {
     }
     println!("Removed {} ({}) from {}", doc.slug, doc.kind, project.name);
     Ok(())
+}
+
+/// The files a hub keeps that are not texts, as the record holds them.
+fn doc_files(project: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let files = db.attachments(project.id)?;
+    if json {
+        return print_json(&serde_json::json!({ "project": project.name, "files": files }));
+    }
+    if files.is_empty() {
+        println!("{} keeps no files besides its texts.", project.name);
+        return Ok(());
+    }
+    let total: u64 = files.iter().map(|f| f.bytes).sum();
+    println!("{}, {}:", plural(files.len(), "file", "files"), size_of(total));
+    let width = files.iter().map(|f| f.path.chars().count()).max().unwrap_or(0);
+    for f in &files {
+        println!(
+            "  {:<width$}  {:>9}  {}",
+            f.path,
+            size_of(f.bytes),
+            f.updated_at.split('T').next().unwrap_or(&f.updated_at)
+        );
+    }
+    println!("`rigger export {} --docs` writes them back into the hub", project.name);
+    Ok(())
+}
+
+/// A size for a person: bytes, then kilobytes, then megabytes.
+fn size_of(bytes: u64) -> String {
+    match bytes {
+        b if b < 1024 => plural(usize::try_from(b).unwrap_or(usize::MAX), "byte", "bytes"),
+        b if b < 1024 * 1024 => format!("{:.1} KB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+    }
 }
 
 /// Shows the skeleton a kind starts from, or writes it out to be edited.
@@ -6915,70 +7022,28 @@ fn first_line(text: &str) -> &str {
 /// The point at which the hub stops being where work is written down and
 /// becomes a view of what was written down somewhere else. The generated
 /// files are always written; the handwritten texts only with `--docs`.
-fn export_hub(project: &str, hub_dir: &Path, check: bool, adopt: bool, docs: bool, json: bool) -> Result<()> {
+fn export_hub(project: &str, hub_dir: Option<&Path>, check: bool, adopt: bool, docs: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
-    if !hub_dir.is_dir() {
-        bail!("{} is not a directory", hub_dir.display());
-    }
-    // Spelt the way the platform spells it, the way import records it.
-    let hub_dir = &dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
-
-    // The handwritten texts are planned always and written only when asked
-    // for. Off by default because they are a cache and nothing reads them
-    // back: the record is where they live now, and writing them every time
-    // would put more files in every diff of every hub for no one's benefit.
-    // Planned all the same, so that one already saying what the record says
-    // is noted as such - an edit to it later is then told apart from a file
-    // of unknown history.
-    let planned = hubfile::planned(&db, &project, true, Some(hub_dir))?;
-    if !check {
-        db.set_hub_path(project.id, hub_dir)?;
-    }
-
-    let mut written = Vec::new();
-    let mut diffs: Vec<(String, Vec<String>)> = Vec::new();
-    for file in &planned {
-        let path = hub_dir.join(&file.name);
-        let before = std::fs::read_to_string(&path).unwrap_or_default();
-        if !file.generated && !docs {
-            if !check && !before.is_empty() && db::lf(&before) == file.text.as_str() {
-                hubfile::account(&db, project.id, file, &before)?;
-            }
-            continue;
-        }
-        // Written in the ending the file already used. Every hub of this
-        // line is CRLF, and a generated file in LF would differ from its
-        // source on every line - which is not a diff anybody reads.
-        let text = export::with_line_ending(&file.text, export::line_ending(&before));
-        let unchanged = before == text;
-
-        // A file a person has been writing in is not overwritten without
-        // being asked. The mark is what says the record owns it, and only
-        // an explicit `--adopt` puts the mark there the first time. A
-        // document carries no mark - it is the owner's prose written back
-        // out - so this would refuse it for ever.
-        if !unchanged && file.generated && !before.is_empty() && !export::is_generated(&before) && !adopt && !check {
+    // A directory named on the command line has to be there: a mistyped one
+    // would become the project's hub. The one the record knows is made when
+    // it is gone - that is the hub being written back, which is the point.
+    let hub_dir = match hub_dir {
+        Some(dir) if !dir.is_dir() => bail!("{} is not a directory", dir.display()),
+        Some(dir) => dir.to_path_buf(),
+        None => recorded_hub(&project)?,
+    };
+    if !adopt && !check {
+        let by_hand = hubfile::by_hand(&db, &project, &hub_dir)?;
+        if let Some(first) = by_hand.first() {
             bail!(
                 "{} was written by hand and the record does not own it yet.
 Check what would change with `--check`, then hand it over with `--adopt`.",
-                path.display()
+                hub_dir.join(first).display()
             );
         }
-        if !check {
-            hubfile::write(&db, project.id, hub_dir, file)?;
-        }
-        // What would change, not just which file: the question `--check`
-        // answers is whether a hand-written line is about to be lost.
-        if check && !unchanged {
-            diffs.push((file.name.clone(), export::diff(&before, &text, 2)));
-        }
-        written.push(export::Written {
-            file: file.name.clone(),
-            bytes: text.len(),
-            unchanged,
-        });
     }
+    let HubWritten { dir: hub_dir, written, diffs } = write_hub(&db, &project, &hub_dir, check, docs)?;
 
     if json {
         println!(
@@ -7014,6 +7079,169 @@ Check what would change with `--check`, then hand it over with `--adopt`.",
     Ok(())
 }
 
+/// What writing one hub did.
+struct HubWritten {
+    /// Where it was written, spelt the way the platform spells it.
+    dir: PathBuf,
+    written: Vec<export::Written>,
+    /// For `--check`, the lines each text would change.
+    diffs: Vec<(String, Vec<String>)>,
+}
+
+/// Writes one hub out of the record: the generated files always, the
+/// handwritten texts and the kept files with `docs`. Makes the directory
+/// when it is gone - unless only asked what would change.
+///
+/// A file kept by hand is the caller's to refuse before this runs: `--all`
+/// refuses for every hub before it writes into any.
+fn write_hub(db: &Db, project: &db::Project, hub_dir: &Path, check: bool, docs: bool) -> Result<HubWritten> {
+    if !check && !hub_dir.is_dir() {
+        std::fs::create_dir_all(hub_dir).with_context(|| format!("cannot make {}", hub_dir.display()))?;
+    }
+    // Spelt the way the platform spells it, the way import records it.
+    let hub_dir = dunce::canonicalize(hub_dir).unwrap_or_else(|_| hub_dir.to_path_buf());
+    let present = hub_dir.is_dir();
+
+    // The handwritten texts are planned always and written only when asked
+    // for. Off by default because they are a cache and nothing reads them
+    // back: the record is where they live now, and writing them every time
+    // would put more files in every diff of every hub for no one's benefit.
+    // Planned all the same, so that one already saying what the record says
+    // is noted as such - an edit to it later is then told apart from a file
+    // of unknown history.
+    let planned = hubfile::planned(db, project, true, present.then_some(hub_dir.as_path()))?;
+    if !check {
+        db.set_hub_path(project.id, &hub_dir)?;
+    }
+
+    let mut written = Vec::new();
+    let mut diffs: Vec<(String, Vec<String>)> = Vec::new();
+    for file in &planned {
+        let path = hub_dir.join(&file.name);
+        let before = std::fs::read_to_string(&path).unwrap_or_default();
+        if !file.generated && !docs {
+            if !check && !before.is_empty() && db::lf(&before) == file.text.as_str() {
+                hubfile::account(db, project.id, file, &before)?;
+            }
+            continue;
+        }
+        // Written in the ending the file already used. Every hub of this
+        // line is CRLF, and a generated file in LF would differ from its
+        // source on every line - which is not a diff anybody reads.
+        let text = export::with_line_ending(&file.text, export::line_ending(&before));
+        let unchanged = before == text;
+        if !check {
+            hubfile::write(db, project.id, &hub_dir, file)?;
+        }
+        // What would change, not just which file: the question `--check`
+        // answers is whether a hand-written line is about to be lost.
+        if check && !unchanged {
+            diffs.push((file.name.clone(), export::diff(&before, &text, 2)));
+        }
+        written.push(export::Written {
+            file: file.name.clone(),
+            bytes: text.len(),
+            unchanged,
+        });
+    }
+    // The files the record keeps whole, byte for byte, with the texts: a
+    // cache like them, and asked for the same way.
+    if docs {
+        for attachment in db.attachments(project.id)? {
+            let unchanged = hubfile::attachment_state(&attachment, &hub_dir) == hubfile::State::Current;
+            if !check && !unchanged {
+                hubfile::write_attachment(db, project.id, &hub_dir, &attachment)?;
+            }
+            written.push(export::Written {
+                file: attachment.path,
+                bytes: usize::try_from(attachment.bytes).unwrap_or(usize::MAX),
+                unchanged,
+            });
+        }
+    }
+    Ok(HubWritten { dir: hub_dir, written, diffs })
+}
+
+/// Writes every hub the record knows, each where the record says it lies.
+///
+/// What makes the hubs a cache rather than a second copy: deleted, every
+/// one comes back from the record - the retired projects' and the line's
+/// own place among them - and the directory of one that is gone is made.
+fn export_all(check: bool, adopt: bool, docs: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let projects: Vec<db::Project> = db.all_projects()?.into_iter().filter(|p| p.hub_path.is_some()).collect();
+    // Refused for every hub before any is written: half a line written and
+    // half refused is a state nobody asked for.
+    if !adopt && !check {
+        let mut by_hand = Vec::new();
+        for project in &projects {
+            let dir = recorded_hub(project)?;
+            for file in hubfile::by_hand(&db, project, &dir)? {
+                by_hand.push(format!("{}: {file}", project.name));
+            }
+        }
+        if !by_hand.is_empty() {
+            bail!(
+                "these files were written by hand and the record does not own them yet: {}.
+Check what would change with `--check`, then hand them over with `--adopt`.",
+                by_hand.join("; ")
+            );
+        }
+    }
+    // Which were gone, asked before any is written: one hub lies inside
+    // another - every project's inside the line's own place - and making
+    // the first would make the second look as if it had been there.
+    let mut planned = Vec::new();
+    for project in &projects {
+        let dir = recorded_hub(project)?;
+        let gone = !dir.is_dir();
+        planned.push((project, dir, gone));
+    }
+    let mut hubs = Vec::new();
+    for (project, dir, gone) in planned {
+        let out = write_hub(&db, project, &dir, check, docs)?;
+        hubs.push((project.name.clone(), out, gone));
+    }
+
+    if json {
+        let hubs: Vec<serde_json::Value> = hubs
+            .iter()
+            .map(|(name, out, gone)| {
+                serde_json::json!({
+                    "project": name,
+                    "hub": out.dir,
+                    "made": *gone && !check,
+                    "files": out.written,
+                })
+            })
+            .collect();
+        return print_json(&serde_json::json!({ "hubs": hubs }));
+    }
+    let width = hubs.iter().map(|(name, _, _)| name.len()).max().unwrap_or(0).max(8);
+    let mut changed_total = 0;
+    for (name, out, gone) in &hubs {
+        let changed = out.written.iter().filter(|w| !w.unchanged).count();
+        changed_total += changed;
+        let what = match (changed, check) {
+            (0, _) => "already what the record says".to_string(),
+            (n, true) => format!("{} of {} would change", n, plural(out.written.len(), "file", "files")),
+            (n, false) => format!("wrote {} of {}", n, plural(out.written.len(), "file", "files")),
+        };
+        let made = match (gone, check) {
+            (true, true) => " - the directory is gone and would be made",
+            (true, false) => " - the directory was gone and is made again",
+            _ => "",
+        };
+        println!("  {name:<width$} {what}{made}");
+    }
+    match (changed_total, check) {
+        (0, _) => println!("\nEvery hub is already what the record says."),
+        (n, true) => println!("\n{} would change across {}.", plural(n, "file", "files"), plural(hubs.len(), "hub", "hubs")),
+        (n, false) => println!("\nWrote {} across {}.", plural(n, "file", "files"), plural(hubs.len(), "hub", "hubs")),
+    }
+    Ok(())
+}
+
 /// One file of a hub that `doctor --hubs` has something to say about.
 struct Drift {
     project: String,
@@ -7028,6 +7256,16 @@ struct HubDrift {
     drift: Vec<Drift>,
     /// The files that are only behind it, by project and name.
     behind: Vec<(String, String)>,
+    /// The directory the profile keeps its hubs in, when it names one.
+    root: Option<PathBuf>,
+}
+
+impl HubDrift {
+    /// The files deleting the hubs would lose: everything named, except a
+    /// project with no hub to lose or whose hub is gone already.
+    fn at_stake(&self) -> usize {
+        self.drift.iter().filter(|d| !matches!(d.state, "no-hub" | "hub-missing")).count()
+    }
 }
 
 /// How the hubs stand against the record: the files it cannot vouch for,
@@ -7043,10 +7281,14 @@ struct HubDrift {
 fn hub_drift(db: &Db) -> Result<HubDrift> {
     let mut drift = Vec::new();
     let mut behind = Vec::new();
-    for project in db.projects()? {
-        // A place the record keeps for itself has no hub to vouch for. A
-        // folder does: it is worked on like any product.
-        if !project.kind.has_a_place() {
+    // Every project with a hub, the retired among them: a retired project's
+    // hub is as much in the vault as a working one's, and it was the one
+    // nobody checked.
+    for project in db.all_projects()? {
+        // A place the record keeps for itself has no hub to vouch for -
+        // until it has one: the line's own place keeps its files in the
+        // directory the hubs lie in. A folder is worked on like any product.
+        if !project.kind.has_a_place() && project.hub_path.is_none() {
             continue;
         }
         let mut say = |file: String, state: &'static str, why: &'static str| {
@@ -7091,8 +7333,68 @@ fn hub_drift(db: &Db) -> Result<HubDrift> {
         if !by_hand.is_empty() {
             say(by_hand.join(", "), "by-hand", "kept by hand; `rigger export --adopt` hands it over");
         }
+        // A file the record keeps whole that differs from the one there:
+        // one of the two is newer, and only a person knows which.
+        for attachment in db.attachments(project.id)? {
+            if hubfile::attachment_state(&attachment, &dir) == hubfile::State::Edited {
+                say(
+                    attachment.path,
+                    "edited",
+                    "differs from the file the record keeps; `rigger import` takes it in, `rigger export --docs` puts the record's back",
+                );
+            }
+        }
+        // And what the record does not hold at all: deleting the hub would
+        // lose exactly these.
+        for missing in hubfile::not_held(db, &project, &dir)? {
+            say(missing.file, missing.state, missing.why);
+        }
     }
-    Ok(HubDrift { drift, behind })
+
+    // The directory the hubs lie in holds files of the line's own - its
+    // marks, its research, its calendar - and until the line's place is
+    // given that directory as its hub, those are in nobody's record.
+    let root = profile::Config::load()?
+        .current()?
+        .1
+        .hubs
+        .clone()
+        .filter(|dir| dir.is_dir())
+        .map(|dir| hub::canonical(&dir));
+    if let Some(root) = &root {
+        let projects = db.all_projects()?;
+        let line_has_it = projects
+            .iter()
+            .any(|p| p.hub_path.as_deref().is_some_and(|h| hub::canonical(Path::new(h)) == *root));
+        if !line_has_it {
+            let line = profile::Config::load()?.current_name();
+            let recorded: Vec<PathBuf> = projects
+                .iter()
+                .filter_map(|p| p.hub_path.as_deref())
+                .map(|h| hub::canonical(Path::new(h)))
+                .filter(|h| h != root && h.starts_with(root))
+                .collect();
+            let strays = hubfile::unrecorded_hubs(root, &recorded);
+            let skip: Vec<PathBuf> = recorded.iter().chain(&strays).cloned().collect();
+            for rel in hub::files(root, &skip) {
+                drift.push(Drift {
+                    project: line.clone(),
+                    file: rel,
+                    state: "not-held",
+                    why: "the line's own, in no project's hub; `rigger import <profile>` takes it in",
+                });
+            }
+            for stray in strays {
+                drift.push(Drift {
+                    project: line.clone(),
+                    file: stray.strip_prefix(root).unwrap_or(&stray).to_string_lossy().replace('\\', "/"),
+                    state: "unrecorded-hub",
+                    why: "a hub no project of the record names; `rigger import <project> --hub <dir>` reads it",
+                });
+            }
+        }
+    }
+    Ok(HubDrift { drift, behind, root })
 }
 
 /// Hubs whose wishes file still holds something.
@@ -7106,7 +7408,12 @@ fn hub_drift(db: &Db) -> Result<HubDrift> {
 /// Cheap enough to run unasked: one small file per project with a hub.
 fn hubs_with_wishes(db: &Db) -> Result<Vec<(String, usize)>> {
     let mut out = Vec::new();
-    for project in db.projects()? {
+    for project in db.all_projects()? {
+        // The line's own place has no wishes file: a file of that name in
+        // the directory every hub lies in is a text of its own.
+        if !hubfile::has_record_files(&project) {
+            continue;
+        }
         let Some(hub) = &project.hub_path else { continue };
         let path = Path::new(hub).join(hub::WISHES_FILE);
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -7188,6 +7495,7 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
         true => Some(hub_drift(&db)?),
         false => None,
     };
+    let waiting = hubs_with_wishes(&db)?;
 
     if json {
         println!(
@@ -7226,6 +7534,13 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                     )?,
                     None => serde_json::Value::Null,
                 },
+                "hubs_verdict": match &drift {
+                    Some(d) => serde_json::json!({
+                        "root": d.root,
+                        "loses_nothing": d.at_stake() == 0 && waiting.is_empty(),
+                    }),
+                    None => serde_json::Value::Null,
+                },
                 "closed_without_a_tag": mismatches
                     .iter()
                     .map(|(project, version)| serde_json::json!({ "project": project, "version": version }))
@@ -7235,7 +7550,7 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                     .map(|(project, closed, tagged)| serde_json::json!({ "project": project, "closed": closed, "tagged": tagged }))
                     .collect::<Vec<_>>(),
                 "never_synced": unsynced,
-                "wishes_left_in_the_hub": hubs_with_wishes(&db)?
+                "wishes_left_in_the_hub": waiting
                     .iter()
                     .map(|(project, count)| serde_json::json!({ "project": project, "wishes": count }))
                     .collect::<Vec<_>>(),
@@ -7312,7 +7627,6 @@ the plan and the tags look one step apart ({}):",
         println!("  the tags may name the stage before the one the plan gave them; renumber the plan, or tag the stage");
     }
 
-    let waiting = hubs_with_wishes(&db)?;
     if !waiting.is_empty() {
         println!();
         println!("wishes left in {} ({}):", hub::WISHES_FILE, waiting.len());
@@ -7324,22 +7638,48 @@ the plan and the tags look one step apart ({}):",
 
     // A file somebody wrote in has stopped being a view of the record, and
     // the next export would overwrite the edit without saying so.
-    if let Some(HubDrift { drift, behind }) = &drift {
+    if let Some(found) = &drift {
+        let HubDrift { drift, behind, root } = found;
+        // What lives only in a hub is named by project, a line each: before
+        // the line's own place was read, its research alone was 191 files,
+        // and a line per file buried every edit beside them.
+        let (only_here, vouch): (Vec<&Drift>, Vec<&Drift>) = drift.iter().partition(|d| d.state == "not-held");
         println!();
-        match (drift.is_empty(), behind.is_empty()) {
+        // "Every file says what the record says" only when nothing at all is
+        // named below it: a file only the hub has does not say it.
+        match (vouch.is_empty(), behind.is_empty() && only_here.is_empty()) {
             (true, true) => println!("hubs: every file says what the record says"),
             (true, false) => println!("hubs: nothing written in by hand"),
             _ => {
-                println!("hubs the record cannot vouch for ({}):", drift.len());
-                for d in drift {
+                println!("hubs the record cannot vouch for ({}):", vouch.len());
+                for d in &vouch {
                     println!("  {:<12} {:<14} {}", d.project, d.file, d.why);
                 }
                 // The advice only fits an edit; a hub the record has never
                 // seen needs the other sentence.
-                if drift.iter().any(|d| d.state == "edited") {
+                if vouch.iter().any(|d| d.state == "edited") {
                     println!("  edited: `rigger import` takes the edit into the record; `rigger export` discards it");
                 }
             }
+        }
+        if !only_here.is_empty() {
+            let mut projects: Vec<&str> = only_here.iter().map(|d| d.project.as_str()).collect();
+            projects.dedup();
+            println!(
+                "only in the hubs, not in the record ({} in {}):",
+                plural(only_here.len(), "file", "files"),
+                plural(projects.len(), "hub", "hubs")
+            );
+            for project in &projects {
+                let files: Vec<&str> = only_here.iter().filter(|d| d.project == *project).map(|d| d.file.as_str()).collect();
+                let shown: Vec<&str> = files.iter().take(3).copied().collect();
+                let more = match files.len().saturating_sub(shown.len()) {
+                    0 => String::new(),
+                    n => format!(" and {n} more"),
+                };
+                println!("  {project:<12} {}{more}", shown.join(", "));
+            }
+            println!("  `rigger import <project>` takes them in; `rigger doctor --hubs --json` names every one");
         }
         // Behind is not a fault: the record wrote these and has moved on.
         // Named by project, in one line each, because the list is long on
@@ -7354,6 +7694,16 @@ the plan and the tags look one step apart ({}):",
                 projects.join(", ")
             );
             println!("  nothing in them is lost: the next session end, or `rigger export`, writes them again");
+        }
+        // The question the whole check exists to answer, in one line: can
+        // the hubs go. Behind loses nothing; what is named above would.
+        let place = match root {
+            Some(root) => root.display().to_string(),
+            None => "the hubs".to_string(),
+        };
+        match found.at_stake() + waiting.len() {
+            0 => println!("{place}: the record holds every file - deleting it loses nothing; `rigger export --all --docs` writes it back"),
+            _ => println!("{place}: deleting it would lose what is named above"),
         }
     }
     Ok(())

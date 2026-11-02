@@ -596,6 +596,34 @@ const MIGRATIONS: &[&str] = &[
     UPDATE sessions SET notes = replace(notes, char(13) || char(10), char(10)) WHERE instr(notes, char(13)) > 0;
     UPDATE events SET body = replace(body, char(13) || char(10), char(10)) WHERE instr(body, char(13)) > 0;
     ",
+    // v31: the files of a hub that are not texts - kept byte for byte.
+    //
+    // The record took in every markdown file of a hub by v0.31.0, and a hub
+    // still held what lived nowhere else: voice samples beside a research
+    // note, the raw scrape a seed list was cut from, the scripts an import
+    // was run with, the queries a benchmark was measured on. Moving them
+    // into the repositories was the other way out, and the wrong one: they
+    // are the owner's material - private by the rule of the line - and a
+    // retired project has no repository to move them into.
+    //
+    // The bytes rather than a path to them: a record that points at a file
+    // in the vault is a record that loses it with the vault. The size is
+    // not a column - `length(bytes)` is the size, and a second copy of it
+    // is a second truth. The digest is one: it is what tells a file on disk
+    // that says what the record holds from one somebody has changed, and
+    // reading every blob to answer that would read the whole record.
+    "
+    CREATE TABLE attachments (
+        id         INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        path       TEXT NOT NULL,
+        bytes      BLOB NOT NULL,
+        digest     TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (project_id, path)
+    );
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -660,6 +688,20 @@ pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 pub struct Db {
     conn: Connection,
     path: PathBuf,
+}
+
+/// A file of a hub that is not a text, as the record keeps it - its bytes
+/// are read apart, when the file is written back out.
+#[derive(Debug, Clone, Serialize)]
+pub struct Attachment {
+    /// Where it lies in the hub, with `/` between directories.
+    pub path: String,
+    /// Its size.
+    pub bytes: u64,
+    #[serde(skip)]
+    pub digest: String,
+    /// When the record last took it in.
+    pub updated_at: String,
 }
 
 /// A handwritten text of a project: its vision, its rituals, a research
@@ -1503,6 +1545,94 @@ impl Db {
         self.conn
             .execute("UPDATE documents SET source_file = ?1 WHERE id = ?2", params![source_file, id])?;
         Ok(())
+    }
+
+    /// Every file a project's hub keeps that is not a text, by path, without
+    /// the bytes: a listing is for finding one, and the bytes of a hub can
+    /// run to megabytes.
+    pub fn attachments(&self, project_id: i64) -> Result<Vec<Attachment>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, length(bytes), digest, updated_at FROM attachments WHERE project_id = ?1 ORDER BY path")?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(Attachment {
+                path: r.get(0)?,
+                bytes: r.get::<_, i64>(1)?.unsigned_abs(),
+                digest: r.get(2)?,
+                updated_at: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The bytes of one file the record keeps for a hub.
+    pub fn attachment_bytes(&self, project_id: i64, path: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT bytes FROM attachments WHERE project_id = ?1 AND path = ?2",
+                params![project_id, path],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Keeps a hub's file, or replaces the one kept at that path when its
+    /// bytes changed. Says which, so a second import of an unchanged hub
+    /// reports nothing.
+    ///
+    /// By the digest rather than by the bytes: the digest is how the record
+    /// knows what it holds without reading it back.
+    pub fn write_attachment(&self, project_id: i64, path: &str, bytes: &[u8], digest: &str) -> Result<Change> {
+        let held: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT digest FROM attachments WHERE project_id = ?1 AND path = ?2",
+                params![project_id, path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let at = now();
+        match held {
+            Some(digest_held) if digest_held == digest => Ok(Change::Unchanged),
+            Some(_) => {
+                self.conn.execute(
+                    "UPDATE attachments SET bytes = ?3, digest = ?4, updated_at = ?5 WHERE project_id = ?1 AND path = ?2",
+                    params![project_id, path, bytes, digest, at],
+                )?;
+                Ok(Change::Updated)
+            }
+            None => {
+                self.conn.execute(
+                    "INSERT INTO attachments (project_id, path, bytes, digest, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    params![project_id, path, bytes, digest, at],
+                )?;
+                Ok(Change::Added)
+            }
+        }
+    }
+
+    pub fn delete_attachment(&self, project_id: i64, path: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM attachments WHERE project_id = ?1 AND path = ?2", params![project_id, path])?
+            > 0)
+    }
+
+    /// Whether the record holds this decision: on this moment, with this
+    /// text. How an import found one already recorded, asked from outside
+    /// it - `doctor` vouches for a decisions journal only when every entry
+    /// in it is in the record.
+    pub fn holds_decision(&self, project_id: i64, at: &str, body: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM events WHERE project_id = ?1 AND kind = 'decision' AND created_at = ?2 AND body = ?3 LIMIT 1",
+                params![project_id, at, &*lf(body)],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     pub fn delete_document(&self, project_id: i64, slug: &str) -> Result<bool> {

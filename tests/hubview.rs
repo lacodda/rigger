@@ -438,6 +438,7 @@ fn the_migration_takes_the_carriage_returns_out_of_what_the_record_holds() {
     // and no notes on hub files.
     conn.execute_batch(
         "DROP TABLE hub_files;
+         DROP TABLE attachments;
          UPDATE documents SET body = 'one' || char(13) || char(10) || 'two';
          UPDATE events SET body = 'three' || char(13) || char(10) || 'four' WHERE kind = 'question';
          UPDATE sessions SET notes = 'five' || char(13) || char(10) || 'six' WHERE notes IS NOT NULL;

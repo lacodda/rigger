@@ -153,6 +153,7 @@ fn an_open_task_from_before_reads_as_new() {
          ALTER TABLE projects DROP COLUMN retired_by; ALTER TABLE projects DROP COLUMN retired_at;
          ALTER TABLE projects DROP COLUMN about;
          DROP TABLE hub_files;
+         DROP TABLE attachments;
          PRAGMA user_version = 16;",
     )
     .unwrap();

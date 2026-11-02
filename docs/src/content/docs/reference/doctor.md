@@ -4,7 +4,7 @@ description: Where the database is and what it holds.
 ---
 
 ```
-rigger doctor [--json]
+rigger doctor [--hubs] [--json]
 ```
 
 Prints the [profile](/rigger/reference/profile/) in use, the database path, its schema version and how many records of each kind it holds. Before `init` it says so instead of failing, so `doctor` is always safe to run first.
@@ -65,12 +65,15 @@ Before `init`, only `profile`, `database` and `initialised` (false) are printed.
 | `hubs[]` | object | One such hub file. |
 | `hubs[].project` | string | The project's name. |
 | `hubs[].file` | string | The file, several joined by `, ` when kept by hand, or `-` when no hub is known. |
-| `hubs[].state` | string | `edited` (written in since the record wrote it), `unaccounted` (differs, and the record has no note of writing it), `by-hand` (never handed over), `no-hub` or `hub-missing`. |
+| `hubs[].state` | string | `edited` (written in since the record wrote it, or a kept file whose bytes differ), `unaccounted` (differs, and the record has no note of writing it), `by-hand` (never handed over), `not-held` (lives only in the hub), `too-large` (larger than the record keeps), `unrecorded-hub` (a hub no project names), `no-hub` or `hub-missing`. |
 | `hubs[].why` | string | The reason the file cannot be vouched for, and what to do about it. |
 | `hubs_behind` | array or null | Hub files the record wrote and has moved on from since - nothing in them is lost; null unless `--hubs` is given. |
 | `hubs_behind[]` | object | One such file. |
 | `hubs_behind[].project` | string | The project's name. |
 | `hubs_behind[].file` | string | The file, relative to the hub. |
+| `hubs_verdict` | object or null | Whether deleting the hubs would lose anything; null unless `--hubs` is given. |
+| `hubs_verdict.root` | string or null | The directory the profile keeps its hubs in; null when it names none. |
+| `hubs_verdict.loses_nothing` | boolean | True when the record holds every file of every hub - nothing above at stake, no wish left in a wishes file. |
 | `closed_without_a_tag` | array | Versions the plan closed that no tag confirms. |
 | `closed_without_a_tag[]` | object | One such version. |
 | `closed_without_a_tag[].project` | string | The project's name. |
@@ -200,6 +203,42 @@ A hub still kept by hand is named as such, with the files that are:
 ```
 
 It is the one thing "every project through rigger" has left to do, so the list says how far along a line is rather than staying quiet about the files it skipped.
+
+### Can the hubs go
+
+The last line of `--hubs` answers the question the check exists for: would deleting the directory of hubs lose anything. Since v0.33.0 it looks at every file there, not only the files the record writes - the hubs of retired projects, the [files that are not texts](/rigger/reference/doc/#the-files-that-are-not-texts), and the [line's own](/rigger/reference/import/#the-lines-own-place) files beside the hubs:
+
+```console
+$ rigger doctor --hubs
+
+hubs: nothing written in by hand
+only in the hubs, not in the record (7 files in 2 hubs):
+  sample       Исследования/bench/queries.json
+  line         brand/README.md, brand/svg/mark.svg, _Исследования/2026-09-01 — Сверка.md and 3 more
+  `rigger import <project>` takes them in; `rigger doctor --hubs --json` names every one
+C:\dev\hubs: deleting it would lose what is named above
+```
+
+Once each is taken in:
+
+```console
+$ rigger doctor --hubs
+
+hubs: every file says what the record says
+C:\dev\hubs: the record holds every file - deleting it loses nothing; `rigger export --all --docs` writes it back
+```
+
+Each file counts once, by what it is:
+
+| A file | is held when |
+| --- | --- |
+| a generated file - plan, changelog, diary, README | it is what the record wrote, or the record has moved on past it (behind loses nothing) |
+| a handwritten text | it is a document the record holds, saying the same |
+| `Решения.md` | every entry in it is a decision the record holds, and its preamble is the `decisions` document |
+| `Хотелки.md` | every wish in it is in the record |
+| any other file | the record keeps it, with the same bytes |
+
+What is not held is named: `not-held` lives only in the hub, `too-large` is more than the record keeps (64 MB), and `unrecorded-hub` is a directory with a plan or a changelog that no project names - somebody's hub, not the line's text. A project with no hub, or whose hub is already gone, has nothing at stake and does not count. Under `--json` the answer is `hubs_verdict`.
 
 ## What it leaves out
 

@@ -39,6 +39,7 @@ Neighbours are asking for:
 Written down:
   vision    Vision of sample                   2026-09-12  rigger doc show sample vision
   rituals   Rituals of sample                  2026-09-15  rigger doc show sample rituals
+  files     3 files kept, 412.6 KB                         rigger doc files sample
 
 Next step
   Finish the screen, then the registry.
@@ -94,6 +95,9 @@ The screen as data: the same facts, without the text form's sentences.
 | `documents[].slug` | string | The name `rigger doc show` takes. |
 | `documents[].title` | string | The document's title. |
 | `documents[].updated_at` | string | When it was last written, an RFC 3339 UTC moment. |
+| `files` | object | The [files its hub keeps that are not texts](/rigger/reference/doc/#the-files-that-are-not-texts), as the record holds them. |
+| `files.count` | integer | How many. |
+| `files.bytes` | integer | Their size together. |
 | `questions` | integer | How many questions wait for the owner. |
 | `wishes` | integer | How many wishes are unsorted. |
 | `links` | array | What the project is tied to, read from its own side. |

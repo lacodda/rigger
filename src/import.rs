@@ -34,6 +34,12 @@ pub struct Report {
     /// and every other `.md` of the hub.
     pub documents_added: u32,
     pub documents_updated: u32,
+    /// The files of the hub that are not texts, kept byte for byte.
+    pub files_added: u32,
+    pub files_updated: u32,
+    /// Whether only the texts and files were read: a retired project, or
+    /// the line's own place - neither has a plan for a hub to speak for.
+    pub texts_only: bool,
     /// Generated files that were not read back, because they are still
     /// exactly what the record last wrote: reading them could only take the
     /// record back to how it stood at that export.
@@ -45,6 +51,8 @@ impl Report {
     pub fn changed(&self) -> bool {
         self.documents_added
             + self.documents_updated
+            + self.files_added
+            + self.files_updated
             + self.versions_added
             + self.versions_updated
             + self.tasks_added
@@ -176,13 +184,7 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
 
     for decision in &hub.decisions {
         // Decisions are dated by day in the hub; the record keeps timestamps.
-        let at = format!("{}T00:00:00Z", decision.date);
-        let body = if decision.body.is_empty() {
-            decision.title.clone()
-        } else {
-            format!("{}\n\n{}", decision.title, decision.body)
-        };
-        if db.record_event(project_id, "decision", &body, &at, "owner")? == Change::Added {
+        if db.record_event(project_id, "decision", &decision.event_body(), &decision.at(), "owner")? == Change::Added {
             report.decisions_added += 1;
         }
     }
@@ -315,6 +317,17 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         if document.kind != "decisions" {
             db.set_hub_file_digest(project_id, &document.source_file, &document.digest)?;
         }
+    }
+
+    // Every other file, as the bytes it is. Never removed because the hub
+    // no longer has it: nothing an import reads deletes, and a file gone
+    // from the hub is still one the record can put back.
+    for file in &hub.attachments {
+        tally(
+            db.write_attachment(project_id, &file.path, &file.bytes, &file.digest)?,
+            &mut report.files_added,
+            &mut report.files_updated,
+        );
     }
 
     Ok(report)

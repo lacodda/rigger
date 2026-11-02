@@ -8,7 +8,8 @@ rigger doc list <project> [--kind KIND] [--json]
 rigger doc show <project> <slug> [--json]
 rigger doc add  <project> <title> [--kind KIND] [--slug SLUG] [--body TEXT|-]
 rigger doc edit <project> <slug> [--title TITLE] [--body TEXT|-]
-rigger doc remove <project> <slug>
+rigger doc remove <project> <slug|file>
+rigger doc files <project> [--json]
 rigger doc template <kind> [--write]
 ```
 
@@ -96,6 +97,23 @@ Leaving the editor without writing anything makes no document. On `edit`, emptyi
 
 `--title` on its own renames a document without opening an editor. A rewrite keeps the day the document was started; only its `updated_at` moves.
 
+## The files that are not texts
+
+A hub keeps more than prose: voice samples beside the note that compares them, the raw scrape a seed list was cut from, the scripts an import was run with, the queries a benchmark was measured on. [`import`](/rigger/reference/import/#the-files-that-are-not-texts) keeps each of them in the record, byte for byte, at the path it lay at - since v0.33.0, so that deleting a hub loses nothing. `doc files` lists them:
+
+```console
+$ rigger doc files sample
+3 files, 412.6 KB:
+  Исследования/2026-09-23 — Голоса/one.wav     140.0 KB  2026-11-02
+  Исследования/2026-09-23 — Голоса/two.wav     272.4 KB  2026-11-02
+  Исследования/bench/queries.json              212 bytes  2026-11-02
+`rigger export sample --docs` writes them back into the hub
+```
+
+They are not documents: there is nothing in a sound file to read, show or search, so they have no slug, no kind and no body. [`export --docs`](/rigger/reference/export/#the-handwritten-texts) writes them back with the texts, and `doc remove` takes one out of the record by its path - while the hub still has the file, the next import takes it in again, so remove it there too. A document of the same name always wins: a path is tried only when no document answers.
+
+A file larger than 64 MB is not kept - one stray video would make every backup copy of the record that much larger. The import names it, and [`doctor --hubs`](/rigger/reference/doctor/#can-the-hubs-go) counts it among what deleting the hub would lose.
+
 ### Which editor
 
 In order: `RIGGER_EDITOR`, then `VISUAL` or `EDITOR`, then [scheda](https://github.com/lacodda/scheda) when it is installed, then the system default (`notepad` on Windows, `vi` elsewhere).
@@ -151,15 +169,28 @@ The text is edited through a file in a directory of that rigger process's own, u
 | `document.updated_at` | string | The moment it was last written, in RFC 3339 UTC. |
 | `document.source_file` | string or null | The hub file the text was read from, when it came from one; null for a document written here. |
 
-`doc remove` says what it removed.
+`doc remove` says what it removed: a document by its kind and address, a kept file by its path.
 
 <!-- json: doc remove -->
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `removed` | object | The document that was removed. |
+| `removed` | object | What was removed. |
 | `removed.project` | string | The name of the project it belonged to. |
-| `removed.kind` | string | The kind it had. |
-| `removed.slug` | string | The address it had. |
+| `removed.kind` | string | The kind the document had; absent for a file. |
+| `removed.slug` | string | The address the document had; absent for a file. |
+| `removed.file` | string | The path the kept file had in the hub; absent for a document. |
+
+`doc files --json` lists the files the record keeps for the project's hub, without their bytes.
+
+<!-- json: doc files -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project's name. |
+| `files` | array | The kept files, sorted by path. |
+| `files[]` | object | One file. |
+| `files[].path` | string | Where it lies in the hub, with `/` between directories. |
+| `files[].bytes` | integer | Its size. |
+| `files[].updated_at` | string | When the record last took it in, in RFC 3339 UTC. |
 
 `doc template --json` prints the skeleton, and where it came from or went to.
 
@@ -175,9 +206,9 @@ The text is edited through a file in a directory of that rigger process's own, u
 
 The record holds **the work on a product**: its projects, versions, tasks, events and questions, and the handwritten texts about how the product is made - the vision, the rituals, the preamble of the decisions journal, the research notes. Once they are here the hub is an export, and there is nothing in it left to edit by hand.
 
-What stays outside is **the material itself**. For this line that means a notes vault keeps the songs, lyrics, artwork and channel analytics, the stories, the brand register and everything belonging to a content project - things read with the eye, linked to each other, and shaped by no schema.
+What stays outside is **the material itself**. For this line that means a notes vault keeps the songs, lyrics, artwork and channel analytics, the stories and everything belonging to a content project - things read with the eye, linked to each other, and shaped by no schema - outside the directory the hubs lie in.
 
-The test is short: a file that describes *how a product is run* belongs in the record; a file that *is the work* belongs where the work lives.
+The test is short: a file that describes *how a product is run* belongs in the record; a file that *is the work* belongs where the work lives. And whatever lies in the directory of the hubs is the record's, whichever it is: since v0.33.0 the files there outside every project's hub - a register of the marks, the line's own research, a calendar - are the texts and files of the line's own place, so that the directory can be deleted and written back whole (see [`import`](/rigger/reference/import/#the-lines-own-place)).
 
 ## Related
 

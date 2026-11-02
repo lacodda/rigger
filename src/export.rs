@@ -114,11 +114,18 @@ pub fn diff(before: &str, after: &str, context: usize) -> Vec<String> {
 /// line endings are taken out first: a sync tool or an editor converting
 /// them has not changed what the file says.
 pub fn digest(text: &str) -> String {
+    digest_bytes(crate::db::lf(text).as_bytes())
+}
+
+/// The same digest over bytes as they are: a file of a hub that is not a
+/// text has no line endings to take out, and taking them out of a sound
+/// file or a scrape would say two different files were one.
+pub fn digest_bytes(bytes: &[u8]) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = OFFSET;
-    for byte in crate::db::lf(text).bytes() {
-        hash ^= u64::from(byte);
+    for byte in bytes {
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(PRIME);
     }
     format!("{hash:016x}")

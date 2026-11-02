@@ -71,13 +71,18 @@ pub enum State {
 /// the text, and the next import took that file in as a second document.
 pub fn planned(db: &Db, project: &db::Project, documents: bool, dir: Option<&Path>) -> Result<Vec<Planned>> {
     let mut out = Vec::new();
-    for name in export::GENERATED {
-        out.push(Planned {
-            name: name.to_string(),
-            text: generate(db, project, name)?,
-            generated: true,
-            unclaimed: None,
-        });
+    // The line's own place has no plan, changelog, diary or state block:
+    // its hub is the directory every project's hub lies in, and writing a
+    // plan of nothing into it would put four empty files above them all.
+    if has_record_files(project) {
+        for name in export::GENERATED {
+            out.push(Planned {
+                name: name.to_string(),
+                text: generate(db, project, name)?,
+                generated: true,
+                unclaimed: None,
+            });
+        }
     }
     if !documents {
         return Ok(out);
@@ -88,9 +93,9 @@ pub fn planned(db: &Db, project: &db::Project, documents: bool, dir: Option<&Pat
     // text has none - what every other markdown file of the hub says.
     let mut claimed: Vec<String> = docs.iter().filter(|d| known(d)).filter_map(|d| d.source_file.clone()).collect();
     let loose: Vec<(String, String)> = match dir {
-        Some(dir) if docs.iter().any(|d| !known(d)) => hub::markdown_files(dir)
+        Some(dir) if docs.iter().any(|d| !known(d)) => hub::markdown_files(dir, &skip_inside(db, project, dir)?)
             .into_iter()
-            .filter(|rel| !hub::FILES.contains(&rel.as_str()) && rel != hub::WISHES_FILE)
+            .filter(|rel| !has_record_files(project) || !hub::is_reserved(rel))
             .filter_map(|rel| {
                 let text = std::fs::read_to_string(dir.join(&rel)).ok()?;
                 (!export::is_generated(&text)).then(|| (rel, db::lf(text.trim_end()).into_owned()))
@@ -252,6 +257,216 @@ fn claim(db: &Db, planned: &Planned) -> Result<()> {
 pub fn dir_of(project: &db::Project) -> Option<PathBuf> {
     let dir = PathBuf::from(project.hub_path.as_deref()?);
     dir.is_dir().then_some(dir)
+}
+
+/// The generated files of a hub that somebody keeps by hand and that an
+/// export would change: what it refuses to overwrite until `--adopt`.
+///
+/// A file a person has been writing in is not overwritten because a
+/// command was typed. The mark is what says the record owns it, and only an
+/// explicit `--adopt` puts the mark there the first time. A document
+/// carries no mark - it is the owner's prose written back out - so it is
+/// never one of these.
+pub fn by_hand(db: &Db, project: &db::Project, dir: &Path) -> Result<Vec<String>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for file in planned(db, project, false, Some(dir))? {
+        let Ok(before) = std::fs::read_to_string(dir.join(&file.name)) else {
+            continue;
+        };
+        let unchanged = before == export::with_line_ending(&file.text, export::line_ending(&before));
+        if !unchanged && !before.is_empty() && !export::is_generated(&before) {
+            out.push(file.name);
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a project's hub has the parts of the record in it - a plan, a
+/// changelog, a diary, a state block. Every project has, the retired among
+/// them; the line's own place has not: it plans nothing, and its hub is
+/// the directory the projects' hubs lie in.
+pub fn has_record_files(project: &db::Project) -> bool {
+    project.kind != db::Kind::Service
+}
+
+/// How a project's hub is read: whole, or its texts and files alone, with
+/// the hubs of other projects inside it left out.
+///
+/// Texts alone for a retired project - its history is closed, and what is
+/// left in its hub to take is what it wrote - and for the line's own
+/// place, which has no plan to read and whose every file is a text or a
+/// file whatever it is called.
+pub fn reading_for(db: &Db, project: &db::Project, dir: &Path) -> Result<hub::Reading> {
+    Ok(hub::Reading {
+        texts_only: project.retired_at.is_some() || !has_record_files(project),
+        all_texts: !has_record_files(project),
+        skip: skip_inside(db, project, dir)?,
+    })
+}
+
+/// The directories under a hub that are not part of it: every hub of
+/// another project that lies inside it, and - in the line's own place -
+/// every directory at its top that holds a plan or a changelog, which is
+/// the hub of a project the record does not know yet.
+///
+/// The second because the line's place takes in whatever lies in it, and
+/// a project's hub the record has not been told about would otherwise be
+/// filed whole under the line: its plan a text of no kind, its sittings
+/// lost to the project they belong to.
+pub fn skip_inside(db: &Db, project: &db::Project, dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = recorded_inside(db, project, dir)?;
+    if !has_record_files(project) {
+        let strays = unrecorded_hubs(&hub::canonical(dir), &out);
+        out.extend(strays);
+    }
+    Ok(out)
+}
+
+/// The hubs of other projects that lie inside `dir`.
+pub fn recorded_inside(db: &Db, project: &db::Project, dir: &Path) -> Result<Vec<PathBuf>> {
+    let dir = hub::canonical(dir);
+    let mut out = Vec::new();
+    for other in db.all_projects()? {
+        if other.id == project.id {
+            continue;
+        }
+        let Some(hub_path) = other.hub_path.as_deref() else { continue };
+        let hub_path = hub::canonical(Path::new(hub_path));
+        if hub_path != dir && hub_path.starts_with(&dir) {
+            out.push(hub_path);
+        }
+    }
+    Ok(out)
+}
+
+/// The directories at the top of `dir`, outside `known`, that hold a plan
+/// or a changelog: hubs no project of the record names.
+pub fn unrecorded_hubs(dir: &Path, known: &[PathBuf]) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| hub::canonical(&e.path()))
+        .filter(|p| !known.contains(p))
+        .filter(|p| ["План.md", "Изменения.md"].iter().any(|f| p.join(f).is_file()))
+        .collect();
+    out.sort();
+    out
+}
+
+/// How a file the record keeps for a hub stands against the one on disk.
+pub fn attachment_state(attachment: &db::Attachment, dir: &Path) -> State {
+    let Ok(bytes) = std::fs::read(dir.join(&attachment.path)) else {
+        return State::Missing;
+    };
+    match export::digest_bytes(&bytes) == attachment.digest {
+        true => State::Current,
+        false => State::Edited,
+    }
+}
+
+/// Writes a file the record keeps back into the hub, byte for byte, when
+/// the file there says something else. Says whether it wrote.
+pub fn write_attachment(db: &Db, project_id: i64, dir: &Path, attachment: &db::Attachment) -> Result<bool> {
+    if attachment_state(attachment, dir) == State::Current {
+        return Ok(false);
+    }
+    let bytes = db
+        .attachment_bytes(project_id, &attachment.path)?
+        .with_context(|| format!("{} is listed and not held", attachment.path))?;
+    let path = dir.join(&attachment.path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("cannot make {}", parent.display()))?;
+    }
+    std::fs::write(&path, &bytes).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(true)
+}
+
+/// A file of a hub the record does not hold, and why it does not.
+#[derive(Debug, Clone, Serialize)]
+pub struct NotHeld {
+    pub file: String,
+    pub state: &'static str,
+    pub why: &'static str,
+}
+
+/// The files of a hub that live only there: neither a part of the record,
+/// nor a text it holds, nor a file it keeps - and the decisions journal,
+/// when an entry of it is missing from the record.
+///
+/// What this cannot find, deleting the hub would lose. Files the record
+/// holds and that differ from it are not here: they are the drift
+/// `doctor --hubs` reports beside this, edits to take in or throw away.
+pub fn not_held(db: &Db, project: &db::Project, dir: &Path) -> Result<Vec<NotHeld>> {
+    let reading = reading_for(db, project, dir)?;
+    let planned: Vec<String> = planned(db, project, true, Some(dir))?.into_iter().map(|p| p.name).collect();
+    let kept: Vec<String> = db.attachments(project.id)?.into_iter().map(|a| a.path).collect();
+    let mut out = Vec::new();
+    for rel in hub::files(dir, &reading.skip) {
+        if has_record_files(project) && hub::is_reserved(&rel) {
+            // The parts of the record are views of it, and their drift is
+            // reported apart; the wishes file has its own line in doctor.
+            if rel == "Решения.md" && !journal_held(db, project, &dir.join(&rel))? {
+                out.push(NotHeld {
+                    file: rel,
+                    state: "not-held",
+                    why: "holds decisions the record does not; `rigger import` takes them in",
+                });
+            }
+            continue;
+        }
+        if planned.contains(&rel) || kept.contains(&rel) {
+            continue;
+        }
+        let size = std::fs::metadata(dir.join(&rel)).map(|m| m.len()).unwrap_or(0);
+        out.push(match size > hub::ATTACHMENT_LIMIT {
+            true => NotHeld {
+                file: rel,
+                state: "too-large",
+                why: "larger than the record keeps; only the hub has it",
+            },
+            false => NotHeld {
+                file: rel,
+                state: "not-held",
+                why: "lives only in the hub; `rigger import` takes it in",
+            },
+        });
+    }
+    // A hub no project names is not the line's, and it is not held either:
+    // named whole, once, rather than file by file under the wrong project.
+    if !has_record_files(project) {
+        let root = hub::canonical(dir);
+        for stray in unrecorded_hubs(&root, &recorded_inside(db, project, dir)?) {
+            out.push(NotHeld {
+                file: stray.strip_prefix(&root).unwrap_or(&stray).to_string_lossy().replace('\\', "/"),
+                state: "unrecorded-hub",
+                why: "a hub no project of the record names; `rigger import <project> --hub <dir>` reads it",
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Whether the record holds every entry of a decisions journal, and the
+/// prose above them.
+fn journal_held(db: &Db, project: &db::Project, path: &Path) -> Result<bool> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Ok(true) };
+    let journal = hub::journal(&text);
+    for decision in &journal.decisions {
+        if !db.holds_decision(project.id, &decision.at(), &decision.event_body())? {
+            return Ok(false);
+        }
+    }
+    if journal.preamble.trim().is_empty() {
+        return Ok(true);
+    }
+    Ok(db
+        .documents(project.id, Some("decisions"))?
+        .iter()
+        .any(|d| db::lf(&d.body).trim_end() == journal.preamble.trim_end()))
 }
 
 /// What bringing a hub up to date did.

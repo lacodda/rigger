@@ -4,11 +4,14 @@ description: Write a hub back out of the record.
 ---
 
 ```
-rigger export <PROJECT> --hub <DIR> [--check] [--adopt] [--docs] [--json]
+rigger export <PROJECT> [--hub <DIR>] [--check] [--adopt] [--docs] [--json]
+rigger export --all [--check] [--adopt] [--docs] [--json]
 rigger export --line [--to <FILE>] [--check]
 ```
 
 Generates a project's hub from the record. The plan, the changelog and the diary are views of what the database holds, so this is the other half of [`import`](/rigger/reference/import/): the record is read once, written by hand no more, and the notes follow it.
+
+Without `--hub` it writes the hub the record knows, and makes its directory when it is gone - that is the hub being written back. A directory named with `--hub` has to be there: a mistyped one would become the project's hub.
 
 ```console
 $ rigger export sample --hub C:\dev\sample\hub
@@ -28,7 +31,7 @@ Under `--json` a hub export prints the files it produced:
 | `project` | string | The project's name. |
 | `files` | array | The files the export produced, in the order it wrote them. |
 | `files[]` | object | One file. |
-| `files[].file` | string | The file's name in the hub, like `План.md`. |
+| `files[].file` | string | The file's path in the hub, like `План.md`. |
 | `files[].bytes` | integer | Its size in bytes. |
 | `files[].unchanged` | boolean | Whether the file on disk already said exactly this. |
 
@@ -73,7 +76,7 @@ $ rigger export sample --hub C:\dev\sample\hub --check
 
 ## The handwritten texts
 
-`--docs` also writes the [documents](/rigger/reference/doc/) back out: `Видение.md`, `Ритуалы.md`, one file per research note under `Исследования/`, and every other text [`import`](/rigger/reference/import/#the-handwritten-texts) took in, each at the path it was read from - so that `import` reads it back to the same place.
+`--docs` also writes the [documents](/rigger/reference/doc/) back out: `Видение.md`, `Ритуалы.md`, one file per research note under `Исследования/`, and every other text [`import`](/rigger/reference/import/#the-handwritten-texts) took in, each at the path it was read from - so that `import` reads it back to the same place. And the [files that are not texts](/rigger/reference/doc/#the-files-that-are-not-texts), byte for byte, each where it lay; under `--json` each is one more entry of `files`.
 
 They are off by default because they are a cache and nothing reads them back: the record is where they live now, and writing four more files into every hub on every export would put them in every diff for no one's benefit. They carry no generated mark either - they are your prose, and a mark saying "edits here are overwritten" would be a lie, since `import` takes an edit back in.
 
@@ -126,6 +129,39 @@ C:\dev\sample\hub is already what the record says.
 ```
 
 That stability is a test, not a hope: the same record generates the same bytes, and a file is rewritten only when the record behind it changed.
+
+## `--all`: every hub, back where it lay
+
+`--all` writes every hub the record knows, each at the place the record says it lies - the retired projects' and the [line's own place](/rigger/reference/import/#the-lines-own-place) among them - and makes the directory of any that is gone. It is what makes the hubs a cache rather than a second copy: with `--docs`, a deleted directory of hubs comes back whole.
+
+```console
+$ rigger export --all --docs
+  alpha    wrote 14 of 14 files - the directory was gone and is made again
+  attic    wrote 9 of 9 files - the directory was gone and is made again
+  line     wrote 52 of 52 files - the directory was gone and is made again
+
+Wrote 75 files across 3 hubs.
+```
+
+A file kept by hand in any of them refuses the whole run before a single file is written - half a line written and half refused is a state nobody asked for - and `--adopt` hands them all over at once. The line's own place gets its texts and files and nothing else: it plans nothing, and a plan of nothing would be four empty files above every hub.
+
+Two files of a hub do not come back, because they are not views: the decisions journal `Решения.md` and the wishes file `Хотелки.md` are inputs the record has taken in - each entry an event, each wish a wish, the journal's preamble a document. [`doctor --hubs`](/rigger/reference/doctor/#can-the-hubs-go) vouches for them only when every one of their entries is in the record.
+
+Under `--json`:
+
+<!-- json: export -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `hubs` | array | Every hub written, by project name. |
+| `hubs[]` | object | One hub. |
+| `hubs[].project` | string | The project's name. |
+| `hubs[].hub` | string | Where it was written. |
+| `hubs[].made` | boolean | Whether its directory was gone and was made. |
+| `hubs[].files` | array | The files written, as for one hub. |
+| `hubs[].files[]` | object | One file. |
+| `hubs[].files[].file` | string | The file's path in the hub. |
+| `hubs[].files[].bytes` | integer | Its size in bytes. |
+| `hubs[].files[].unchanged` | boolean | Whether the file on disk already said exactly this. |
 
 ## What the record keeps so a hub survives the trip
 

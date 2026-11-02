@@ -13,7 +13,7 @@
 //!
 //! What it cannot read it reports; nothing is skipped silently.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -92,6 +92,39 @@ pub struct Decision {
     pub date: String,
     pub title: String,
     pub body: String,
+}
+
+impl Decision {
+    /// The moment the record files it under: the hub dates decisions by day.
+    pub fn at(&self) -> String {
+        format!("{}T00:00:00Z", self.date)
+    }
+
+    /// The text of the event it becomes: its heading's title, then its body.
+    ///
+    /// One place, because the import writes it and `doctor` looks for it,
+    /// and two spellings would make every journal look half lost.
+    pub fn event_body(&self) -> String {
+        match self.body.is_empty() {
+            true => self.title.clone(),
+            false => format!("{}\n\n{}", self.title, self.body),
+        }
+    }
+}
+
+/// A decisions journal as a hub keeps it: the prose above its entries, and
+/// the entries.
+pub struct Journal {
+    pub preamble: String,
+    pub decisions: Vec<Decision>,
+}
+
+/// Reads a decisions journal the way an import reads it.
+pub fn journal(text: &str) -> Journal {
+    Journal {
+        preamble: decisions_preamble(text),
+        decisions: parse_decisions(text),
+    }
 }
 
 /// A run of prose in a hub file that belongs to no stage: a preamble, a
@@ -202,6 +235,47 @@ pub struct Hub {
     /// it does only when it was read - and the digest lets the import skip
     /// a generated file the record wrote and nobody has touched since.
     pub read: Vec<(String, String)>,
+    /// Every other file of the hub: a sound, a scrape, a script, a picture,
+    /// and the odd markdown file that holds nothing to read - each kept as
+    /// the bytes it is.
+    pub attachments: Vec<AttachmentFile>,
+}
+
+/// A file of a hub that is not a text, on its way into the record.
+#[derive(Debug, Clone)]
+pub struct AttachmentFile {
+    /// Where it lies, relative to the hub, with `/` between directories.
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub digest: String,
+}
+
+/// The largest file the record keeps for a hub.
+///
+/// Every file of the line's hubs together came to 6.4 MB when this was
+/// written, the largest a 3.5 MB scrape; a video dropped into a hub by
+/// mistake would make one record of every backup copy. A file above this
+/// is left where it is and named - by the import that passed it over, and
+/// by `doctor`, which then cannot say the hubs may go.
+pub const ATTACHMENT_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// How a hub is read.
+#[derive(Debug, Default, Clone)]
+pub struct Reading {
+    /// Its texts and files alone: no plan, changelog, diary, decisions or
+    /// wishes. How a retired project is read - its history is closed, and
+    /// what is left to take is what it wrote - and the line's own place,
+    /// which has no plan to read.
+    pub texts_only: bool,
+    /// Whether every file is a text or a file whatever it is called: no
+    /// name at the top is a part of the record. The line's own place has
+    /// no plan, and a `README.md` in it is the owner's prose.
+    pub all_texts: bool,
+    /// Directories under the hub that are not part of it: the hubs of other
+    /// projects. The line keeps its own files in the directory every
+    /// project's hub lies in, and reading that directory whole would file
+    /// every project's texts under the line.
+    pub skip: Vec<PathBuf>,
 }
 
 impl Hub {
@@ -258,6 +332,10 @@ pub fn looks_like_a_hub(dir: &Path) -> bool {
 }
 
 pub fn read(dir: &Path) -> Result<Hub> {
+    read_with(dir, &Reading::default())
+}
+
+pub fn read_with(dir: &Path, reading: &Reading) -> Result<Hub> {
     // A directory that is not there, or holds none of the files a hub is
     // read from, is refused rather than read as an empty one.
     //
@@ -269,6 +347,17 @@ pub fn read(dir: &Path) -> Result<Hub> {
     // reported striking dozens of versions and succeeded.
     if !dir.is_dir() {
         bail!("{} is not there; a hub that cannot be read is not an empty hub", dir.display());
+    }
+    // A reading of texts alone strikes nothing - it reads no plan - so a
+    // directory holding none of a hub's files is not a danger to it: the
+    // line's own place is exactly such a directory.
+    if reading.texts_only {
+        let mut hub = Hub::default();
+        let (documents, attachments, warnings) = read_documents(dir, reading);
+        hub.documents = documents;
+        hub.attachments = attachments;
+        hub.warnings = warnings;
+        return Ok(hub);
     }
     if !looks_like_a_hub(dir) {
         bail!(
@@ -302,8 +391,25 @@ pub fn read(dir: &Path) -> Result<Hub> {
     if let Ok(text) = std::fs::read_to_string(dir.join(WISHES_FILE)) {
         hub.wishes = parse_wishes(&text);
     }
-    hub.documents = read_documents(dir);
+    let (documents, attachments, warnings) = read_documents(dir, reading);
+    hub.documents = documents;
+    hub.attachments = attachments;
+    hub.warnings.extend(warnings);
     Ok(hub)
+}
+
+/// The files at the top of a hub that are read for what they are, not as
+/// documents or as files kept whole: the parts of the record, the wishes
+/// file, and the decisions journal, whose entries are events.
+pub fn is_reserved(rel: &str) -> bool {
+    FILES.contains(&rel) || rel == WISHES_FILE
+}
+
+/// Whether a path lies in the hub's research: under `Исследования/`, or
+/// under `_Исследования/` - the line's own, named to sort above the
+/// projects it lies beside.
+pub fn is_research(rel: &str) -> bool {
+    rel.split_once('/').is_some_and(|(top, _)| top.trim_start_matches('_') == RESEARCH_DIR)
 }
 
 /// The handwritten texts of a hub: the vision, the rituals, the preamble of
@@ -317,8 +423,15 @@ pub fn read(dir: &Path) -> Result<Hub> {
 ///
 /// A missing one is not a warning the way a missing `План.md` is: most
 /// projects have no rituals file and several have no research at all.
-fn read_documents(dir: &Path) -> Vec<Document> {
+///
+/// And every file that is not one of these texts, as the bytes it is: the
+/// record promises that deleting the hub loses nothing, and a hub keeps
+/// sounds, scrapes and scripts beside its notes. A file too large to keep
+/// is left where it is, and said.
+fn read_documents(dir: &Path, reading: &Reading) -> (Vec<Document>, Vec<AttachmentFile>, Vec<String>) {
     let mut out = Vec::new();
+    let mut attachments = Vec::new();
+    let mut warnings = Vec::new();
     for (file, kind) in DOCUMENT_FILES {
         if let Ok(text) = std::fs::read_to_string(dir.join(file))
             && !text.trim().is_empty()
@@ -328,26 +441,34 @@ fn read_documents(dir: &Path) -> Vec<Document> {
     }
     // The prose above the first entry of the decisions journal: how the
     // journal is kept, which is a document, while the entries below it are
-    // events the record already holds.
-    if let Ok(text) = std::fs::read_to_string(dir.join("Решения.md")) {
+    // events the record already holds. A place with no record files has no
+    // journal: a file of that name there is a text like any other.
+    if !reading.all_texts
+        && let Ok(text) = std::fs::read_to_string(dir.join("Решения.md"))
+    {
         let preamble = decisions_preamble(&text);
         if !preamble.trim().is_empty() {
             out.push(document_from("decisions", "decisions", &preamble, "Решения.md"));
         }
     }
 
-    // Every markdown file under the hub, by its path within it, sorted -
-    // which for research notes is by the date their names begin with.
-    let files = markdown_files(dir);
-    let research_prefix = format!("{RESEARCH_DIR}/");
-    let (research, rest): (Vec<String>, Vec<String>) = files.into_iter().partition(|rel| rel.starts_with(&research_prefix));
+    // Every file under the hub, by its path within it, sorted - which for
+    // research notes is by the date their names begin with.
+    let all = files(dir, &reading.skip);
+    let (markdown, other): (Vec<String>, Vec<String>) = all.into_iter().partition(|rel| rel.ends_with(".md"));
+    let (research, rest): (Vec<String>, Vec<String>) = markdown.into_iter().partition(|rel| is_research(rel));
     // Addresses handed out so far, so that no two texts share one.
     let mut seen: Vec<String> = out.iter().map(|d| d.slug.clone()).collect();
+    // The markdown files that hold no text to read: kept whole, below.
+    let mut unread: Vec<String> = Vec::new();
 
     // Research first, as it always was read, so that what follows cannot
     // move a note to another address.
     for rel in research {
-        let Some(text) = handwritten(dir, &rel) else { continue };
+        let Some(text) = handwritten(dir, &rel) else {
+            unread.push(rel);
+            continue;
+        };
         let name = rel.rsplit('/').next().unwrap_or(&rel);
         let stem = name.strip_suffix(".md").unwrap_or(name);
         // `2026-09-04 — Инструмент проектов` slugs to `2026-09-04`:
@@ -360,17 +481,53 @@ fn read_documents(dir: &Path) -> Vec<Document> {
         out.push(document_from("research", &slug, &text, &rel));
     }
     for rel in rest {
-        // The files the hub is read from, the wishes file and the named
-        // texts at the top are each read for what they are, above.
-        let reserved = FILES.contains(&rel.as_str()) || rel == WISHES_FILE || DOCUMENT_FILES.iter().any(|(name, _)| *name == rel);
-        if reserved {
+        // The files the hub is read from and the wishes file are read for
+        // what they are, above, and so is a named text at the top that
+        // holds one.
+        if !reading.all_texts && is_reserved(&rel) {
             continue;
         }
-        let Some(text) = handwritten(dir, &rel) else { continue };
+        let named = DOCUMENT_FILES.iter().any(|(name, _)| *name == rel);
+        let Some(text) = handwritten(dir, &rel) else {
+            unread.push(rel);
+            continue;
+        };
+        if named {
+            continue;
+        }
         let slug = unique_slug(path_slug(&rel), "other", &mut seen);
         out.push(document_from("other", &slug, &text, &rel));
     }
-    out
+
+    // What is left is kept as it is: every file that is not markdown, and
+    // the markdown that holds nothing to read - an empty note, or a view
+    // the record wrote, copied somewhere it does not write. A file nobody
+    // can read back as a text is still a file the hub would lose.
+    let mut whole: Vec<String> = other.into_iter().chain(unread).collect();
+    whole.sort();
+    for rel in whole {
+        let path = dir.join(&rel);
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if size > ATTACHMENT_LIMIT {
+            warnings.push(format!(
+                "{rel} is {} MB, more than the record keeps ({} MB); it stays in the hub alone",
+                size / (1024 * 1024),
+                ATTACHMENT_LIMIT / (1024 * 1024)
+            ));
+            continue;
+        }
+        match std::fs::read(&path) {
+            Ok(bytes) => attachments.push(AttachmentFile {
+                digest: crate::export::digest_bytes(&bytes),
+                path: rel,
+                bytes,
+            }),
+            // A file that cannot be read is said, not skipped in silence:
+            // the hub would keep it, and the record would not know.
+            Err(e) => warnings.push(format!("{rel} cannot be read ({e}); the record does not keep it")),
+        }
+    }
+    (out, attachments, warnings)
 }
 
 /// The text of a hub file worth keeping as a document: not empty, and not
@@ -382,20 +539,27 @@ fn handwritten(dir: &Path, rel: &str) -> Option<String> {
 }
 
 /// Every `.md` file under a hub, as sorted paths relative to it.
-pub fn markdown_files(dir: &Path) -> Vec<String> {
+pub fn markdown_files(dir: &Path, skip: &[PathBuf]) -> Vec<String> {
+    files(dir, skip).into_iter().filter(|rel| rel.ends_with(".md")).collect()
+}
+
+/// Every file under a hub, as sorted paths relative to it, leaving out the
+/// directories in `skip` - the hubs of other projects that lie inside it.
+pub fn files(dir: &Path, skip: &[PathBuf]) -> Vec<String> {
+    let skip: Vec<PathBuf> = skip.iter().map(|p| canonical(p)).collect();
     let mut files = Vec::new();
-    markdown_under(dir, "", &mut files);
+    files_under(dir, "", &skip, &mut files);
     files.sort();
     files
 }
 
-/// Collects the `.md` files under a directory as paths relative to the hub,
-/// written with `/` whatever the platform: the path is how the document is
+/// Collects the files under a directory as paths relative to the hub,
+/// written with `/` whatever the platform: the path is how the file is
 /// found again, so it has to read the same on every machine.
 ///
 /// A name starting with a dot is a tool's, not the owner's - an editor's
 /// settings, a sync client's trash.
-fn markdown_under(root: &Path, prefix: &str, out: &mut Vec<String>) {
+fn files_under(root: &Path, prefix: &str, skip: &[PathBuf], out: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(root.join(prefix)) else { return };
     for entry in entries.filter_map(|e| e.ok()) {
         let name = entry.file_name().to_string_lossy().to_string();
@@ -408,11 +572,19 @@ fn markdown_under(root: &Path, prefix: &str, out: &mut Vec<String>) {
         };
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
-            markdown_under(root, &rel, out);
-        } else if name.ends_with(".md") {
+            if skip.is_empty() || !skip.contains(&canonical(&entry.path())) {
+                files_under(root, &rel, skip, out);
+            }
+        } else if kind.is_file() {
             out.push(rel);
         }
     }
+}
+
+/// A path as the platform spells it: the record keeps a hub's path
+/// canonical, and a walk meets a directory as it lies.
+pub fn canonical(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// An address made from a path within the hub: its letters and digits in
@@ -452,12 +624,17 @@ fn unique_slug(base: String, fallback: &str, seen: &mut Vec<String>) -> String {
 
 /// The prose above the first entry of a decisions journal.
 ///
-/// Entries open with `## ` and a date; everything before the first of them
-/// is how the journal is kept, minus the file's own title.
+/// Entries open with a heading that carries a date; everything before the
+/// first of them is how the journal is kept.
+///
+/// The first dated heading, not the first `## `: a journal that opens with
+/// a section of its own - how entries are written, say - had everything
+/// between that heading and the first entry read by neither half, and
+/// lost.
 fn decisions_preamble(text: &str) -> String {
     let mut out = String::new();
     for line in text.lines() {
-        if line.starts_with("## ") {
+        if heading(line).is_some_and(|(_, head)| trailing_date(head).is_some()) {
             break;
         }
         out.push_str(line);
@@ -1156,26 +1333,30 @@ fn parse_decisions(text: &str) -> Vec<Decision> {
     let mut decisions: Vec<Decision> = Vec::new();
     let mut body = String::new();
     for line in text.lines() {
-        if let Some((_, head)) = heading(line) {
+        if let Some((_, head)) = heading(line)
+            && let Some(date) = trailing_date(head)
+        {
             if let Some(last) = decisions.last_mut() {
                 last.body = body.trim().to_string();
             }
             body.clear();
-            if let Some(date) = trailing_date(head) {
-                let title = head
-                    .split_once(['·', '—'])
-                    .map(|(_, t)| t.trim())
-                    .filter(|t| !t.is_empty())
-                    .unwrap_or(head)
-                    .to_string();
-                decisions.push(Decision {
-                    date,
-                    title,
-                    body: String::new(),
-                });
-            }
+            let title = head
+                .split_once(['·', '—'])
+                .map(|(_, t)| t.trim())
+                .filter(|t| !t.is_empty())
+                .unwrap_or(head)
+                .to_string();
+            decisions.push(Decision {
+                date,
+                title,
+                body: String::new(),
+            });
             continue;
         }
+        // A heading with no date inside an entry is a part of the entry.
+        // It used to end it, and the next dated heading then wrote the
+        // text under it over the body of the entry before - one entry's
+        // words lost, another's put in their place.
         if !decisions.is_empty() && line.trim() != "---" {
             body.push_str(line);
             body.push('\n');
@@ -1307,6 +1488,34 @@ mod tests {
     #[test]
     fn an_undated_heading_is_not_a_decision() {
         assert!(parse_decisions("## Журнал\n\nprose\n").is_empty());
+    }
+
+    /// A journal that opens with a section of its own keeps it: the preamble
+    /// runs to the first dated heading, not to the first `## `, which left
+    /// what stood between them in neither half.
+    #[test]
+    fn a_journal_section_before_the_first_entry_is_part_of_the_preamble() {
+        let text = "# Решения\n\nКак ведётся.\n\n## Как писать\n\nКоротко.\n\n## 2026-09-01 · Первое\n\nТело.\n";
+        let journal = journal(text);
+        assert!(journal.preamble.contains("Как ведётся."), "{}", journal.preamble);
+        assert!(journal.preamble.contains("## Как писать\n\nКоротко."), "{}", journal.preamble);
+        assert!(!journal.preamble.contains("Тело."), "{}", journal.preamble);
+        assert_eq!(journal.decisions.len(), 1);
+        assert_eq!(journal.decisions[0].event_body(), "Первое\n\nТело.");
+    }
+
+    /// Inside an entry, a heading with no date is the entry's own. It used
+    /// to end the entry, and the next dated heading wrote what stood under
+    /// it over the first entry's body: the first entry's words were lost.
+    #[test]
+    fn an_undated_heading_inside_an_entry_belongs_to_it() {
+        let text = "## 2026-09-01 · First\n\nfirst words\n\n### Details\n\nmore words\n\n## 2026-09-02 · Second\n\nsecond words\n";
+        let decisions = parse_decisions(text);
+        assert_eq!(decisions.len(), 2, "{decisions:?}");
+        assert!(decisions[0].body.contains("first words"), "{:?}", decisions[0].body);
+        assert!(decisions[0].body.contains("### Details"), "{:?}", decisions[0].body);
+        assert!(decisions[0].body.contains("more words"), "{:?}", decisions[0].body);
+        assert_eq!(decisions[1].body, "second words");
     }
 
     /// A stage is settled twice - by the block heading that closes it and

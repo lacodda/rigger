@@ -46,6 +46,8 @@ pub struct Screen {
     pub commits_since_tag: Option<u32>,
     pub stage: Option<Stage>,
     pub documents: Vec<DocLine>,
+    /// The files its hub keeps that are not texts, as the record holds them.
+    pub files: Files,
     pub questions: usize,
     pub wishes: usize,
     /// What this project is tied to, read from its own side.
@@ -53,6 +55,13 @@ pub struct Screen {
     /// The open wishes a neighbour asked for.
     pub asked: Vec<Asked>,
     pub next_step: Option<String>,
+}
+
+/// How many files the record keeps for a hub, and how large they are.
+#[derive(Debug, Default, Serialize)]
+pub struct Files {
+    pub count: usize,
+    pub bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +101,13 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
         stage,
         documents: db.document_lines(project.id)?,
+        files: {
+            let kept = db.attachments(project.id)?;
+            Files {
+                count: kept.len(),
+                bytes: kept.iter().map(|f| f.bytes).sum(),
+            }
+        },
         questions: db.open_events(project.id, "question")?.len(),
         wishes: db.open_events(project.id, "wish")?.len(),
         links: db.links_of(project.id)?,
@@ -199,7 +215,7 @@ pub fn render(screen: &Screen) -> String {
         out.push_str(&neighbours);
     }
 
-    if !screen.documents.is_empty() {
+    if !screen.documents.is_empty() || screen.files.count > 0 {
         out.push('\n');
         out.push_str("Written down:\n");
         for doc in &screen.documents {
@@ -212,6 +228,16 @@ pub fn render(screen: &Screen) -> String {
                 screen.name,
                 doc.slug
             );
+        }
+        // The files are one line, not one each: a hub keeps a folder of
+        // samples or a scrape in parts, and the screen is for finding them.
+        if screen.files.count > 0 {
+            let kept = format!(
+                "{} kept, {}",
+                crate::plural(screen.files.count, "file", "files"),
+                crate::size_of(screen.files.bytes)
+            );
+            let _ = writeln!(out, "  {:<9} {:<34}             rigger doc files {}", "files", kept, screen.name);
         }
     }
 
@@ -326,6 +352,7 @@ mod tests {
             commits_since_tag: Some(2),
             stage: None,
             documents: Vec::new(),
+            files: Files::default(),
             questions: 0,
             wishes: 0,
             links: Vec::new(),

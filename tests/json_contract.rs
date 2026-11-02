@@ -515,6 +515,10 @@ fn fill(r: &mut Record, data: &Path) {
         "# Хотелки\n\nWhat to sort later.\n\n---\n\n- A reader for sheets by name\n",
     )
     .unwrap();
+    // Files of the hub that are not texts, which the record keeps whole.
+    std::fs::create_dir_all(hub.join("Исследования").join("bench")).unwrap();
+    std::fs::write(hub.join("Исследования").join("bench").join("queries.json"), "[\"a sheet by name\"]").unwrap();
+    std::fs::write(hub.join("Исследования").join("bench").join("scratch.bin"), [0u8, 1, 2, 255]).unwrap();
     r.json("import", &["import", "alpha", "--hub", hub.to_str().unwrap()]);
     let answers = data.join("answers.json");
     std::fs::write(
@@ -659,6 +663,8 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("doc edit", &["doc", "edit", "alpha", "vision", "--title", "Vision of alpha"]);
     r.json("doc edit", &["doc", "edit", "alpha", "vision", "--title", "Vision of alpha"]);
     r.json("doc remove", &["doc", "remove", "alpha", "scratch"]);
+    r.json("doc files", &["doc", "files", "alpha"]);
+    r.json("doc remove", &["doc", "remove", "alpha", "Исследования/bench/scratch.bin"]);
     r.json("doc template", &["doc", "template", "vision"]);
     r.json("doc template", &["doc", "template", "research", "--write"]);
     r.json("doc template", &["doc", "template", "research"]);
@@ -917,6 +923,8 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("session end", &["session", "end", "alpha"]);
     r.json("export", &["export", "--line"]);
     r.json("export", &["export", "--line", "--to", data.join("line.json").to_str().unwrap()]);
+    r.json("export", &["export", "--all", "--check"]);
+    r.json("export", &["export", "--all", "--docs", "--adopt"]);
     r.json("open", &["open", "alpha"]);
 
     let others = data.join("others");

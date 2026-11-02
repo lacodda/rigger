@@ -122,7 +122,7 @@ The whole first week, command by command: [Your first week](https://lacodda.gith
 
 ## Status
 
-In daily use across a line of eighteen products and a library of texts, with one retired: the record, the packet held to its budget on the real record, the MCP server, facts from git, the owner's screens and the pick of what comes next, task cards at work, hubs kept as a view of the record, and a JSON contract for every command ahead of 1.0. Released versions and what landed in each: [CHANGELOG](https://github.com/lacodda/rigger/blob/main/CHANGELOG.md).
+In daily use across a line of eighteen products and a library of texts, with one retired: the record, the packet held to its budget on the real record, the MCP server, facts from git, the owner's screens and the pick of what comes next, task cards at work, hubs kept as a view of a record that holds every file in them, and a JSON contract for every command ahead of 1.0. Released versions and what landed in each: [CHANGELOG](https://github.com/lacodda/rigger/blob/main/CHANGELOG.md).
 
 ## Install
 
