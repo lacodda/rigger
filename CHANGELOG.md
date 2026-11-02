@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.33.0] - 2026-11-02
+
+### Features
+- Keep every file of a hub, so the hubs can go and come back
+
 ## [0.32.0] - 2026-10-27
 
 ### Build
