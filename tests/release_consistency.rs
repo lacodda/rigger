@@ -277,6 +277,76 @@ mod tests {
         }
     }
 
+    /// What a line of `docs/astro.config.mjs` sets a key to, when it is written in
+    /// place and not commented out.
+    fn astro_field(config: &str, key: &str) -> Option<String> {
+        config.lines().find_map(|line| {
+            let value = line.trim().strip_prefix(key)?.strip_prefix(':')?;
+            Some(value.trim().trim_end_matches(',').trim_matches(|c| c == '\'' || c == '"').to_string())
+        })
+    }
+
+    /// Where a documentation site is served from, or what is wrong with it.
+    ///
+    /// Two arrangements are consistent: a project site on `owner.github.io/name`,
+    /// built with `base: '/name'`, or a domain of its own named in `public/CNAME`,
+    /// built for that domain with no `base`. Each value is valid on its own, so a
+    /// mixture of the two builds without complaint, and then every page asks for
+    /// its stylesheets under a path the host does not serve. lyrn's site ran like
+    /// that for a month, as unstyled HTML, and no gate saw it.
+    fn docs_address(site: Option<&str>, base: Option<&str>, cname: Option<&str>) -> Result<String, String> {
+        let site = site.ok_or("astro.config.mjs sets no `site` written in place")?.trim_end_matches('/');
+        let base = base.map(|b| b.trim_matches('/')).filter(|b| !b.is_empty());
+        match (cname, base) {
+            (Some(domain), Some(base)) => Err(format!("public/CNAME serves {domain} from its root, and the site is built under /{base}")),
+            (Some(domain), None) if site != format!("https://{domain}") => Err(format!("public/CNAME serves {domain}, and the site is built for {site}")),
+            (Some(domain), None) => Ok(format!("https://{domain}/")),
+            (None, _) if !site.ends_with(".github.io") => Err(format!("the site is built for {site}, with no public/CNAME to serve it there")),
+            (None, None) => Err(format!("{site} serves a project site under its name, and the site is built with no `base`")),
+            (None, Some(base)) => Ok(format!("{site}/{base}/")),
+        }
+    }
+
+    #[test]
+    fn a_docs_address_is_one_of_two_arrangements_and_not_a_mixture() {
+        let project = Some("https://acme.github.io");
+        let own = Some("https://docs.acme.dev");
+        assert_eq!(docs_address(project, Some("/widget"), None).unwrap(), "https://acme.github.io/widget/");
+        assert_eq!(docs_address(own, None, Some("docs.acme.dev")).unwrap(), "https://docs.acme.dev/");
+
+        // What lyrn's site was: a domain of its own, and the base it had before.
+        assert!(docs_address(own, Some("/widget"), Some("docs.acme.dev")).is_err());
+        assert!(docs_address(project, None, Some("docs.acme.dev")).is_err());
+        assert!(docs_address(project, Some("/widget"), Some("docs.acme.dev")).is_err());
+        assert!(docs_address(own, None, None).is_err());
+        assert!(docs_address(own, Some("/widget"), None).is_err());
+        assert!(docs_address(project, None, None).is_err());
+        assert!(docs_address(project, Some("/"), None).is_err());
+        assert!(docs_address(None, Some("/widget"), None).is_err());
+    }
+
+    /// Run by the CI the release waits for: `lyrn check` holds the same on every
+    /// push, in a workflow the tag does not wait on.
+    #[test]
+    fn the_docs_site_agrees_with_itself_about_where_it_lives() {
+        let config = read("docs/astro.config.mjs");
+        let cname = fs::read_to_string(repo_root().join("docs/public/CNAME")).ok();
+        let cname = cname.as_deref().map(str::trim).filter(|domain| !domain.is_empty());
+        let address =
+            docs_address(astro_field(&config, "site").as_deref(), astro_field(&config, "base").as_deref(), cname).unwrap_or_else(|why| panic!("{why}"));
+
+        assert_eq!(
+            cargo_field("homepage"),
+            address,
+            "Cargo.toml `homepage` does not lead to the documentation site"
+        );
+        assert_eq!(
+            json_field("npm/package.json", "homepage"),
+            address,
+            "npm/package.json `homepage` does not lead to the documentation site"
+        );
+    }
+
     /// The docs site and the repository must show the same mark at each level:
     /// the header logo is the L tile, the favicon the S tile. Swapping them is a
     /// real mistake that has happened in the line - an S tile in a 40px header
