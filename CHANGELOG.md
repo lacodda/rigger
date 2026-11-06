@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.39.0] - 2026-11-06
+
+### Features
+- Play the queue forward
+
 ## [0.38.0] - 2026-11-06
 
 ### Features
