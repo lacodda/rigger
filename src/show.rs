@@ -90,7 +90,7 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         remote: project.remote.clone(),
         weight: project.weight,
         retired_at: project.retired_at.clone(),
-        gate: project.gate.clone(),
+        gate: crate::gate::stated(project).map(|gate| gate.command),
         on_session_end: project.on_session_end.clone(),
         hub_path: project.hub_path.clone(),
         last_shipped: db.last_shipped_version(project.id)?,

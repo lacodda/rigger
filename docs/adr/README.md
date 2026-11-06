@@ -14,3 +14,4 @@ Technical decisions that shape rigger, in the order they were made. Format: Cont
 | [0008](0008-trusted-publishing.md) | Registry publishing via OIDC trusted publishing | accepted |
 | [0009](0009-git-through-furca-core.md) | Git is read through furca-core | accepted |
 | [0010](0010-a-plan-line-is-matched-by-what-it-says.md) | A line of a plan is matched by what it says | accepted |
+| [0011](0011-release-toml-outranks-the-record.md) | A repository's release.toml outranks the record | accepted |

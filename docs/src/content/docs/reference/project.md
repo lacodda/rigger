@@ -68,7 +68,7 @@ A retired project is listed with the day it left: `attic  C:\dev\attic  (retired
 | `[].weight` | integer | How often it comes round in the [queue](/rigger/reference/queue/); 0 is out of it. `rigger priority` changes it. |
 | `[].kind` | string | `repo` for a repository, `folder` for a directory of work with no repository, `service` for a place the record keeps for itself. |
 | `[].hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
-| `[].gate` | string or null | The command that says the project is fit to commit; null when none is set. |
+| `[].gate` | string or null | The command that says the project is fit to commit: from its `release.toml` when that states one, else as set here; null when there is none. |
 | `[].mark_code` | string or null | The two-lowercase-letter code of the mark, unique across the line; null when no mark is recorded. |
 | `[].accent` | string or null | The colour the product owns, as `#RRGGBB`; null when not recorded. |
 | `[].accent2` | string or null | The second colour, as `#RRGGBB`; null when not recorded. |
@@ -119,7 +119,7 @@ The commands that record or change a project - `add`, `service`, `set`, `mark`, 
 | `weight` | integer | How often it comes round in the [queue](/rigger/reference/queue/); 0 is out of it. `rigger priority` changes it. |
 | `kind` | string | `repo` for a repository, `folder` for a directory of work with no repository, `service` for a place the record keeps for itself. |
 | `hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
-| `gate` | string or null | The command that says the project is fit to commit; null when none is set. |
+| `gate` | string or null | The command that says the project is fit to commit: from its `release.toml` when that states one, else as set here; null when there is none. |
 | `mark_code` | string or null | The two-lowercase-letter code of the mark, unique across the line; null when no mark is recorded. |
 | `accent` | string or null | The colour the product owns, as `#RRGGBB`; null when not recorded. |
 | `accent2` | string or null | The second colour, as `#RRGGBB`; null when not recorded. |
@@ -161,6 +161,8 @@ sample: gate is `cargo test`
 ```
 
 `--no-gate` takes it off. An empty `--gate` is refused: an empty gate is not a gate.
+
+A repository whose `release.toml` states a gate has that one, and `--gate` is refused and quotes it: change it in the file, because a second line in the record would be a second truth. See [where the gate comes from](/rigger/reference/gate/#where-the-gate-comes-from).
 
 ### `--on-session-end`
 

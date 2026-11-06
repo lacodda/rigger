@@ -27,6 +27,12 @@ fn project(data: &Path, work: &Path) -> std::path::PathBuf {
     root
 }
 
+/// A command's `--json` document.
+fn json(data: &Path, args: &[&str]) -> serde_json::Value {
+    let out = rigger(data).args(args).arg("--json").assert().success().get_output().stdout.clone();
+    serde_json::from_slice(&out).unwrap_or_else(|e| panic!("rigger {args:?} --json: {e}"))
+}
+
 /// A shell line that succeeds on either shell a gate might be handed to.
 const GREEN: &str = "cd .";
 /// One that fails on either.
@@ -68,6 +74,126 @@ fn a_gate_is_set_shown_and_cleared() {
         .assert()
         .success()
         .stdout(predicate::str::contains("has no gate"));
+}
+
+/// What the release engine and CI read is what runs: the file is the truth, and
+/// the field beside it is for a project with no file. The field here is red, so a
+/// run that took it would fail.
+#[test]
+fn a_release_file_states_the_gate_and_the_record_only_fills_in() {
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = project(data.path(), work.path());
+    rigger(data.path()).args(["project", "set", "sample", "--gate", RED]).assert().success();
+    std::fs::write(
+        root.join("release.toml"),
+        format!("[project]\nname = \"sample\"\n\n[gate]\ncommands = [\"{GREEN}\", \"{GREEN}\"]\n"),
+    )
+    .unwrap();
+    let joined = format!("{GREEN} && {GREEN}");
+
+    let check = json(data.path(), &["gate", "sample", "--check"]);
+    assert_eq!(check["command"], joined.as_str());
+
+    let run = json(data.path(), &["gate", "sample"]);
+    assert_eq!(run["command"], joined.as_str());
+    assert_eq!(run["passed"], true, "the file's gate is what ran: {run:#}");
+
+    // Every reader says the same, or the release engine would see two gates.
+    assert_eq!(json(data.path(), &["project", "show", "sample"])["gate"], joined.as_str());
+    assert_eq!(json(data.path(), &["project", "list"])[0]["gate"], joined.as_str());
+    assert_eq!(json(data.path(), &["show", "sample"])["gate"], joined.as_str());
+    rigger(data.path())
+        .args(["context", "sample"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Gate: {joined}")))
+        .stdout(predicate::str::contains(RED).not());
+    rigger(data.path())
+        .args(["project", "show", "sample"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(from release.toml)"));
+
+    // A file that states no gate leaves the field in force.
+    std::fs::write(root.join("release.toml"), "[project]\nname = \"sample\"\n").unwrap();
+    assert_eq!(json(data.path(), &["gate", "sample", "--check"])["command"], RED);
+}
+
+/// A gate set in the record over one in the file would change nothing and read
+/// as if it had. It is refused, and what the record held stays.
+#[test]
+fn a_gate_in_the_file_is_not_set_over_in_the_record() {
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = project(data.path(), work.path());
+    rigger(data.path()).args(["project", "set", "sample", "--gate", RED]).assert().success();
+    let file = root.join("release.toml");
+    std::fs::write(&file, format!("[gate]\ncommands = [\"{GREEN}\"]\n")).unwrap();
+
+    for args in [
+        &["project", "set", "sample", "--gate", "cargo test"][..],
+        &["project", "set", "sample", "--gate", "cargo test", "--json"][..],
+    ] {
+        rigger(data.path())
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("states its gate in release.toml"));
+    }
+    rigger(data.path())
+        .args(["project", "set", "sample"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("gate is `{GREEN}`, from release.toml")));
+
+    // Taking the field off is fine, and it does not say the project has no gate.
+    rigger(data.path())
+        .args(["project", "set", "sample", "--no-gate"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("stays in force"));
+
+    std::fs::remove_file(&file).unwrap();
+    rigger(data.path())
+        .args(["project", "set", "sample"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("has no gate"));
+}
+
+/// A file that cannot be read is not a file that is not there: falling back to
+/// the field would run a gate the repository no longer states.
+#[test]
+fn a_broken_release_file_stops_the_gate_and_not_the_packet() {
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = project(data.path(), work.path());
+    rigger(data.path()).args(["project", "set", "sample", "--gate", GREEN]).assert().success();
+    std::fs::write(root.join("release.toml"), "[gate\n").unwrap();
+
+    for args in [&["gate", "sample"][..], &["gate", "sample", "--check"][..]] {
+        rigger(data.path())
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("release.toml"));
+    }
+    rigger(data.path())
+        .args(["project", "set", "sample", "--gate", "cargo test"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("release.toml"));
+
+    // The packet is how a sitting starts: it goes on, with no gate rather than
+    // the wrong one, and says why.
+    rigger(data.path())
+        .args(["context", "sample"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Gate:").not())
+        .stderr(predicate::str::contains("release.toml"));
+    assert!(json(data.path(), &["project", "show", "sample"])["gate"].is_null());
 }
 
 #[test]

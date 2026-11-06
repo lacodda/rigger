@@ -34,6 +34,7 @@ mod paths;
 mod profile;
 mod queue;
 mod refactor;
+mod releasefile;
 mod repo;
 mod search;
 mod session;
@@ -3824,7 +3825,14 @@ fn print_event_json(db: &Db, id: Option<i64>, changed: bool) -> Result<()> {
 /// A project as `project show --json` prints it, read again after a write.
 fn print_project_json(db: &Db, name: &str) -> Result<()> {
     let project = db.project_by_name(name)?.context("the project just written is not in the record")?;
-    print_json(&project)
+    print_json(&as_it_stands(project))
+}
+
+/// A project as a reader outside the record takes it: with the gate in force,
+/// which is what a release engine compares its own against.
+fn as_it_stands(mut project: db::Project) -> db::Project {
+    project.gate = gate::stated(&project).map(|gate| gate.command);
+    project
 }
 
 /// A card by whatever names it, or a clear refusal.
@@ -5011,6 +5019,7 @@ fn project_list(json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let projects = db.all_projects()?;
     if json {
+        let projects: Vec<db::Project> = projects.into_iter().map(as_it_stands).collect();
         println!("{}", serde_json::to_string_pretty(&projects)?);
         return Ok(());
     }
@@ -5046,7 +5055,7 @@ fn project_show(name: &str, json: bool) -> Result<()> {
         bail!("no project named '{name}'; see `rigger project list`");
     };
     if json {
-        println!("{}", serde_json::to_string_pretty(&project)?);
+        println!("{}", serde_json::to_string_pretty(&as_it_stands(project))?);
         return Ok(());
     }
     println!("{}", project.name);
@@ -5071,8 +5080,8 @@ fn project_show(name: &str, json: bool) -> Result<()> {
             None => println!("  retired: {at}"),
         }
     }
-    if let Some(gate) = &project.gate {
-        println!("  gate:    {gate}");
+    if let Some(gate) = gate::stated(&project) {
+        println!("  gate:    {}", gate.described());
     }
     Ok(())
 }
@@ -5103,8 +5112,9 @@ fn project_set(name: &str, set: &Settings, json: bool) -> Result<()> {
     if !no_gate && gate.is_none() && !no_on_session_end && on_session_end.is_none() && !no_about && about.is_none() {
         // Nothing asked for is a question, not a no-op: a command that
         // silently did nothing would look like it had worked.
-        match &project.gate {
-            Some(gate) => println!("{}: gate is `{gate}`", project.name),
+        match gate::of(&project)? {
+            Some(gate) if gate.by_file => println!("{}: gate is `{}`, from {}", project.name, gate.command, releasefile::FILE),
+            Some(gate) => println!("{}: gate is `{}`", project.name, gate.command),
             None => println!("{} has no gate; set one with --gate \"<command>\"", project.name),
         }
         match &project.on_session_end {
@@ -5124,13 +5134,18 @@ fn project_set(name: &str, set: &Settings, json: bool) -> Result<()> {
 
     if no_gate {
         db.set_gate(project.id, None)?;
-        println!("{} has no gate now.", project.name);
-    } else if let Some(gate) = gate {
-        let gate = gate.trim();
-        if gate.is_empty() {
-            bail!("an empty gate is not a gate; use --no-gate to take it off");
+        match gate::of(&project)? {
+            Some(gate) if gate.by_file => println!(
+                "The record holds no gate for {} now; `{}` from {} stays in force.",
+                project.name,
+                gate.command,
+                releasefile::FILE
+            ),
+            _ => println!("{} has no gate now.", project.name),
         }
-        db.set_gate(project.id, Some(gate))?;
+    } else if let Some(gate) = gate {
+        let gate = checked_gate(&project, gate)?;
+        db.set_gate(project.id, Some(&gate))?;
         println!("{}: gate is `{gate}`", project.name);
         println!("Run it with: rigger gate {}", project.name);
     }
@@ -5169,6 +5184,25 @@ struct Settings<'a> {
     no_on_session_end: bool,
     about: Option<&'a str>,
     no_about: bool,
+}
+
+/// A gate as the record may hold it. Refused where `release.toml` states one, as
+/// a line about a project is refused where its manifest says one: the record's
+/// would change nothing and read as if it had.
+fn checked_gate(project: &db::Project, gate: &str) -> Result<String> {
+    let gate = gate.trim();
+    if gate.is_empty() {
+        bail!("an empty gate is not a gate; use --no-gate to take it off");
+    }
+    if let Some(stated) = gate::of(project)?.filter(|stated| stated.by_file) {
+        bail!(
+            "{} states its gate in {}: `{}`\nChange it there; a second line in the record would be a second truth.",
+            project.name,
+            releasefile::FILE,
+            stated.command
+        );
+    }
+    Ok(gate.to_string())
 }
 
 /// A line about a project, as the record may hold it.
@@ -5213,11 +5247,12 @@ fn gate(project: Option<&str>, check: bool, json: bool) -> Result<()> {
     // Refused before the command runs rather than after: a gate is a run
     // and a record of it, and the record would be refused anyway.
     project.ensure_working()?;
-    let Some(command) = project.gate.clone() else {
+    let Some(gate::Stated { command, .. }) = gate::of(&project).with_context(|| format!("{} cannot say what its gate is", project.name))? else {
         bail!(
-            "{} has no gate. Set it to what CI runs:
-  rigger project set {} --gate \"cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test\"",
+            "{} has no gate. State it under [gate] in {}, or set it on the project:
+  rigger project set {} --gate \"cargo fmt --all --check\"",
             project.name,
+            releasefile::FILE,
             project.name
         );
     };
@@ -5421,11 +5456,7 @@ fn project_set_quietly(db: &Db, project: &db::Project, set: &Settings) -> Result
     if no_gate {
         db.set_gate(project.id, None)?;
     } else if let Some(gate) = gate {
-        let gate = gate.trim();
-        if gate.is_empty() {
-            bail!("an empty gate is not a gate; use --no-gate to take it off");
-        }
-        db.set_gate(project.id, Some(gate))?;
+        db.set_gate(project.id, Some(&checked_gate(project, gate)?))?;
     }
     if no_on_session_end {
         db.set_on_session_end(project.id, None)?;

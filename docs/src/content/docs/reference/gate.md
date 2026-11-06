@@ -9,7 +9,14 @@ rigger gate [<project>] [--check] [--json]
 
 Runs the project's gate — the command CI runs — in the project's directory, and records the verdict.
 
-The gate itself is set once, on the project:
+The gate is stated once. A repository with a `release.toml` states it there, under `[gate]`, and its commands run as one line joined with ` && `:
+
+```toml
+[gate]
+commands = ["cargo fmt --all --check"]
+```
+
+A project with no such file, or with one that names no commands, sets it on the project:
 
 ```console
 $ rigger project set rigger --gate "cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test"
@@ -18,6 +25,12 @@ Run it with: rigger gate rigger
 ```
 
 Without a project name, the one the working directory sits in — so a hook or a shell alias needs to be told nothing.
+
+## Where the gate comes from
+
+`release.toml` is the release engine's file: public, in the repository, read by CI with no record around. So it is the truth for what it states, and every reader takes the gate from it: this command, the [packet](/rigger/reference/context/), [`show`](/rigger/reference/show/) and [`project show`](/rigger/reference/project/). What the record held before the file appeared stays there unused; [`project set --gate`](/rigger/reference/project/#--gate) over a gate in the file is refused, since it would change nothing and read as if it had.
+
+A `release.toml` that cannot be read stops `rigger gate`, `--check` included, rather than running the record's line in its place: that would be a gate the repository no longer states. The screens go on without a gate and say why on standard error.
 
 ## Why the record runs it
 

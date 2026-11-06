@@ -9,9 +9,58 @@
 //! Running it is the point rather than printing it. "The gate is green" was
 //! a thing an assistant said at the end of a sitting; now it is a thing the
 //! record witnessed, with the moment it happened and how long it took.
+//!
+//! A repository with a `release.toml` states its gate there, for the release
+//! engine and for CI, and that is the one in force. The record's own field is
+//! for a project with no such file: two places that could each answer would be
+//! the seventeen copies again, only fewer of them.
 
+use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
+
+use anyhow::Result;
+
+use crate::db::Project;
+use crate::releasefile::{self, ReleaseFile};
+
+/// A project's gate, and where it is stated.
+pub struct Stated {
+    pub command: String,
+    /// Stated in the repository's `release.toml`, not in the record.
+    pub by_file: bool,
+}
+
+impl Stated {
+    /// The command, with where to change it when that is not the record.
+    pub fn described(&self) -> String {
+        match self.by_file {
+            true => format!("{} (from {})", self.command, releasefile::FILE),
+            false => self.command.clone(),
+        }
+    }
+}
+
+/// The gate in force. An error when `release.toml` cannot be read: for a command
+/// about to run a gate, the field beside it is not an answer to that.
+pub fn of(project: &Project) -> Result<Option<Stated>> {
+    if project.kind.has_a_place()
+        && let Some(command) = ReleaseFile::read(Path::new(&project.path))?.and_then(|file| file.gate())
+    {
+        return Ok(Some(Stated { command, by_file: true }));
+    }
+    Ok(project.gate.clone().map(|command| Stated { command, by_file: false }))
+}
+
+/// The gate in force, for a screen. A screen goes on without one when
+/// `release.toml` cannot be read and says so on standard error, where it stays
+/// out of a document on standard output; `rigger gate` refuses.
+pub fn stated(project: &Project) -> Option<Stated> {
+    of(project).unwrap_or_else(|e| {
+        eprintln!("{} shows no gate: {e:#}", project.name);
+        None
+    })
+}
 
 /// What a gate run came to.
 pub struct Run {

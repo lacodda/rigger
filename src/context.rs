@@ -306,7 +306,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
         days_since_commit: activity.as_ref().and_then(|a| a.last_commit_at.as_deref()).and_then(days_since_day),
         since_last_session: since_last_session(db, project)?,
-        gate: project.gate.clone(),
+        gate: crate::gate::stated(project).map(|gate| gate.command),
         retired: match &project.retired_at {
             Some(since) => Some(Retired {
                 since: since.clone(),
@@ -369,12 +369,13 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
 
     // Summarised once, up front: what the events would cost decides how
     // much the queue may take.
+    let gate = packet.state.gate.clone();
     let recent: Vec<(Event, bool, usize)> = recent
         .into_iter()
         .map(|recent| {
             let event = Event {
                 id: recent.id,
-                body: summarise(&without_gate(&recent.kind, &recent.body, project.gate.as_deref())),
+                body: summarise(&without_gate(&recent.kind, &recent.body, gate.as_deref())),
                 kind: recent.kind,
                 date: recent.date,
             };
