@@ -59,12 +59,14 @@ The screen as data: the same facts, without the text form's sentences.
 | `remote` | string or null | The git remote's URL. |
 | `weight` | integer | How often the project comes round in the [queue](/rigger/reference/queue/); 0 is out of it. |
 | `retired_at` | string or null | When the project was [retired](/rigger/reference/project/#project-retire), in RFC 3339 UTC; null while it is in the work. The screen then says so in place of the weight. |
-| `gate` | string or null | The command that says the project is fit to commit. |
+| `gate` | string or null | The command that says the project is fit to commit: [from its `release.toml`](/rigger/reference/gate/#where-the-gate-comes-from) when that states one. |
 | `on_session_end` | string or null | The command the project runs when a session ends. |
 | `hub_path` | string or null | The project's hub directory in the notes vault. |
 | `last_shipped` | array or null | The newest shipped version, as a pair: the version, then the day it shipped (`YYYY-MM-DD`). |
 | `last_shipped[]` | string | One element of that pair. |
 | `delivery` | string or null | How far the newest version got past its tag: `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed` or `published`. |
+| `owed` | array | What the newest version's `release.toml` promises for after the publish and nobody has [said was done](/rigger/reference/note/#installed-deployed). |
+| `owed[]` | string | `install` or `deploy`. |
 | `versions_planned` | integer | How many versions are planned and unshipped. |
 | `tasks_open` | integer | How many tasks are open. |
 | `commits_since_tag` | integer or null | Commits since the newest tag, as the last `sync` read them. |

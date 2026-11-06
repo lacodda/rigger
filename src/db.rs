@@ -653,6 +653,27 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (project_id, key)
     );
     ",
+    // v35: a shipped version installed for the owner, and deployed. The release
+    // engine proved both and could only say so in the text of an event, so
+    // "released, not installed" took reading prose to see. What it already said
+    // is read out of that text here, once: only its own two sentences, and not
+    // what a person wrote about a release in other words.
+    "
+    ALTER TABLE versions ADD COLUMN installed_at TEXT;
+    ALTER TABLE versions ADD COLUMN deployed_at TEXT;
+    UPDATE versions SET installed_at = (
+        SELECT MIN(e.created_at) FROM events e
+         WHERE e.project_id = versions.project_id AND e.kind = 'shipped'
+           AND substr(e.body, 1, length(versions.name) + 9) = versions.name || ' went out'
+           AND instr(e.body, 'installed from the release and proven by its hash') > 0
+    ) WHERE status = 'shipped';
+    UPDATE versions SET deployed_at = (
+        SELECT MIN(e.created_at) FROM events e
+         WHERE e.project_id = versions.project_id AND e.kind = 'shipped'
+           AND substr(e.body, 1, length(versions.name) + 9) = versions.name || ' went out'
+           AND instr(e.body, 'deployed by turnout') > 0
+    ) WHERE status = 'shipped';
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -1135,6 +1156,10 @@ pub struct VersionCard {
     pub shipped_at: Option<String>,
     pub delivery: Option<crate::delivery::Delivery>,
     pub registries: Vec<String>,
+    /// When the release engine said it was installed for the owner.
+    pub installed_at: Option<String>,
+    /// When the release engine said it was deployed.
+    pub deployed_at: Option<String>,
     pub tasks: Vec<Task>,
 }
 
@@ -1151,6 +1176,10 @@ pub struct Delivered {
     /// `engine` or `github`: who said so.
     pub by: Option<String>,
     pub shipped_at: Option<String>,
+    /// When the release engine said it was installed for the owner.
+    pub installed_at: Option<String>,
+    /// When the release engine said it was deployed.
+    pub deployed_at: Option<String>,
 }
 
 /// The same, read across the line, so it carries who it was asked of.
@@ -2264,7 +2293,7 @@ impl Db {
             return Ok(None);
         };
         let mut card = self.conn.query_row(
-            "SELECT name, title, status, shipped_at, delivery, registries FROM versions WHERE id = ?1",
+            "SELECT name, title, status, shipped_at, delivery, registries, installed_at, deployed_at FROM versions WHERE id = ?1",
             [id],
             |r| {
                 let registries: Option<String> = r.get(5)?;
@@ -2277,6 +2306,8 @@ impl Db {
                     registries: registries
                         .map(|all| all.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect())
                         .unwrap_or_default(),
+                    installed_at: r.get(6)?,
+                    deployed_at: r.get(7)?,
                     tasks: Vec::new(),
                 })
             },
@@ -3434,10 +3465,24 @@ impl Db {
         Ok(if changed > 0 { Change::Updated } else { Change::Unchanged })
     }
 
+    /// Says a shipped version was installed, deployed, or both. Only ever adds:
+    /// a word about one says nothing about the other, and the first moment stays,
+    /// so a release resumed and recorded again does not move it.
+    pub fn set_past_publish(&self, version_id: i64, installed: bool, deployed: bool, moment: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE versions SET
+                 installed_at = CASE WHEN ?2 THEN COALESCE(installed_at, ?4) ELSE installed_at END,
+                 deployed_at = CASE WHEN ?3 THEN COALESCE(deployed_at, ?4) ELSE deployed_at END
+             WHERE id = ?1",
+            params![version_id, installed, deployed, moment],
+        )?;
+        Ok(())
+    }
+
     /// The newest shipped version, with what is known of its delivery.
     pub fn latest_delivery(&self, project_id: i64) -> Result<Option<Delivered>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, delivery, registries, delivered_by, shipped_at FROM versions
+            "SELECT id, name, delivery, registries, delivered_by, shipped_at, installed_at, deployed_at FROM versions
              WHERE project_id = ?1 AND status = 'shipped'",
         )?;
         let rows = stmt.query_map([project_id], |r| {
@@ -3448,6 +3493,8 @@ impl Db {
                 registries: r.get(3)?,
                 by: r.get(4)?,
                 shipped_at: r.get(5)?,
+                installed_at: r.get(6)?,
+                deployed_at: r.get(7)?,
             })
         })?;
         let mut all: Vec<Delivered> = rows.collect::<rusqlite::Result<_>>()?;

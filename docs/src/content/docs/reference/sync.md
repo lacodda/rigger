@@ -172,6 +172,8 @@ Under `--json` it prints an array with one report per project read.
 
 ## Schema
 
+Schema version 35 (v0.45.0) adds when a version was [installed and deployed](/rigger/reference/note/#installed-deployed), and takes what the release engine had said of them in the text of its events: its own two sentences, not what a person wrote about a release in other words.
+
 Schema version 25 (v0.23.0) adds a version's delivery, the registries it reached and who said so - the release engine or GitHub - and the day a question is due.
 
 Schema version 4 adds the full-text index that [`rigger find`](/rigger/reference/find/) searches, and the moment a version was tagged - the day alone cannot tell apart releases that shipped hours apart. The database is copied aside before migrating - the copy is named for the schema it holds - and an older rigger refuses a database it does not understand rather than damaging it.

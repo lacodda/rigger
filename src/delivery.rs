@@ -13,7 +13,15 @@
 //! through `gh` for the newest shipped version, and says what it saw. The
 //! engine's word is not overwritten by the look: the actor outranks the
 //! observer.
+//!
+//! Past the publish there is one more fact, which only the engine can state:
+//! the version was installed for the owner and proven to be the release's own
+//! build, or deployed. GitHub cannot see either. Whether its absence means
+//! anything is for the project's `release.toml` to say, since a library has no
+//! install to miss: what it promises and the engine has not said is what the
+//! version still owes.
 
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -99,6 +107,55 @@ impl Delivery {
             (false, true) => Delivery::TagOnly,
         }
     }
+}
+
+/// What a release promised for after the publish and has not been said to have
+/// done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Owed {
+    Install,
+    Deploy,
+}
+
+impl Owed {
+    /// The debt in the words a screen uses.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Owed::Install => "not installed",
+            Owed::Deploy => "not deployed",
+        }
+    }
+}
+
+/// What a version still owes, going by what the project's `release.toml` says a
+/// release ends with. Only the newest version can owe anything: an older one is
+/// history, and a promise written today does not reach back to it.
+///
+/// A file that cannot be read promises nothing here: this only adds to a line on
+/// a screen, and the gate on that same screen says what is wrong with the file.
+pub fn owed(project: &crate::db::Project, installed_at: Option<&str>, deployed_at: Option<&str>) -> Vec<Owed> {
+    if !project.kind.has_a_place() {
+        return Vec::new();
+    }
+    let Ok(Some(file)) = crate::releasefile::ReleaseFile::read(Path::new(&project.path)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if file.installs() && installed_at.is_none() {
+        out.push(Owed::Install);
+    }
+    if file.deploys() && deployed_at.is_none() {
+        out.push(Owed::Deploy);
+    }
+    out
+}
+
+/// What the newest shipped version of a project still owes.
+pub fn owed_by_newest(db: &crate::db::Db, project: &crate::db::Project) -> Result<Vec<Owed>> {
+    Ok(db
+        .latest_delivery(project.id)?
+        .map_or_else(Vec::new, |newest| owed(project, newest.installed_at.as_deref(), newest.deployed_at.as_deref())))
 }
 
 /// `owner/name` of a GitHub remote, or `None` for any other host.
@@ -228,15 +285,53 @@ fn publish_state(runs: &[serde_json::Value], assets: usize) -> Delivery {
     }
 }
 
+/// What the release engine says it did.
+#[derive(Debug, Default)]
+pub struct Word<'a> {
+    pub tag: &'a str,
+    /// A release with its archives went out.
+    pub release: bool,
+    pub registries: &'a [String],
+    /// It was installed for the owner.
+    pub installed: bool,
+    /// It was deployed.
+    pub deployed: bool,
+    pub text: Option<&'a str>,
+}
+
 /// What recording a release came to.
 #[derive(Debug, Serialize)]
 pub struct Recorded {
     pub version: String,
-    pub delivery: Delivery,
+    /// `None` when nobody has said yet: the word was only about what came after
+    /// the publish, on a version nothing else had been said about.
+    pub delivery: Option<Delivery>,
     pub registries: Vec<String>,
+    pub installed_at: Option<String>,
+    pub deployed_at: Option<String>,
     /// Whether this is what closed the version; `false` when a tag had
     /// already done so.
     pub closed: bool,
+}
+
+impl Recorded {
+    /// What came of it, in one sentence with no full stop.
+    pub fn sentence(&self, project: &str) -> String {
+        let mut known: Vec<&str> = self.delivery.iter().map(|delivery| delivery.describe()).collect();
+        if self.installed_at.is_some() {
+            known.push("installed");
+        }
+        if self.deployed_at.is_some() {
+            known.push("deployed");
+        }
+        let known = known.join(", ");
+        match (self.closed, known.is_empty()) {
+            (true, true) => format!("{project} {} shipped", self.version),
+            (true, false) => format!("{project} {} shipped - {known}", self.version),
+            (false, true) => format!("{project} {} had shipped already", self.version),
+            (false, false) => format!("{project} {} had shipped already; now {known}", self.version),
+        }
+    }
 }
 
 /// Records a release as the engine reports it: the version closes, its
@@ -244,40 +339,65 @@ pub struct Recorded {
 ///
 /// One function for both doors - `note --kind shipped` and MCP's
 /// `record_shipped` - so the two cannot come to mean different things.
-pub fn record(db: &crate::db::Db, project: &crate::db::Project, tag: &str, release: bool, registries: &[String], text: Option<&str>) -> Result<Recorded> {
-    let version = tag_version(tag)?;
-    let registries = registries.iter().map(|r| registry(r)).collect::<Result<Vec<_>>>()?;
+///
+/// A word only about what came after the publish leaves the delivery alone. An
+/// install proven an hour after a release says nothing about the release, and
+/// reading its silence as "no release" would turn a published version back into
+/// a tag.
+pub fn record(db: &crate::db::Db, project: &crate::db::Project, word: &Word) -> Result<Recorded> {
+    let version = tag_version(word.tag)?;
+    let registries = word.registries.iter().map(|r| registry(r)).collect::<Result<Vec<_>>>()?;
     let moment = crate::db::now();
     let day = moment.split('T').next().unwrap_or_default().to_string();
     let (name, change) = db.mark_released(project.id, &version, &day, &moment)?;
-    let delivery = Delivery::from_engine(release, &registries);
+    let closed = change != crate::db::Change::Unchanged;
+    let past_publish = word.installed || word.deployed;
+    let only_past_publish = past_publish && !word.release && registries.is_empty();
     if let Some(id) = db.version_id(project.id, Some(&name))? {
-        db.set_delivery(id, delivery, &registries, "engine")?;
+        if !only_past_publish {
+            db.set_delivery(id, Delivery::from_engine(word.release, &registries), &registries, "engine")?;
+        }
+        db.set_past_publish(id, word.installed, word.deployed, &moment)?;
     }
     // The event is the history; the columns are the current state. Written
     // in the project's words when the engine gave some, and composed from
     // the facts when it did not, so `why` and the diary have a line to show.
     let composed = {
+        let after = [("installed", word.installed), ("deployed", word.deployed)]
+            .into_iter()
+            .filter_map(|(what, said)| said.then_some(what))
+            .collect::<Vec<_>>()
+            .join(" and ");
         let mut reached = Vec::new();
-        if release {
+        if word.release {
             reached.push("the release with its archives".to_string());
         }
         reached.extend(registries.iter().cloned());
-        match reached.is_empty() {
+        let went = match reached.is_empty() {
             true => format!("{name} went out as a tag"),
             false => format!("{name} went out: {}", reached.join(", ")),
+        };
+        match (only_past_publish && !closed, after.is_empty()) {
+            (true, _) => format!("{name} {after}"),
+            (false, true) => went,
+            (false, false) => format!("{went}; {after}"),
         }
     };
-    let body = match text.map(str::trim).filter(|t| !t.is_empty()) {
+    let body = match word.text.map(str::trim).filter(|t| !t.is_empty()) {
         Some(text) => format!("{composed}\n\n{text}"),
         None => composed,
     };
     db.record_event(project.id, "shipped", &body, &moment, "engine")?;
+    let card = db
+        .version_card(project.id, Some(&name))?
+        .context("the version just recorded is not in the record")?;
     Ok(Recorded {
         version: name,
-        delivery,
+        delivery: card.delivery,
         registries,
-        closed: change != crate::db::Change::Unchanged,
+        installed_at: card.installed_at,
+        deployed_at: card.deployed_at,
+        closed,
     })
 }
 

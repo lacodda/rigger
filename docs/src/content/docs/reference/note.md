@@ -6,7 +6,7 @@ description: Record a decision, a finding, a pitfall, a change or the next step.
 ```
 rigger note <PROJECT> <TEXT> [--kind <KIND>] [--principle <NAME>]
 rigger note <PROJECT> <TEXT> --kind question [--due <DAY>]
-rigger note <PROJECT> [<TEXT>] --kind shipped --tag <TAG> [--release] [--registry <NAME>]...
+rigger note <PROJECT> [<TEXT>] --kind shipped --tag <TAG> [--release] [--registry <NAME>]... [--installed] [--deployed]
 rigger wish <PROJECT> <TEXT> [--from <PROJECT>]
 ```
 
@@ -90,11 +90,31 @@ sample v0.2.0 shipped - released and published
 - `--tag` names the release, and must name a version.
 - `--release` says a release with its archives went out.
 - `--registry` names a registry it reached; repeat it for each.
-- The text is optional here: without one, the event is composed from the flags - `v0.2.0 went out: the release with its archives, crates.io, npm`.
+- `--installed` says it was installed for the owner, `--deployed` that it was deployed. Neither takes a name: which stand a deploy went to is for the tool that deployed it.
+- The text is optional here: without one, the event is composed from the flags - `v0.2.0 went out: the release with its archives, crates.io, npm; installed`.
 
 The version closes on this word, without waiting for [`sync`](/rigger/reference/sync/) to read the tag. When `sync` does read it, the tag's day and moment replace the engine's - the tag is the proof - but what the engine said about delivery stays: `sync`'s own look at GitHub never overwrites it. The same release recorded from an assistant is [`record_shipped`](/rigger/reference/mcp/).
 
 What "delivery" means, and the states it has, is on the [`sync`](/rigger/reference/sync/#releases-and-publishing) page.
+
+### Installed, deployed
+
+GitHub can see a release and a publish; it cannot see that a version reached the owner's machine or a stand. Only the engine can say so, and it can say so later than the release: a note with `--installed` or `--deployed` and neither `--release` nor `--registry` is about that alone, and leaves the delivery as it was.
+
+```console
+$ rigger note sample --kind shipped --tag v0.2.0 --installed
+sample v0.2.0 had shipped already; now released and published, installed
+```
+
+Each stays once said, at the first moment it was said. A project's [`release.toml`](/rigger/reference/gate/#where-the-gate-comes-from) decides whether the absence of the word means anything: where it has `[post.install]` or `[post.deploy]`, its newest version **owes** that step until the word comes, and the [packet](/rigger/reference/context/), [`show`](/rigger/reference/show/) and [`version show`](/rigger/reference/version/#version-show) say so. A library with neither owes nothing.
+
+```console
+$ rigger context sample
+...
+Last shipped: v0.2.0 on 2026-09-11 - not installed
+```
+
+A debt is said and does not hold up the line: the [queue](/rigger/reference/queue/) does not call the project unfinished for it.
 
 A `change` can also arrive on its own: [`rigger sync`](/rigger/reference/sync/) reads them from commit messages.
 
@@ -159,9 +179,11 @@ With `--kind shipped` it prints the release.
 | `project` | string | The name of the project. |
 | `shipped` | object | The release as recorded. |
 | `shipped.version` | string | The version that went out. |
-| `shipped.delivery` | string | `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed` or `published`. |
+| `shipped.delivery` | string or null | `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed` or `published`; `null` when nobody has said, as on a version whose only word so far is `--installed`. |
 | `shipped.registries` | array | The registries the release reached. |
 | `shipped.registries[]` | string | One registry name. |
+| `shipped.installed_at` | string or null | When it was first said to be installed, in RFC 3339 UTC. |
+| `shipped.deployed_at` | string or null | When it was first said to be deployed, in RFC 3339 UTC. |
 | `shipped.closed` | boolean | Whether the version was closed by this call. |
 
 ## Related

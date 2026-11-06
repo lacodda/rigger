@@ -470,6 +470,8 @@ fn fill(r: &mut Record, data: &Path) {
         "[package]\nname = \"alpha\"\nversion = \"0.1.0\"\ndescription = \"Reads every spreadsheet you have\"\n",
     )
     .unwrap();
+    // A release of it ends with an install and a deploy, so a version can owe both.
+    std::fs::write(alpha.join("release.toml"), "[post.install]\n\n[post.deploy]\n").unwrap();
     commit(&alpha, "a.txt", "feat: read the first file");
     // A tag no stage of the plan names, right beside a version the plan
     // closed without one: the plan and the tags one step apart.
@@ -743,6 +745,9 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("context", &["context", "alpha", "--explain", "--budget", "300"]);
     r.json("show", &["show", "alpha"]);
     r.json("show", &["show", "notes"]);
+    // What it owed, paid: said after the screens above have shown the debt.
+    r.json("note", &["note", "alpha", "--kind", "shipped", "--tag", "v0.2.0", "--installed", "--deployed"]);
+    r.json("version show", &["version", "show", "alpha", "v0.2.0"]);
     r.json("inbox", &["inbox"]);
     r.json("inbox", &["inbox", "--project", "alpha"]);
     r.json("digest", &["digest", "--since", "3650d"]);

@@ -46,6 +46,8 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger link uses`](/rigger/reference/link/#what-a-project-builds-against) | v0.36.0 | What the projects build against, from their manifests; a release that breaks its users moves them up the queue |
 | [`rigger version list`](/rigger/reference/version/#version-list) | v0.40.0 | The whole plan of a project, in order |
 | [`rigger version move`](/rigger/reference/version/#version-move) | v0.44.0 | Give a stage another number in the record, shifting what stands in its way |
+| [`rigger note --installed`, `--deployed`](/rigger/reference/note/#installed-deployed) | v0.45.0 | A release installed for the owner or deployed, said as a fact; what the newest version still owes shows on the screens |
+| [`rigger gate`](/rigger/reference/gate/#where-the-gate-comes-from) from `release.toml` | v0.45.0 | A repository that states its gate has that one, on every screen, and the record's field is for a project with no file |
 | [`rigger queue --ahead`](/rigger/reference/queue/#--ahead) | v0.39.0 | The queue played forward: who comes when, and on which stage |
 | [`rigger refactor`](/rigger/reference/refactor/) | v0.38.0 | Whose turn it is to be refactored, one at a time across the line, and how |
 | [`rigger tail`](/rigger/reference/tail/) | v0.37.0 | How much of each plan is left; a turn starts by growing or sorting it when due |

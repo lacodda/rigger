@@ -140,6 +140,8 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `state.last_shipped` | string or null | The newest shipped version. |
 | `state.last_shipped_on` | string or null | The day it shipped, `YYYY-MM-DD`. |
 | `state.delivery_short` | string | How far the newest version got past its tag, when that falls short of installable: `tag-only`, `no-assets`, `released`, `publish-running` or `publish-failed`. Absent when delivery is complete. |
+| `state.owed` | array | What the newest version's `release.toml` promises for after the publish and nobody has [said was done](/rigger/reference/note/#installed-deployed). Absent when it owes nothing. |
+| `state.owed[]` | string | `install` or `deploy`. |
 | `state.versions_planned` | integer | How many versions are planned and unshipped. |
 | `state.tail` | string | What a turn should start with when the plan needs something done to it: the [tail](/rigger/reference/tail/) in a few words. Absent otherwise. |
 | `state.tasks_open` | integer | How many tasks are open. |
@@ -151,7 +153,7 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `state.since_last_session.days_ago` | integer or null | Days since that moment. |
 | `state.since_last_session.events` | integer | Events recorded since, not counting commits. |
 | `state.since_last_session.commits` | integer | Changes read from commit messages since. |
-| `state.gate` | string or null | The command that says the project is fit to commit. |
+| `state.gate` | string or null | The command that says the project is fit to commit: [from its `release.toml`](/rigger/reference/gate/#where-the-gate-comes-from) when that states one. |
 | `state.retired` | object | When and why the project was [retired](/rigger/reference/project/#project-retire). Absent while it is in the work. |
 | `state.retired.since` | string | When it was retired, an RFC 3339 UTC moment. |
 | `state.retired.decision` | integer or null | The id of the decision that retired it, which `rigger event` reads. |

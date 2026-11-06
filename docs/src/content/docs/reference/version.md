@@ -107,10 +107,14 @@ sample v0.2.0 · Second
 
 shipped    on 2026-09-11 - released and published
 reached    crates.io, npm
+installed  on 2026-09-11
+deployed   not yet
 tasks      0 open of 2
   [2] done    import
   [3] done    export
 ```
+
+`installed` and `deployed` show what the [release engine said](/rigger/reference/note/#installed-deployed); `not yet` is what the newest version still owes by its project's `release.toml`, and a step the file does not promise is not shown.
 
 A version the record does not have is refused, like everywhere else a version is named; one written `v1.13` finds `v1.13.0`.
 
@@ -128,6 +132,9 @@ $ rigger version show sample --json
   "shipped_at": null,
   "delivery": null,
   "registries": [],
+  "installed_at": null,
+  "deployed_at": null,
+  "owed": [],
   "tasks": [
     { "id": 4, "title": "full-text index", "status": "done" },
     { "id": 5, "title": "a query language", "status": "new" }
@@ -147,6 +154,10 @@ $ rigger version show sample --json
 | `delivery` | string or null | How far past its tag it got: `tag-only`, `no-assets`, `released`, `publish-running`, `publish-failed` or `published`; `null` when nobody has said. |
 | `registries` | array | The registries the release engine said it reached. |
 | `registries[]` | string | One registry's name. |
+| `installed_at` | string or null | When the release engine first said it was installed for the owner, in RFC 3339 UTC. |
+| `deployed_at` | string or null | When the release engine first said it was deployed, in RFC 3339 UTC. |
+| `owed` | array | What the newest shipped version's `release.toml` promises for after the publish and nobody has said was done; empty for any other version. |
+| `owed[]` | string | `install` or `deploy`. |
 | `tasks` | array | The version's tasks, in plan order. |
 | `tasks[]` | object | One task. |
 | `tasks[].id` | integer | The task's id. |

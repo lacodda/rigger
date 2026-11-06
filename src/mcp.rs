@@ -356,12 +356,14 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "record_shipped",
-            "Record a release as the release engine made it: the tag, whether a release with its archives went out, and which registries it reached. The version closes on this word rather than on a guess from the tag, and `sync` does not overwrite what is recorded here.",
+            "Record a release as the release engine made it: the tag, whether a release with its archives went out, which registries it reached, and whether it was installed for the owner or deployed. The version closes on this word rather than on a guess from the tag, and `sync` does not overwrite what is recorded here.",
             json!({
                 "project": project_arg(),
                 "tag": { "type": "string", "description": "The tag the release went out under, as v0.23.0" },
                 "release": { "type": "boolean", "description": "Whether a release with its archives was published" },
                 "registries": { "type": "array", "items": { "type": "string" }, "description": "The registries it reached: crates.io, npm" },
+                "installed": { "type": "boolean", "description": "Whether it was installed for the owner" },
+                "deployed": { "type": "boolean", "description": "Whether it was deployed" },
                 "text": text_arg("Anything worth keeping about how it went; optional"),
             }),
             &["project", "tag"],
@@ -602,17 +604,20 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 .and_then(Value::as_array)
                 .map(|all| all.iter().filter_map(Value::as_str).map(str::to_string).collect())
                 .unwrap_or_default();
-            let text = args.get("text").and_then(Value::as_str);
-            let recorded = crate::delivery::record(db, &project, tag, release, &registries, text)?;
-            Ok(match recorded.closed {
-                true => format!("{} {} shipped - {}.", project.name, recorded.version, recorded.delivery.describe()),
-                false => format!(
-                    "{} {} had shipped already; now {}.",
-                    project.name,
-                    recorded.version,
-                    recorded.delivery.describe()
-                ),
-            })
+            let said = |key: &str| args.get(key).and_then(Value::as_bool).unwrap_or(false);
+            let recorded = crate::delivery::record(
+                db,
+                &project,
+                &crate::delivery::Word {
+                    tag,
+                    release,
+                    registries: &registries,
+                    installed: said("installed"),
+                    deployed: said("deployed"),
+                    text: args.get("text").and_then(Value::as_str),
+                },
+            )?;
+            Ok(format!("{}.", recorded.sentence(&project.name)))
         }
         "task_find" => {
             let Some(query) = args.get("query").and_then(Value::as_str).map(str::trim).filter(|q| !q.is_empty()) else {

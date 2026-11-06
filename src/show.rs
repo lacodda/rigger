@@ -41,6 +41,9 @@ pub struct Screen {
     /// How far the newest shipped version got past its tag, when anyone has
     /// said: the release engine, or GitHub as `sync` read it.
     pub delivery: Option<crate::delivery::Delivery>,
+    /// What the newest version's release promised for after the publish and
+    /// nobody has said was done.
+    pub owed: Vec<crate::delivery::Owed>,
     pub versions_planned: u64,
     pub tasks_open: u64,
     pub commits_since_tag: Option<u32>,
@@ -95,6 +98,7 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         hub_path: project.hub_path.clone(),
         last_shipped: db.last_shipped_version(project.id)?,
         delivery: db.latest_delivery(project.id)?.and_then(|d| d.delivery),
+        owed: crate::delivery::owed_by_newest(db, project)?,
         versions_planned: db.count_versions(project.id, "planned")?,
         tasks_open: db.count_open_tasks(project.id)?,
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
@@ -157,8 +161,10 @@ pub fn render(screen: &Screen) -> String {
     match &screen.last_shipped {
         Some((version, day)) => {
             let _ = write!(out, "Last shipped {version} on {day}");
-            if let Some(delivery) = screen.delivery {
-                let _ = write!(out, " - {}", delivery.describe());
+            let delivery = screen.delivery.iter().map(|delivery| delivery.describe());
+            let said = delivery.chain(screen.owed.iter().map(|owed| owed.describe())).collect::<Vec<_>>();
+            if !said.is_empty() {
+                let _ = write!(out, " - {}", said.join(", "));
             }
             match screen.commits_since_tag {
                 Some(0) | None => out.push('\n'),
@@ -340,6 +346,7 @@ mod tests {
             hub_path: None,
             last_shipped: Some(("v0.2.0".into(), "2026-09-10".into())),
             delivery: None,
+            owed: Vec::new(),
             versions_planned: 3,
             tasks_open: 4,
             commits_since_tag: Some(2),

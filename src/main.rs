@@ -178,6 +178,12 @@ enum Command {
         /// A registry the release reached; repeat for each
         #[arg(long = "registry", value_name = "NAME")]
         registries: Vec<String>,
+        /// The release was installed for the owner
+        #[arg(long)]
+        installed: bool,
+        /// The release was deployed
+        #[arg(long)]
+        deployed: bool,
     },
     /// Work on what comes next: the project, its stage, your assistant started on it
     Go {
@@ -1376,6 +1382,8 @@ fn run(cli: Cli) -> Result<()> {
             tag,
             release,
             registries,
+            installed,
+            deployed,
         } => {
             // The flags that belong to one kind are refused on the others,
             // so that a `--due` on a finding is a mistake said out loud
@@ -1383,13 +1391,24 @@ fn run(cli: Cli) -> Result<()> {
             if due.is_some() && kind != NoteKind::Question {
                 bail!("--due belongs to a question; this is a {}", kind.as_str());
             }
-            if kind != NoteKind::Shipped && (tag.is_some() || release || !registries.is_empty()) {
-                bail!("--tag, --release and --registry describe a release; write --kind shipped");
+            if kind != NoteKind::Shipped && (tag.is_some() || release || !registries.is_empty() || installed || deployed) {
+                bail!("--tag, --release, --registry, --installed and --deployed describe a release; write --kind shipped");
             }
             match kind {
                 NoteKind::Shipped => {
                     let tag = tag.context("a release is recorded by its tag: --tag v0.23.0")?;
-                    note_shipped(&project, &tag, release, &registries, text.as_deref(), json)
+                    note_shipped(
+                        &project,
+                        &delivery::Word {
+                            tag: &tag,
+                            release,
+                            registries: &registries,
+                            installed,
+                            deployed,
+                            text: text.as_deref(),
+                        },
+                        json,
+                    )
                 }
                 _ => {
                     let text = text.with_context(|| format!("say what the {} is", kind.as_str()))?;
@@ -2338,22 +2357,14 @@ fn note_on_card(task: &str, kind: &str, text: &str, json: bool) -> Result<()> {
 }
 
 /// Records a release as the release engine reports it.
-fn note_shipped(project: &str, tag: &str, release: bool, registries: &[String], text: Option<&str>, json: bool) -> Result<()> {
+fn note_shipped(project: &str, word: &delivery::Word, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = working_project(&db, project)?;
-    let recorded = delivery::record(&db, &project, tag, release, registries, text)?;
+    let recorded = delivery::record(&db, &project, word)?;
     if json {
         return print_json(&serde_json::json!({ "project": project.name, "shipped": recorded }));
     }
-    match recorded.closed {
-        true => println!("{} {} shipped - {}", project.name, recorded.version, recorded.delivery.describe()),
-        false => println!(
-            "{} {} had shipped already; now {}",
-            project.name,
-            recorded.version,
-            recorded.delivery.describe()
-        ),
-    }
+    println!("{}", recorded.sentence(&project.name));
     if !recorded.registries.is_empty() {
         println!("  reached {}", recorded.registries.join(", "));
     }
@@ -6010,6 +6021,12 @@ fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> 
         return Ok(());
     };
     let open: Vec<&db::Task> = card.tasks.iter().filter(|t| db::is_open_status(&t.status)).collect();
+    // Only the newest version can owe anything: see `delivery::owed`.
+    let newest = db.latest_delivery(project.id)?.is_some_and(|newest| newest.version == card.version);
+    let owed = match newest {
+        true => delivery::owed(&project, card.installed_at.as_deref(), card.deployed_at.as_deref()),
+        false => Vec::new(),
+    };
 
     if json {
         println!(
@@ -6022,6 +6039,9 @@ fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> 
                 "shipped_at": card.shipped_at,
                 "delivery": card.delivery,
                 "registries": card.registries,
+                "installed_at": card.installed_at,
+                "deployed_at": card.deployed_at,
+                "owed": owed,
                 "tasks": card.tasks,
                 "open_tasks": open.len(),
             }))?
@@ -6042,6 +6062,16 @@ fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> 
         }
         if !card.registries.is_empty() {
             println!("reached    {}", card.registries.join(", "));
+        }
+        for (what, at, debt) in [
+            ("installed", &card.installed_at, delivery::Owed::Install),
+            ("deployed", &card.deployed_at, delivery::Owed::Deploy),
+        ] {
+            match at.as_deref().and_then(|at| at.split('T').next()) {
+                Some(day) => println!("{what:<10} on {day}"),
+                None if owed.contains(&debt) => println!("{what:<10} not yet"),
+                None => {}
+            }
         }
     }
     println!("tasks      {} open of {}", open.len(), card.tasks.len());

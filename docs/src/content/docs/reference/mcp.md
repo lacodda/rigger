@@ -56,7 +56,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `tail_done`, `refactor_done` | Say the plan was gone through, or the project was refactored, as those rituals ask |
 | `set_next_step` | The one line the next session starts from; the newest wins |
 | `ask_owner` | A question only the owner can settle; it waits in the packet, with a `due` day when the answer is needed by one |
-| `record_shipped` | A release as the release engine made it: `tag`, `release`, `registries` |
+| `record_shipped` | A release as the release engine made it: `tag`, `release`, `registries`, `installed`, `deployed` |
 | `wish` | Something to sort into the plan later; `from` makes it a neighbour's order, and `waits` says that neighbour's stage cannot go on without it |
 | `resolve` | Answers a question, sorts a wish or clears a blocker, so it leaves the packet; `built` says a neighbour's order is done, and the neighbour moves up once it is released |
 | `close_task` | Marks a task of the current stage done |
@@ -82,7 +82,7 @@ This is what lets an assistant write a research note or fix a vision into the re
 
 `ask_owner` takes a `due` - a date, `tomorrow`, `+3d`, `friday` - when the answer is needed by a day; past it, the question is shown as overdue in the inbox, the queue and the packet. See [`note`](/rigger/reference/note/#a-question-with-the-day-it-is-due).
 
-`record_shipped` is what a release engine calls when it has made a release: the `tag`, whether a `release` with its archives went out, and the `registries` it reached. The version closes on it, and `sync`'s own look at GitHub does not overwrite it. See [`note --kind shipped`](/rigger/reference/note/#a-release-as-the-engine-made-it).
+`record_shipped` is what a release engine calls when it has made a release: the `tag`, whether a `release` with its archives went out, the `registries` it reached, and whether it was `installed` for the owner or `deployed`. The version closes on it, and `sync`'s own look at GitHub does not overwrite it. See [`note --kind shipped`](/rigger/reference/note/#a-release-as-the-engine-made-it).
 
 `link` states a tie between two products, anchoring a version on a side by writing it `kasl@v1.13.0`. Only pairs are checked for drift, and the drift is raised on the owner's own screens without anyone asking. See [`link`](/rigger/reference/link/).
 
