@@ -805,8 +805,9 @@ pub struct Project {
     /// guessed: the hubs of this line live in a notes vault, nowhere near
     /// the repositories they describe.
     pub hub_path: Option<String>,
-    /// The command that says this project is fit to commit, as the project
-    /// states it: what CI runs, spelt for a shell.
+    /// The command that says this project is fit to commit, as the record holds
+    /// it. A `release.toml` that states one outranks this: `gate::of` says which
+    /// is in force.
     pub gate: Option<String>,
     /// The two-letter code of its mark, unique across the line.
     pub mark_code: Option<String>,

@@ -196,6 +196,51 @@ fn a_broken_release_file_stops_the_gate_and_not_the_packet() {
     assert!(json(data.path(), &["project", "show", "sample"])["gate"].is_null());
 }
 
+/// A place the record keeps for itself has no directory, and its path column
+/// holds a marker. Read as a path, that is a directory beside wherever rigger runs
+/// on one system, and a name that is no path at all on the other: an error that
+/// would stop `rigger gate` for a project with no file to have read.
+#[test]
+fn a_service_project_reads_no_release_file() {
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let path = json(data.path(), &["project", "service", "tools"])["path"].as_str().unwrap().to_string();
+    if !cfg!(windows) {
+        let beside = work.path().join(&path);
+        std::fs::create_dir_all(&beside).unwrap();
+        std::fs::write(beside.join("release.toml"), format!("[gate]\ncommands = [\"{GREEN}\"]\n\n[post.install]\n")).unwrap();
+    }
+
+    let in_work = |args: &[&str]| -> serde_json::Value {
+        let out = rigger(data.path())
+            .current_dir(work.path())
+            .args(args)
+            .arg("--json")
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("release.toml").not())
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).unwrap()
+    };
+    assert!(in_work(&["project", "show", "tools"])["gate"].is_null());
+    rigger(data.path())
+        .current_dir(work.path())
+        .args(["gate", "tools", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("tools has no gate"));
+
+    rigger(data.path())
+        .current_dir(work.path())
+        .args(["note", "tools", "--kind", "shipped", "--tag", "v0.1.0", "--release"])
+        .assert()
+        .success();
+    assert_eq!(in_work(&["show", "tools"])["owed"], serde_json::json!([]));
+}
+
 #[test]
 fn the_packet_prints_the_gate_on_one_line() {
     let data = tempfile::tempdir().unwrap();
