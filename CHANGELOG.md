@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.44.0] - 2026-11-06
+
+### Features
+- Renumber a plan without duplicates
+
 ## [0.43.0] - 2026-11-06
 
 ### CI
