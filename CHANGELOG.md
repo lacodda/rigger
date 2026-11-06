@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.42.0] - 2026-11-06
+
+### Bug Fixes
+- Register the MCP server for every project, and keep the skill
+
 ## [0.41.0] - 2026-11-06
 
 ### Features
