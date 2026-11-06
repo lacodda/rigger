@@ -8,6 +8,7 @@ mod adopt;
 mod answers;
 mod card;
 mod commit;
+mod config;
 mod context;
 mod db;
 mod delivery;
@@ -38,6 +39,7 @@ mod session;
 mod show;
 mod skill;
 mod sync;
+mod tail;
 mod tray;
 
 use std::path::{Path, PathBuf};
@@ -245,6 +247,32 @@ enum Command {
         project: Option<String>,
         /// `up`, `down`, or a weight: 3 comes round three times as often as 1, 0 leaves the queue
         change: Option<String>,
+    },
+    /// How much of each plan is left, and whether a turn should start by growing or sorting it
+    Tail {
+        #[command(subcommand)]
+        command: Option<TailCommand>,
+        /// Only this project
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Big ideas waiting for your answer, asked about together
+    Ideas {
+        #[command(subcommand)]
+        command: Option<IdeasCommand>,
+    },
+    /// The numbers you can set: how plans grow, and when
+    Config {
+        /// The setting; every setting when omitted
+        key: Option<String>,
+        /// Its new value
+        value: Option<i64>,
+        /// For this project alone
+        #[arg(long)]
+        project: Option<String>,
+        /// Take the value away, back to what stood before it
+        #[arg(long, conflicts_with = "value", requires = "key")]
+        clear: bool,
     },
     /// Open and close a sitting, so its events belong together
     Session {
@@ -946,6 +974,52 @@ enum VersionCommand {
 }
 
 #[derive(Subcommand)]
+enum TailCommand {
+    /// Print how a plan is grown and sorted
+    Ritual,
+    /// Say the plan has been gone through, so this turn does not ask again
+    Done {
+        /// Project name
+        project: String,
+        /// What changed: versions added, wishes sorted, ideas raised
+        text: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum IdeasCommand {
+    /// Raise a big idea: what, why, what it would cost, and where it came from
+    Add {
+        /// Project name
+        project: String,
+        /// The idea
+        text: String,
+    },
+    /// Take an idea: it joins the wishes, to be given a place in the plan
+    Take {
+        /// Project name
+        project: String,
+        /// Id of the idea, as `rigger ideas` lists it
+        id: i64,
+        /// Anything to go with the answer; recorded as a decision
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Decline an idea: it stays in the record and leaves the list
+    Drop {
+        /// Project name
+        project: String,
+        /// Id of the idea, as `rigger ideas` lists it
+        id: i64,
+        /// Why not; recorded as a decision
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Say the owner has been asked, which starts the count to the next time
+    Asked,
+}
+
+#[derive(Subcommand)]
 enum QueueCommand {
     /// Put a project first, until its next release
     First {
@@ -1029,7 +1103,7 @@ fn is_a_closed_pipe(message: &str) -> bool {
 
 /// The commands a person types. The rest are how an assistant reads and writes
 /// the record: they work the same, and `--help --all` lists them.
-const OWNER_COMMANDS: [&str; 8] = ["go", "queue", "priority", "inbox", "init", "project", "doctor", "help"];
+const OWNER_COMMANDS: [&str; 10] = ["go", "queue", "priority", "inbox", "ideas", "config", "init", "project", "doctor", "help"];
 
 /// The command line, with the help showing what a person needs of it.
 fn command_line() -> clap::Command {
@@ -1288,6 +1362,23 @@ fn run(cli: Cli) -> Result<()> {
             Some(QueueCommand::Back { project }) => queue_back(&project, json),
         },
         Command::Priority { project, change } => priority(project.as_deref(), change.as_deref(), json),
+        Command::Tail { command, project } => match command {
+            None => show_tail(project.as_deref(), json),
+            Some(TailCommand::Ritual) if json => print_json(&serde_json::json!({ "ritual": tail::RITUAL })),
+            Some(TailCommand::Ritual) => {
+                print!("{}", tail::RITUAL);
+                Ok(())
+            }
+            Some(TailCommand::Done { project, text }) => tail_done(&project, &text, json),
+        },
+        Command::Ideas { command } => match command {
+            None => show_ideas(json),
+            Some(IdeasCommand::Add { project, text }) => idea_add(&project, &text, json),
+            Some(IdeasCommand::Take { project, id, note }) => idea_answer(&project, id, true, note.as_deref(), json),
+            Some(IdeasCommand::Drop { project, id, note }) => idea_answer(&project, id, false, note.as_deref(), json),
+            Some(IdeasCommand::Asked) => ideas_asked(json),
+        },
+        Command::Config { key, value, project, clear } => config_command(key.as_deref(), value, project.as_deref(), clear, json),
         Command::Session { command } => match command {
             SessionCommand::Start { project } => session_start(project.as_deref(), json),
             SessionCommand::End {
@@ -1936,7 +2027,10 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
             "unfinished": start.and_then(|t| t.unfinished.as_ref()),
             "dir": start.map(|t| working_project(&db, &t.project).map(|p| p.path)).transpose()?,
             "program": program,
-            "message": start.map(go::first_message),
+            "message": start.map(|t| {
+                let order = open_project(&db, &t.project).ok().and_then(|p| tail::of(&db, &p).ok()).and_then(|tail| tail.order());
+                go::first_message(t, order.as_deref())
+            }),
             "passed_over": start.filter(|_| force && named.is_none()).map(|t| go::passed_over(&chosen, t)).unwrap_or_default(),
             "busy": match &choice {
                 go::Choice::Busy { project, since } => Some(serde_json::json!({ "project": project, "since": since })),
@@ -1971,7 +2065,8 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
     let dir = Path::new(&project.path);
     open::check_dir(dir)?;
     let (program, _) = open::assistant();
-    let message = go::first_message(&target);
+    let tail = tail::of(&db, &project)?;
+    let message = go::first_message(&target, tail.order().as_deref());
     if force && named.is_none() {
         let past = go::passed_over(&chosen, &target);
         if !past.is_empty() {
@@ -2933,7 +3028,7 @@ fn day_before(days: i64) -> String {
 }
 
 /// Whole days between a recorded timestamp and now.
-fn days_since_utc(timestamp: &str) -> Option<i64> {
+pub(crate) fn days_since_utc(timestamp: &str) -> Option<i64> {
     let then: jiff::Timestamp = timestamp.parse().ok()?;
     Some(((jiff::Timestamp::now().as_second() - then.as_second()) / 86_400).max(0))
 }
@@ -5384,6 +5479,14 @@ fn show_queue(json: bool) -> Result<()> {
         return print_json(&found);
     }
     print!("{}", queue::render(&found));
+    if ideas_due(&db)? {
+        let open = db.open_ideas()?.len();
+        println!(
+            "\n{} wait{} for your answer - `rigger ideas`",
+            plural(open, "big idea", "big ideas"),
+            if open == 1 { "s" } else { "" }
+        );
+    }
     Ok(())
 }
 
@@ -5480,6 +5583,149 @@ fn show_weights(db: &Db, json: bool) -> Result<()> {
             (weight, _) => format!("{weight} turn{} in every {total}", if weight == 1 { "" } else { "s" }),
         };
         println!("{:<name$}  {:>2}  {turns}", project.name, project.weight);
+    }
+    Ok(())
+}
+
+/// How much of each plan is left.
+fn show_tail(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let projects = match project {
+        Some(name) => vec![working_project(&db, name)?],
+        None => db.projects()?.into_iter().filter(|p| p.kind.has_a_place()).collect(),
+    };
+    let tails = projects.iter().map(|p| tail::of(&db, p)).collect::<Result<Vec<_>>>()?;
+    if json {
+        return print_json(&serde_json::json!({ "tails": tails }));
+    }
+    let name = tails.iter().map(|t| t.project.chars().count()).max().unwrap_or(0);
+    for item in &tails {
+        println!("{:<name$}  {}", item.project, item.line());
+    }
+    Ok(())
+}
+
+/// Says the plan has been gone through.
+fn tail_done(project: &str, text: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = working_project(&db, project)?;
+    db.record_event(project.id, "tail", text, &db::now(), "assistant")?;
+    let now = tail::of(&db, &project)?;
+    if json {
+        return print_json(&now);
+    }
+    println!("{}: {}", project.name, now.line());
+    Ok(())
+}
+
+/// Whether the owner should be asked about the big ideas now: there are some, and
+/// it has been long enough since the last time.
+fn ideas_due(db: &Db) -> Result<bool> {
+    if db.open_ideas()?.is_empty() {
+        return Ok(false);
+    }
+    let every = config::value(db, None, config::IDEAS_EVERY_DAYS)?;
+    Ok(match db.setting("ideas.asked_at")? {
+        Some(at) => days_since_utc(&at).is_none_or(|days| days >= every),
+        None => true,
+    })
+}
+
+/// The big ideas waiting for an answer, across the line.
+fn show_ideas(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let ideas = db.open_ideas()?;
+    let due = ideas_due(&db)?;
+    if json {
+        return print_json(&serde_json::json!({ "ideas": ideas, "due": due, "asked_at": db.setting("ideas.asked_at")? }));
+    }
+    if ideas.is_empty() {
+        println!("No big ideas wait for an answer.");
+        return Ok(());
+    }
+    println!(
+        "{} wait{}",
+        plural(ideas.len(), "big idea", "big ideas"),
+        if ideas.len() == 1 { "s" } else { "" }
+    );
+    for idea in &ideas {
+        println!("  {} [{}] {}  {}", idea.project, idea.id, idea.date, context::headline(&idea.body));
+    }
+    if due {
+        println!("\nTime to ask: have your assistant put them in one questionnaire, then `rigger ideas take` or `drop` each, and `rigger ideas asked`.");
+    }
+    Ok(())
+}
+
+fn idea_add(project: &str, text: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = working_project(&db, project)?;
+    db.record_event(project.id, "idea", text, &db::now(), "assistant")?;
+    if json {
+        return show_ideas(true);
+    }
+    println!("Raised a big idea for {}: it waits for the next questionnaire.", project.name);
+    Ok(())
+}
+
+fn idea_answer(project: &str, id: i64, take: bool, note: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = working_project(&db, project)?;
+    let body = db.answer_idea(project.id, id, take, note)?;
+    if json {
+        return show_ideas(true);
+    }
+    let first = body.lines().next().unwrap_or(&body);
+    match take {
+        true => println!("Taken [{id}]: {first}\n  it joins {}'s wishes, to be given a place in the plan", project.name),
+        false => println!("Declined [{id}]: {first}"),
+    }
+    Ok(())
+}
+
+fn ideas_asked(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    db.set_setting("ideas.asked_at", Some(&db::now()))?;
+    if json {
+        return show_ideas(true);
+    }
+    let every = config::value(&db, None, config::IDEAS_EVERY_DAYS)?;
+    println!(
+        "Noted: the owner has been asked. The next questionnaire comes in {}.",
+        plural(every.max(0) as usize, "day", "days")
+    );
+    Ok(())
+}
+
+/// Shows the settings, or changes one.
+fn config_command(key: Option<&str>, value: Option<i64>, project: Option<&str>, clear: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = project.map(|name| working_project(&db, name)).transpose()?;
+    if let Some(key) = key
+        && (value.is_some() || clear)
+    {
+        config::set(&db, project.as_ref(), key, value)?;
+    } else if key.is_some() || project.is_some() {
+        // Reading one is checked here: a key mistyped must not look like an unset one.
+        if let Some(key) = key {
+            config::value(&db, project.as_ref(), key)?;
+        }
+    }
+    let standing: Vec<config::Standing> = config::standing(&db)?.into_iter().filter(|s| key.is_none_or(|k| k == s.key)).collect();
+    if json {
+        return print_json(&serde_json::json!({ "settings": standing }));
+    }
+    let width = standing.iter().map(|s| s.key.len()).max().unwrap_or(0);
+    for item in &standing {
+        let changed = if item.value == item.default {
+            String::new()
+        } else {
+            format!(" (default {})", item.default)
+        };
+        println!("{:<width$}  {}{changed}  {}", item.key, item.value, item.about);
+        for own in &item.projects {
+            println!("{:<width$}  {} for {}", "", own.value, own.project);
+        }
     }
     Ok(())
 }

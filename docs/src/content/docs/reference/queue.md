@@ -62,10 +62,9 @@ Before choosing, `queue` reads every repository in the work as [`sync`](/rigger/
 | --- | --- |
 | `blocked` | something out of reach stops its tag: the [blocker](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) is named beside it |
 | `out` | its weight is 0: worked on when asked |
-| `no-stage` | nothing is planned for it, so there is no stage to work on |
 | `put-down` | every open task of everything planned is frozen or asleep |
 
-A project that lives in a folder needs no version planned to be in the queue. A project left unfinished is in it even with no stage planned - work done with nothing planned still has to go out - and out of it when it was set aside on purpose. A place the record keeps for itself (`project service`) is not work and is not listed at all.
+A project with nothing planned is in the queue: its turn is what plans it, as [`tail`](/rigger/reference/tail/) says. A project set aside on purpose stays out, and so does whatever it was left holding.
 
 ## Pairs out of step
 
@@ -84,7 +83,7 @@ $ rigger queue first gadget --why "the owner asked"
 gadget comes first until its next release: the owner asked
 ```
 
-It is recorded as an event of the kind `moved`, with the reason as its first line, and it stays open until the project's next turn. [`rigger resolve`](/rigger/reference/resolve/) closes it earlier; its kind then becomes `returned`. A project that was out, had no stage or was put down comes back into the queue when it is moved up: asking for it is enough. Only an `unfinished` project still comes before it.
+It is recorded as an event of the kind `moved`, with the reason as its first line, and it stays open until the project's next turn. [`rigger resolve`](/rigger/reference/resolve/) closes it earlier; its kind then becomes `returned`. A project that was out or put down comes back into the queue when it is moved up: asking for it is enough. Only an `unfinished` project still comes before it.
 
 ## `queue back`
 
@@ -138,7 +137,7 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `left_out` | array | The projects the rule does not consider. |
 | `left_out[]` | object | One of them. |
 | `left_out[].project` | string | The project. |
-| `left_out[].why` | string | `blocked`, `out`, `no-stage` or `put-down`. |
+| `left_out[].why` | string | `blocked`, `out` or `put-down`. |
 | `left_out[].blocker` | object or null | What blocks it, for `blocked`; the oldest of them. |
 | `left_out[].blocker.id` | integer | The id [`resolve`](/rigger/reference/resolve/) clears it by. |
 | `left_out[].blocker.head` | string | The line it is known by. |
@@ -172,7 +171,7 @@ A project can come before its turn, and the turn it takes is the one it had comi
 | An order of its own, [built](/rigger/reference/resolve/) and released, since its own last release | its next release |
 | A neighbour's order it holds, placed with [`wish --waits`](/rigger/reference/note/): that stage cannot go on without it | resolving the order |
 
-An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0, put down or with no stage; the others leave it where it is.
+An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0 or put down; the others leave it where it is.
 
 ## Related
 

@@ -643,6 +643,16 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE events ADD COLUMN resolved_at TEXT;
     ALTER TABLE events ADD COLUMN waits INTEGER NOT NULL DEFAULT 0;
     ",
+    // v34: a number set for one project, where the record's own is not right
+    // for it.
+    "
+    CREATE TABLE project_settings (
+        project_id INTEGER NOT NULL REFERENCES projects (id),
+        key        TEXT NOT NULL,
+        value      INTEGER NOT NULL,
+        PRIMARY KEY (project_id, key)
+    );
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -1085,6 +1095,16 @@ struct LinkRow {
 }
 
 /// An open wish a neighbour asked for.
+#[derive(Debug, Clone, Serialize)]
+pub struct Idea {
+    pub id: i64,
+    pub project: String,
+    pub body: String,
+    /// The day it was raised, `YYYY-MM-DD`.
+    pub date: String,
+}
+
+/// A wish a neighbour placed, with who placed it.
 #[derive(Debug, Clone, Serialize)]
 pub struct Asked {
     pub id: i64,
@@ -4215,6 +4235,102 @@ impl Db {
         Ok(())
     }
 
+    /// A project's own value for a setting.
+    pub fn project_setting(&self, project_id: i64, key: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE project_id = ?1 AND key = ?2",
+                params![project_id, key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Gives a project its own value for a setting, or takes it away.
+    pub fn set_project_setting(&self, project_id: i64, key: &str, value: Option<i64>) -> Result<()> {
+        match value {
+            Some(value) => self.conn.execute(
+                "INSERT INTO project_settings (project_id, key, value) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (project_id, key) DO UPDATE SET value = excluded.value",
+                params![project_id, key, value],
+            )?,
+            None => self
+                .conn
+                .execute("DELETE FROM project_settings WHERE project_id = ?1 AND key = ?2", params![project_id, key])?,
+        };
+        Ok(())
+    }
+
+    /// How many versions are planned and not shipped.
+    pub fn planned_count(&self, project_id: i64) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM versions WHERE project_id = ?1 AND status = 'planned'",
+            [project_id],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// When someone last went through a project's plan.
+    pub fn last_tail_pass(&self, project_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT MAX(created_at) FROM events WHERE project_id = ?1 AND kind = 'tail'",
+                [project_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// Big ideas waiting for the owner, across every project in the work, oldest first.
+    pub fn open_ideas(&self) -> Result<Vec<Idea>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, p.name, e.body, substr(e.created_at, 1, 10) FROM events e JOIN projects p ON p.id = e.project_id
+              WHERE e.kind = 'idea' AND p.retired_at IS NULL
+              ORDER BY e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Idea {
+                id: r.get(0)?,
+                project: r.get(1)?,
+                body: r.get(2)?,
+                date: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The owner's answer to a big idea: taken, it joins the wishes to be given a
+    /// place in the plan; declined, it stays in the record and leaves the list.
+    /// A note goes with it as a decision, as an answer to a question does.
+    pub fn answer_idea(&self, project_id: i64, id: i64, take: bool, note: Option<&str>) -> Result<String> {
+        let found: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT kind, body FROM events WHERE id = ?1 AND project_id = ?2",
+                params![id, project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((kind, body)) = found else {
+            bail!("no idea [{id}] in this project; `rigger ideas` lists them");
+        };
+        if kind != "idea" {
+            bail!("[{id}] is a {kind}, not an idea");
+        }
+        let (to, verdict) = if take { ("wish", "Taken") } else { ("declined", "Declined") };
+        self.conn
+            .execute("UPDATE events SET kind = ?1, resolved_at = ?2 WHERE id = ?3", params![to, now(), id])?;
+        if let Some(note) = note {
+            let text = format!("{body}\n\n{verdict}: {note}");
+            self.record_event(project_id, "decision", &text, &now(), "owner")?;
+        }
+        Ok(body)
+    }
+
     /// What stops this project's tag and is out of reach, oldest first.
     ///
     /// A release after a blocker settles it, cleared or not: whatever stopped
@@ -4266,7 +4382,7 @@ impl Db {
     pub fn recent_events(&self, project_id: i64, limit: u32) -> Result<Vec<RecentEvent>> {
         let mut stmt = self.conn.prepare(
             "SELECT kind, created_at, body, author, id FROM events
-             WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn')
+             WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn', 'idea', 'declined')
              ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_id, limit], |r| {
@@ -4466,7 +4582,7 @@ impl Db {
     /// it can say how many it left out rather than quietly ending its list.
     pub fn count_recent_events(&self, project_id: i64) -> Result<u64> {
         let n: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn')",
+            "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND kind NOT IN ('question', 'wish', 'next', 'withdrawn', 'idea', 'declined')",
             [project_id],
             |r| r.get(0),
         )?;

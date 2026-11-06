@@ -955,6 +955,24 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("resolve", &["resolve", "beta", &id, "--built"]);
     r.json("link uses", &["link", "uses"]);
     r.json("link uses", &["link", "uses", "beta"]);
+    // A plan's tail, the numbers that steer it, and big ideas.
+    r.json("tail", &["tail"]);
+    r.json("tail", &["tail", "--project", "alpha"]);
+    r.json("tail ritual", &["tail", "ritual"]);
+    r.json("tail done", &["tail", "done", "alpha", "Sorted what had piled up"]);
+    r.json("config", &["config"]);
+    r.json("config", &["config", "tail.floor"]);
+    r.json("config", &["config", "tail.floor", "4"]);
+    r.json("config", &["config", "tail.floor", "1", "--project", "alpha"]);
+    r.json("config", &["config"]);
+    r.json("config", &["config", "tail.floor", "--clear"]);
+    r.json("ideas add", &["ideas", "add", "alpha", "A companion for the phone"]);
+    r.json("ideas add", &["ideas", "add", "alpha", "Another language"]);
+    let ideas = r.json("ideas", &["ideas"]);
+    let idea = |n: usize| ideas["ideas"][n]["id"].as_i64().unwrap().to_string();
+    r.json("ideas take", &["ideas", "take", "alpha", &idea(0)]);
+    r.json("ideas drop", &["ideas", "drop", "alpha", &idea(1), "--note", "Not this year"]);
+    r.json("ideas asked", &["ideas", "asked"]);
     // Moved up, and put back.
     r.json("queue first", &["queue", "first", "beta", "--why", "It cannot wait"]);
     r.json("queue back", &["queue", "back", "beta"]);

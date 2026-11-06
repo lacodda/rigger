@@ -141,6 +141,7 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `state.last_shipped_on` | string or null | The day it shipped, `YYYY-MM-DD`. |
 | `state.delivery_short` | string | How far the newest version got past its tag, when that falls short of installable: `tag-only`, `no-assets`, `released`, `publish-running` or `publish-failed`. Absent when delivery is complete. |
 | `state.versions_planned` | integer | How many versions are planned and unshipped. |
+| `state.tail` | string | What a turn should start with when the plan needs something done to it: the [tail](/rigger/reference/tail/) in a few words. Absent otherwise. |
 | `state.tasks_open` | integer | How many tasks are open. |
 | `state.days_quiet` | integer or null | Days since anything was recorded about the project. |
 | `state.commits_since_tag` | integer or null | Commits since the newest tag, as the last `sync` read them. |

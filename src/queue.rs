@@ -197,8 +197,6 @@ pub enum Aside {
     Blocked,
     /// Its weight is 0: worked on when asked.
     Out,
-    /// Nothing is planned for it, so there is no stage to work on.
-    NoStage,
     /// Everything planned was frozen or put to sleep on purpose.
     PutDown,
 }
@@ -208,7 +206,6 @@ impl Aside {
         match self {
             Aside::Blocked => "blocked",
             Aside::Out => "weight 0 - worked on when asked",
-            Aside::NoStage => "no stage planned",
             Aside::PutDown => "everything planned is put down",
         }
     }
@@ -555,7 +552,7 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
     let out = s.weight == 0;
     let put_down = s.stage.as_ref().is_some_and(|stage| stage.put_down);
     let is_unfinished = !unfinished.is_empty() && !out && !put_down;
-    let aside = out || put_down || (s.stage.is_none() && s.kind != Kind::Folder);
+    let aside = out || put_down;
     let moved = asked.or(s.pulled.first().filter(|_| !aside));
     if !is_unfinished && moved.is_none() {
         if out {
@@ -563,12 +560,6 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         }
         if put_down {
             return Err(Aside::PutDown);
-        }
-        // A folder's turn is what its rules say, and needs no version planned.
-        // Work done with nothing planned still has to go out, which is the
-        // unfinished case above.
-        if s.stage.is_none() && s.kind != Kind::Folder {
-            return Err(Aside::NoStage);
         }
     }
 
@@ -897,13 +888,13 @@ mod tests {
         assert!(said.contains("blocked since 2026-11-01: The signing key has expired [7]"), "{said}");
     }
 
-    /// Weight 0, no stage and everything put down are left out, each with its
-    /// reason - and being moved up brings any of them back, because that is
-    /// asking for it. A folder needs no version planned for its turn.
+    /// Weight 0 and everything put down are left out, each with its reason, and
+    /// being moved up brings either back, because that is asking for it. A project
+    /// with nothing planned is in the order: its turn is what plans it.
     #[test]
-    fn out_no_stage_and_put_down_are_left_out_unless_moved() {
+    fn out_and_put_down_are_left_out_unless_moved() {
         let out = on_stage("out", 0, 9);
-        let mut bare = on_stage("bare", 2, 9);
+        let mut bare = on_stage("bare", 2, 0);
         bare.stage = None;
         let mut asleep = on_stage("asleep", 2, 9);
         asleep.stage.as_mut().unwrap().put_down = true;
@@ -916,10 +907,10 @@ mod tests {
 
         let queue = choose(&[out, bare, asleep, asked, folder]);
         let order: Vec<(&str, Reason)> = queue.order.iter().map(|c| (c.project.as_str(), c.reason)).collect();
-        assert_eq!(order, vec![("asked", Reason::Moved), ("folder", Reason::Turn)]);
+        assert_eq!(order, vec![("asked", Reason::Moved), ("bare", Reason::Turn), ("folder", Reason::Turn)]);
         assert_eq!(queue.order[0].version, "unplanned");
         let aside: Vec<(&str, Aside)> = queue.left_out.iter().map(|l| (l.project.as_str(), l.why)).collect();
-        assert_eq!(aside, vec![("asleep", Aside::PutDown), ("bare", Aside::NoStage), ("out", Aside::Out)]);
+        assert_eq!(aside, vec![("asleep", Aside::PutDown), ("out", Aside::Out)]);
     }
 
     #[test]
@@ -969,8 +960,6 @@ mod tests {
     #[test]
     fn an_empty_queue_says_so() {
         assert!(render(&choose(&[])).starts_with("Nothing in the queue: no project"));
-        let mut bare = on_stage("bare", 2, 0);
-        bare.stage = None;
-        assert!(render(&choose(&[bare])).starts_with("Nothing in the queue: every project is left out"));
+        assert!(render(&choose(&[on_stage("out", 0, 0)])).starts_with("Nothing in the queue: every project is left out"));
     }
 }

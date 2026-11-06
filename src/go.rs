@@ -17,7 +17,7 @@
 use serde::Serialize;
 
 use crate::db::Kind;
-use crate::queue::{Aside, Candidate, Queue, Reason, Unfinished};
+use crate::queue::{Candidate, Queue, Reason, Unfinished};
 
 /// What `go` will start.
 #[derive(Debug, Clone, Serialize)]
@@ -88,7 +88,6 @@ pub fn choose(queue: &Queue, named: Option<&str>, force: bool) -> Choice {
             unfinished: None,
             why: queue.left_out.iter().find(|l| l.project == name).map(|l| match (&l.blocker, l.why) {
                 (Some(blocker), _) => format!("blocked since {}: {}", blocker.since, blocker.head),
-                (None, Aside::NoStage) => "no stage planned".to_string(),
                 (None, _) => "left out of the order".to_string(),
             }),
         });
@@ -133,7 +132,7 @@ pub fn passed_over(queue: &Queue, target: &Target) -> Vec<String> {
 /// command, fresh, and this line only has to say what the sitting is for.
 /// Commit subjects and stage titles stay out of it for the same reason: they
 /// hold whatever their authors typed, and this passes through `cmd`.
-pub fn first_message(target: &Target) -> String {
+pub fn first_message(target: &Target, tail: Option<&str>) -> String {
     let project = &target.project;
     let order = match (&target.version, target.kind) {
         // A folder has no tags: what a turn there comes to is for its rules to say.
@@ -148,8 +147,9 @@ pub fn first_message(target: &Target) -> String {
         _ if target.reason == Some(Reason::Moved) => " It comes before its turn: `rigger queue` says why, and that comes first in this stage.".to_string(),
         _ => String::new(),
     };
+    let tail = tail.unwrap_or_default();
     format!(
-        "{order}{unfinished} Read `rigger context {project}` and `rigger rules {project}` first: they give the stage, the gate and how the work is done here. \
+        "{order}{unfinished}{tail} Read `rigger context {project}` and `rigger rules {project}` first: they give the stage, the gate and how the work is done here. \
          If something out of your reach stops the tag, record it with `rigger note {project} --kind blocker` and stop; the queue goes on without it."
     )
 }
@@ -310,14 +310,14 @@ mod tests {
             vec![candidate("first", None)],
             vec![LeftOut {
                 project: "bare".to_string(),
-                why: Aside::NoStage,
+                why: crate::queue::Aside::Out,
                 blocker: None,
             }],
         );
         let target = started(choose(&pick, Some("bare"), false));
         assert_eq!(target.project, "bare");
         assert_eq!(target.version, None);
-        assert!(first_message(&target).contains("no stage is planned"), "{}", first_message(&target));
+        assert!(first_message(&target, None).contains("no stage is planned"), "{}", first_message(&target, None));
     }
 
     /// The whole of why this is one line: a line break cannot reach a batch
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn the_first_message_can_pass_through_a_batch_file() {
         let target = started(choose(&pick_of(vec![candidate("left", Some(dirty()))], vec![]), None, false));
-        let message = first_message(&target);
+        let message = first_message(&target, None);
         assert!(!message.contains(['\n', '\r', '"', '%']), "{message}");
         assert!(message.starts_with("Work on left: take v0.2.0 to a release"), "{message}");
         assert!(
@@ -365,7 +365,7 @@ mod tests {
             vec![candidate("next", None)],
             vec![LeftOut {
                 project: "stuck".to_string(),
-                why: Aside::Blocked,
+                why: crate::queue::Aside::Blocked,
                 blocker: Some(Note {
                     id: 9,
                     head: "No signing key".to_string(),

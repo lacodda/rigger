@@ -120,6 +120,9 @@ pub struct State {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_short: Option<String>,
     pub versions_planned: u64,
+    /// What a turn should start with, when the plan needs something done to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tail: Option<String>,
     pub tasks_open: u64,
     /// Days since anything was recorded about this project. A project that
     /// has gone quiet is worth noticing at the top of a session.
@@ -294,6 +297,10 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
             .filter(|d| d.is_short())
             .map(|d| d.describe().to_string()),
         versions_planned: db.count_versions(project.id, "planned")?,
+        tail: crate::tail::of(db, project)?
+            .due
+            .map(|_| crate::tail::of(db, project).map(|t| t.line()))
+            .transpose()?,
         tasks_open: db.count_open_tasks(project.id)?,
         days_quiet: db.last_event_at(project.id)?.as_deref().and_then(days_since),
         commits_since_tag: activity.as_ref().map(|a| a.commits_since_tag),
@@ -768,6 +775,9 @@ fn render_state(p: &Packet) -> String {
         plural(p.state.versions_planned as usize, "version", "versions"),
         plural(p.state.tasks_open as usize, "task", "tasks")
     ));
+    if let Some(tail) = &p.state.tail {
+        out.push_str(&format!("The plan: {tail}, first (`rigger tail ritual`)\n"));
+    }
     // What git says, which is a different question from what the record
     // says: a project can be busy in commits and silent in events, and the
     // owner's question is how long it has actually been still.

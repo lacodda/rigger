@@ -238,6 +238,24 @@ fn tools() -> Vec<Value> {
             &["project", "change"],
         ),
         tool(
+            "raise_idea",
+            "Raise a big idea for the owner: a new surface, a companion program, a change to the data model or to what the product is. It waits for the next questionnaire across the line, not in the inbox. Small ideas go straight into the plan instead; `rigger tail ritual` says which is which.",
+            json!({
+                "project": project_arg(),
+                "text": text_arg("The idea, why, what it would cost, and where it came from"),
+            }),
+            &["project", "text"],
+        ),
+        tool(
+            "tail_done",
+            "Say the plan has been gone through at the start of a turn, as `rigger tail ritual` asks, so this turn does not ask again.",
+            json!({
+                "project": project_arg(),
+                "text": text_arg("What changed: versions added, wishes sorted, ideas raised"),
+            }),
+            &["project", "text"],
+        ),
+        tool(
             "move_first",
             "Put a project first in the queue until its next release, when the owner says it cannot wait for its turn.",
             json!({
@@ -537,6 +555,16 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             project.weight = crate::queue::changed_weight(project.weight, change)?;
             db.set_weight(project.id, project.weight)?;
             Ok(format!("{} now has weight {}.", project.name, project.weight))
+        }
+        "raise_idea" => {
+            let project = working(db)?;
+            db.record_event(project.id, "idea", text()?, &crate::db::now(), "assistant")?;
+            Ok(format!("Raised a big idea for {}: it waits for the next questionnaire.", project.name))
+        }
+        "tail_done" => {
+            let project = working(db)?;
+            db.record_event(project.id, "tail", text()?, &crate::db::now(), "assistant")?;
+            Ok(format!("{}: {}", project.name, crate::tail::of(db, &project)?.line()))
         }
         "move_first" => {
             let project = working(db)?;
@@ -1096,6 +1124,8 @@ mod tests {
             "queue",
             "set_priority",
             "move_first",
+            "raise_idea",
+            "tail_done",
             "event",
             "plan",
             "record_decision",

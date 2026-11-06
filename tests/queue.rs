@@ -344,7 +344,6 @@ fn what_is_left_out_is_named_with_its_reason() {
     init(data.path());
     project(data.path(), "working", &["v0.2.0 · Second"]);
     project(data.path(), "aside", &["v0.2.0 · Second"]);
-    project(data.path(), "bare", &[]);
     project(data.path(), "frozen", &["v0.2.0 · Second"]);
     rigger(data.path()).args(["priority", "aside", "0"]).assert().success();
     let stage = text(data.path(), &["version", "show", "frozen", "--json"]);
@@ -362,11 +361,7 @@ fn what_is_left_out_is_named_with_its_reason() {
         .collect();
     assert_eq!(
         aside,
-        vec![
-            ("aside".to_string(), "out".to_string()),
-            ("bare".to_string(), "no-stage".to_string()),
-            ("frozen".to_string(), "put-down".to_string()),
-        ]
+        vec![("aside".to_string(), "out".to_string()), ("frozen".to_string(), "put-down".to_string()),]
     );
     let said = text(data.path(), &["queue"]);
     assert!(said.contains("Left out"), "{said}");
