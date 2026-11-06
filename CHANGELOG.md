@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.45.0] - 2026-11-06
+
+### Bug Fixes
+- Keep saying what moved a project once its sitting opens
+- Let an order sorted into the plan be built
+
+### Features
+- Take the gate from release.toml when a repository states one
+- Say a release was installed or deployed
+
+### Testing
+- Hold the docs address to one of two arrangements
+- Hold that a service project reads no release file
+- Rewind the new version columns where a test rewinds the schema
+
 ## [0.44.0] - 2026-11-06
 
 ### Features
