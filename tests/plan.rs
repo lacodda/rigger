@@ -159,3 +159,52 @@ fn one_stage_and_one_task_are_counted_in_the_singular() {
     }
     assert!(output(data.path(), &["show", "sample"]).contains("1 wish unsorted"));
 }
+
+/// The whole plan, in order, with the stage it is on marked and any number
+/// skipped named; what shipped is there when asked for.
+#[test]
+fn the_whole_plan_is_listed() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("sample");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    assert!(output(data.path(), &["version", "list", "sample"]).contains("Nothing is planned for sample."));
+
+    for (version, title) in [("v0.2.0", "Two"), ("v0.1.0", "One"), ("v0.4.0", "Four")] {
+        rigger(data.path())
+            .args(["version", "add", "sample", version, "--title", title, "--task", "a task", "--task", "another"])
+            .assert()
+            .success();
+    }
+    let said = output(data.path(), &["version", "list", "sample"]);
+    let lines: Vec<&str> = said.lines().collect();
+    assert!(lines[0].starts_with("> v0.1.0"), "{said}");
+    assert!(lines[0].contains("2 open of 2") && lines[0].contains("One"), "{said}");
+    assert!(lines[1].starts_with("  v0.2.0"), "{said}");
+    assert!(lines[2].starts_with("  v0.4.0"), "{said}");
+    assert!(said.contains("Skipped in the numbering: v0.3"), "{said}");
+
+    rigger(data.path())
+        .args(["note", "sample", "--kind", "shipped", "--tag", "v0.1.0"])
+        .assert()
+        .success();
+    let found: serde_json::Value = serde_json::from_str(&output(data.path(), &["version", "list", "sample", "--json"])).unwrap();
+    let names: Vec<&str> = found["versions"].as_array().unwrap().iter().map(|v| v["version"].as_str().unwrap()).collect();
+    assert_eq!(names, ["v0.2.0", "v0.4.0"], "{found:#}");
+    assert_eq!(found["versions"][0]["current"], true);
+    assert_eq!(found["skipped"][0], "v0.3");
+    let all: serde_json::Value = serde_json::from_str(&output(data.path(), &["version", "list", "sample", "--all", "--json"])).unwrap();
+    assert_eq!(all["versions"].as_array().unwrap().len(), 3);
+    assert_eq!(all["versions"][0]["status"], "shipped");
+    assert!(output(data.path(), &["version", "list", "sample", "--all"]).contains("shipped "));
+
+    // `task close` takes a stage's task as `task status` does.
+    let id = found["versions"][0]["version"].as_str().map(|_| {
+        let stage: serde_json::Value = serde_json::from_str(&output(data.path(), &["version", "show", "sample", "--json"])).unwrap();
+        stage["tasks"][0]["id"].as_i64().unwrap().to_string()
+    });
+    let id = id.unwrap();
+    assert!(output(data.path(), &["task", "close", &id]).contains("is now done"));
+    assert!(output(data.path(), &["version", "list", "sample"]).contains("1 open of 2"));
+}

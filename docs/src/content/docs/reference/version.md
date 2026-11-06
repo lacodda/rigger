@@ -105,6 +105,35 @@ When every version has shipped and none is being built, `version show` prints on
 
 Fields may be added; none is renamed or removed without a major version.
 
+## `version list`
+
+```console
+$ rigger version list sample
+> v0.2.0  2 open of 3       Plugins
+  v0.3.0  1 open of 1       Themes
+  v0.5.0  4 open of 4       Sync
+
+Skipped in the numbering: v0.4
+```
+
+The whole plan of a project, in order, with the stage it is on marked. A plan's number is the theme's, not the release's, so a gap here is not an error, but it is worth a look: it may be a version that was never written down. `--all` adds what has shipped.
+
+<!-- json: version list -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project. |
+| `versions` | array | Its versions in order; with `--all`, the shipped ones too. |
+| `versions[]` | object | One version. |
+| `versions[].version` | string | The version. |
+| `versions[].title` | string or null | What the stage is about. |
+| `versions[].status` | string | `planned` or `shipped`. |
+| `versions[].shipped_at` | string or null | The day it shipped. |
+| `versions[].tasks` | integer | Its tasks, the dropped ones aside. |
+| `versions[].open` | integer | How many of them are open. |
+| `versions[].current` | boolean | It is the stage the project is on. |
+| `skipped` | array | Numbers skipped between one version and the next, as `v0.4`. |
+| `skipped[]` | string | One of them. |
+
 ## Related
 
 - [`queue`](/rigger/reference/queue/) - the stage that is current is the one the queue names.

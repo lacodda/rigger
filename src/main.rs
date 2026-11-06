@@ -960,6 +960,14 @@ enum SessionCommand {
 
 #[derive(Subcommand)]
 enum VersionCommand {
+    /// The whole plan of a project: every version to come, in order
+    List {
+        /// Project name
+        project: String,
+        /// With the versions already shipped
+        #[arg(long)]
+        all: bool,
+    },
     /// One version: its number, the week it is aimed at, how far it got, its tasks
     Show {
         /// Project name
@@ -1370,6 +1378,7 @@ fn run(cli: Cli) -> Result<()> {
             principles,
         } => why(project.as_deref(), version.as_deref(), principle.as_deref(), principles, json),
         Command::Version { command } => match command {
+            VersionCommand::List { project, all } => version_list(&project, all, json),
             VersionCommand::Show { project, version } => version_show(&project, version.as_deref(), json),
             VersionCommand::Add {
                 project,
@@ -4100,6 +4109,13 @@ fn card_or_in_hand(db: &Db, task: Option<&str>, command: &str) -> Result<card::C
 
 fn task_close(task: Option<&str>, status: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
+    // A number no card answers to is a task of a stage: both are tasks, and the
+    // one looking for `close` should not have to know which it has.
+    if let Some(id) = task.and_then(|t| t.parse::<i64>().ok())
+        && find_card(&db, &id.to_string()).is_err()
+    {
+        return task_status(&id.to_string(), status, json);
+    }
     let card = card_or_in_hand(&db, task, "task close")?;
     let desk = db.desk_project()?;
     let (title, was) = db.set_task_status(desk.id, card.id, status)?;
@@ -5488,6 +5504,63 @@ fn project_unretire(name: &str, why: Option<&str>, json: bool) -> Result<()> {
 /// The plan was something only a hub could hold: a stage came from a
 /// heading in a markdown file and nowhere else, so a person with no hub -
 /// anyone but the line it was built in - had no way to say what comes next.
+/// Numbers skipped between one version and the next planned one: after 1.0 comes
+/// 1.1, not 1.2. Only the minor is counted: patches come and go, and a new major
+/// starts its own count.
+fn skipped_versions(lines: &[db::VersionLine]) -> Vec<String> {
+    let parts = |version: &str| -> Option<(u64, u64)> {
+        let mut numbers = version.trim_start_matches('v').split('.');
+        Some((numbers.next()?.parse().ok()?, numbers.next()?.parse().ok()?))
+    };
+    let mut out = Vec::new();
+    for pair in lines.windows(2) {
+        if let (Some((major, minor)), Some((next_major, next_minor))) = (parts(&pair[0].version), parts(&pair[1].version))
+            && major == next_major
+            && next_minor > minor + 1
+        {
+            out.extend((minor + 1..next_minor).map(|skipped| format!("v{major}.{skipped}")));
+        }
+    }
+    out
+}
+
+/// The whole plan of a project.
+fn version_list(project: &str, all: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let current = db.current_stage(project.id)?.map(|stage| stage.version);
+    let mut lines = db.version_lines(project.id)?;
+    for line in &mut lines {
+        line.current = current.as_deref() == Some(line.version.as_str());
+    }
+    if !all {
+        lines.retain(|line| line.status != "shipped");
+    }
+    let skipped = skipped_versions(&lines);
+    if json {
+        return print_json(&serde_json::json!({ "project": project.name, "versions": lines, "skipped": skipped }));
+    }
+    if lines.is_empty() {
+        println!("Nothing is planned for {}.", project.name);
+        return Ok(());
+    }
+    let width = lines.iter().map(|line| line.version.chars().count()).max().unwrap_or(0);
+    for line in &lines {
+        let mark = if line.current { ">" } else { " " };
+        let title = line.title.as_deref().unwrap_or("");
+        let state = match (line.status.as_str(), &line.shipped_at) {
+            ("shipped", Some(on)) => format!("shipped {on}"),
+            ("shipped", None) => "shipped".to_string(),
+            _ => format!("{} open of {}", line.open, line.tasks),
+        };
+        println!("{mark} {:<width$}  {state:<16}  {title}", line.version);
+    }
+    if !skipped.is_empty() {
+        println!("\nSkipped in the numbering: {}", skipped.join(", "));
+    }
+    Ok(())
+}
+
 fn version_add(project: &str, version: &str, title: Option<&str>, tasks: &[String], json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = working_project(&db, project)?;

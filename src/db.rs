@@ -1094,7 +1094,21 @@ struct LinkRow {
     far_version: Option<i64>,
 }
 
-/// An open wish a neighbour asked for.
+/// One version, on the screen of a whole plan.
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionLine {
+    pub version: String,
+    pub title: Option<String>,
+    pub status: String,
+    pub shipped_at: Option<String>,
+    /// Its tasks, and how many are open.
+    pub tasks: usize,
+    pub open: usize,
+    /// It is the stage the project is on.
+    pub current: bool,
+}
+
+/// A big idea waiting for the owner.
 #[derive(Debug, Clone, Serialize)]
 pub struct Idea {
     pub id: i64,
@@ -4270,6 +4284,30 @@ impl Db {
         let rows = stmt.query_map([project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
         let mut all: Vec<(String, Option<String>)> = rows.collect::<rusqlite::Result<_>>()?;
         all.sort_by_key(|a| version_order(&a.0));
+        Ok(all)
+    }
+
+    /// A project's versions in order, each with how far its tasks have got.
+    pub fn version_lines(&self, project_id: i64) -> Result<Vec<VersionLine>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT v.name, v.title, v.status, v.shipped_at,
+                    (SELECT COUNT(*) FROM tasks t WHERE t.version_id = v.id AND t.status NOT IN ('dropped')),
+                    (SELECT COUNT(*) FROM tasks t WHERE t.version_id = v.id AND t.status NOT IN ('done', 'dropped'))
+               FROM versions v WHERE v.project_id = ?1 AND v.status <> 'dropped'",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(VersionLine {
+                version: r.get(0)?,
+                title: r.get(1)?,
+                status: r.get(2)?,
+                shipped_at: r.get(3)?,
+                tasks: r.get::<_, i64>(4)? as usize,
+                open: r.get::<_, i64>(5)? as usize,
+                current: false,
+            })
+        })?;
+        let mut all: Vec<VersionLine> = rows.collect::<rusqlite::Result<_>>()?;
+        all.sort_by_key(|line| version_order(&line.version));
         Ok(all)
     }
 
