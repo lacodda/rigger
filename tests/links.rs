@@ -156,17 +156,15 @@ fn a_half_that_shipped_without_its_other_half_is_reported() {
     assert!(drift.contains("alpha v0.2.0 shipped without beta v0.2.0"), "{drift}");
     assert!(drift.contains("the shared door"), "the note is carried: {drift}");
 
-    // And the owner's screens say it without being asked about links.
-    assert!(output(data.path(), &["next"]).contains("Pairs out of step"));
-    assert!(output(data.path(), &["week"]).contains("alpha v0.2.0 shipped without beta"));
-    // The window is pinned to the week of the release: a look back from
-    // today would lose it once the clock moved a month on.
-    assert!(output(data.path(), &["retro", "--to", "2026-W38", "--weeks", "4"]).contains("Pairs out of step"));
+    // And the queue says it without being asked about links.
+    let queue = output(data.path(), &["queue"]);
+    assert!(queue.contains("Pairs out of step"), "{queue}");
+    assert!(queue.contains("alpha v0.2.0 shipped without beta"), "{queue}");
 
     // Both halves out is the pair working, and the warning goes.
     ship(data.path(), "beta", "v0.2.0", "2026-09-11");
     assert!(output(data.path(), &["link", "drift"]).contains("both halves in step"));
-    assert!(!output(data.path(), &["next"]).contains("Pairs out of step"));
+    assert!(!output(data.path(), &["queue"]).contains("Pairs out of step"));
 }
 
 /// A consumer that has moved on past the version of what it draws on is a

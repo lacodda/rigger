@@ -7,7 +7,7 @@ A coding assistant that starts a session by reading the whole project record pay
 
 `rigger context <project>` prints, in this order:
 
-1. **State** - one line: current version, tier, last tag and its date, commits since.
+1. **State** - one line: current version, last tag and its date, commits since.
 2. **Current stage** - the version in progress and its open items.
 3. **Waiting for the owner** - open questions, oldest first.
 4. **Wishes, not yet sorted** - what is queued for the plan, the neighbours' orders among them.

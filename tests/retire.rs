@@ -28,15 +28,8 @@ fn refusal(data: &Path, args: &[&str]) -> String {
     String::from_utf8(out.get_output().stderr.clone()).unwrap()
 }
 
-/// An ISO week as `2026-W41`, counted from this one.
-fn week(offset: i64) -> String {
-    let day = jiff::Zoned::now().date().checked_add(jiff::Span::new().days(offset * 7)).unwrap();
-    let week = day.iso_week_date();
-    format!("{}-W{:02}", week.year(), week.week())
-}
-
 /// Two products of a line, tied as a pair, both in the rotation, with the
-/// line's skill installed; `attic` has a stage aimed at this week, a
+/// line's skill installed; `attic` has a stage planned, a
 /// question for the owner and a wish.
 fn line(data: &Path) {
     rigger(data).arg("init").assert().success();
@@ -49,22 +42,11 @@ fn line(data: &Path) {
             .status()
             .unwrap();
         rigger(data).args(["project", "add"]).arg(&root).assert().success();
-        rigger(data).args(["project", "tier", name, "A"]).assert().success();
+        rigger(data).args(["priority", name, "3"]).assert().success();
     }
     rigger(data).args(["skill", "--line", "--install"]).assert().success();
     rigger(data)
-        .args([
-            "version",
-            "add",
-            "attic",
-            "v0.2.0",
-            "--title",
-            "Shelves",
-            "--task",
-            "build the shelves",
-            "--week",
-        ])
-        .arg(week(0))
+        .args(["version", "add", "attic", "v0.2.0", "--title", "Shelves", "--task", "build the shelves"])
         .assert()
         .success();
     rigger(data)
@@ -101,9 +83,8 @@ fn a_retired_project_leaves_every_list_that_looks_ahead() {
     line(data.path());
     // Seen before, so that its absence after is the retirement's doing.
     assert!(installed_skill(data.path()).contains("`attic`"));
-    assert!(output(data.path(), &["calendar"]).contains("attic"));
+    assert!(output(data.path(), &["queue"]).contains("attic"));
     assert!(output(data.path(), &["inbox"]).contains("Which wood"));
-    assert!(output(data.path(), &["next"]).contains("attic"));
 
     let said = output(
         data.path(),
@@ -122,14 +103,11 @@ fn a_retired_project_leaves_every_list_that_looks_ahead() {
     assert_eq!(products, ["sample"], "the registry says what the line ships");
 
     for screen in [
-        vec!["calendar"],
-        vec!["next"],
-        vec!["week"],
-        vec!["release-day"],
+        vec!["queue"],
+        vec!["priority"],
         vec!["inbox"],
         vec!["digest"],
         vec!["sync"],
-        vec!["project", "tier", "--suggest"],
         vec!["link", "list"],
     ] {
         let text = output(data.path(), &screen);
@@ -139,10 +117,6 @@ fn a_retired_project_leaves_every_list_that_looks_ahead() {
             screen.join(" ")
         );
     }
-    let ics = data.path().join("line.ics");
-    rigger(data.path()).args(["calendar", "--ics"]).arg(&ics).assert().success();
-    assert!(!std::fs::read_to_string(&ics).unwrap().contains("attic"));
-
     // The index of the record still has it, marked.
     let list = output(data.path(), &["project", "list"]);
     assert!(list.lines().any(|l| l.starts_with("attic") && l.contains("(retired ")), "{list}");
@@ -188,7 +162,9 @@ fn a_retired_project_takes_nothing_new_and_says_which_one() {
         vec!["wish", "attic", "A window"],
         vec!["session", "start", "attic"],
         vec!["version", "add", "attic", "v0.3.0"],
-        vec!["project", "tier", "attic", "B"],
+        vec!["priority", "attic", "1"],
+        vec!["queue", "first", "attic"],
+        vec!["go", "attic"],
         vec!["link", "add", "sample", "attic"],
         vec!["skill", "attic"],
         vec!["sync", "attic"],
@@ -318,9 +294,9 @@ fn unretiring_brings_it_back_where_it_was() {
 
     let said = output(data.path(), &["project", "unretire", "attic", "--why", "The ladder arrived"]);
     assert!(said.contains("attic is back in the work"), "{said}");
-    assert!(said.contains("its tier is A"), "the tier it had is kept: {said}");
+    assert!(said.contains("its weight is 3"), "the weight it had is kept: {said}");
     assert!(installed_skill(data.path()).contains("`attic`"));
-    assert!(output(data.path(), &["calendar"]).contains("attic"));
+    assert!(output(data.path(), &["queue"]).contains("attic"));
     assert!(output(data.path(), &["inbox"]).contains("Which wood"));
     rigger(data.path())
         .args(["note", "attic", "--kind", "decision", "Paint it after all"])
@@ -330,48 +306,6 @@ fn unretiring_brings_it_back_where_it_was() {
     let history = output(data.path(), &["find", "ladder", "--project", "attic"]);
     assert!(history.contains("Back in the work"), "{history}");
     assert!(output(data.path(), &["project", "unretire", "attic"]).contains("not retired"));
-}
-
-/// A look back keeps what a retired project did and drops what it was
-/// never going to do.
-#[test]
-fn a_retro_keeps_its_past_and_drops_its_future() {
-    let data = tempfile::tempdir().unwrap();
-    line(data.path());
-    rigger(data.path())
-        .args(["version", "add", "attic", "v0.1.0", "--week"])
-        .arg(week(0))
-        .assert()
-        .success();
-    rigger(data.path())
-        .args(["note", "attic", "--kind", "shipped", "--tag", "v0.1.0"])
-        .assert()
-        .success();
-    rigger(data.path())
-        .args(["version", "add", "attic", "v0.1.5", "--week"])
-        .arg(week(-1))
-        .assert()
-        .success();
-    rigger(data.path())
-        .args(["version", "plan", "attic", "v0.2.0", "--week", &week(1)])
-        .assert()
-        .success();
-    retire(data.path());
-
-    let retro: Value = serde_json::from_str(&output(data.path(), &["retro", "--weeks", "3", "--to", &week(1), "--json"])).unwrap();
-    let named = |list: &str| -> Vec<String> {
-        retro[list]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|v| v["project"] == "attic")
-            .map(|v| v["version"].as_str().unwrap().to_string())
-            .collect()
-    };
-    assert_eq!(named("shipped"), ["v0.1.0"], "what it shipped happened: {retro}");
-    assert_eq!(named("missed"), ["v0.1.5"], "aimed before it left is missed; aimed after is not: {retro}");
-    let standing = retro["standings"].as_array().unwrap().iter().find(|s| s["project"] == "attic").unwrap();
-    assert!(standing["tier"].is_null(), "no tier is held against it: {standing}");
 }
 
 /// Its checkout is still on disk, and a sweep of the directory finds it.

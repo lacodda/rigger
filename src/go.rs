@@ -1,7 +1,7 @@
 //! One command for a whole turn: which project, its stage, and the assistant
 //! started on it.
 //!
-//! The pick has known what comes next since v0.32, and sessions could be
+//! The record has known what comes next for a while, and sessions could be
 //! started since v0.4, but the owner still looked at GitHub for what was
 //! touched longest ago and called a project's skill by hand: a choice printed
 //! on one screen and a session started from another is two steps, and two
@@ -9,19 +9,21 @@
 //! as it does: a project left unfinished comes back before anything new
 //! starts, and only `--force` walks past it.
 //!
-//! The rule itself lives in `pick`, so `go`, `pick` and the MCP tool cannot
-//! disagree about what comes next. This module only decides what the answer
+//! The rule itself lives in `queue`, so `go`, `rigger queue` and the MCP tool
+//! cannot disagree about what comes next. This module only decides what the answer
 //! means for a command about to start something, and what to say before and
 //! after.
 
 use serde::Serialize;
 
-use crate::pick::{Aside, Candidate, Pick, Reason, Unfinished};
+use crate::db::Kind;
+use crate::queue::{Aside, Candidate, Queue, Reason, Unfinished};
 
 /// What `go` will start.
 #[derive(Debug, Clone, Serialize)]
 pub struct Target {
     pub project: String,
+    pub kind: Kind,
     /// The stage to take to a release; `None` for a project named outright
     /// that has none planned.
     pub version: Option<String>,
@@ -39,11 +41,12 @@ impl Target {
     fn of(c: &Candidate) -> Target {
         Target {
             project: c.project.clone(),
+            kind: c.kind,
             version: (c.version != "unplanned").then(|| c.version.clone()),
             title: c.title.clone(),
             reason: Some(c.reason),
             unfinished: c.unfinished.clone(),
-            why: Some(crate::pick::why(c)),
+            why: Some(crate::queue::why(c)),
         }
     }
 }
@@ -70,19 +73,20 @@ pub enum Choice {
 /// the rule says of it, and joins a sitting that is open. `force` passes over
 /// every project left unfinished, and only those - the order of the rest is
 /// the rule's.
-pub fn choose(pick: &Pick, named: Option<&str>, force: bool) -> Choice {
-    let order = || pick.pick.iter().chain(&pick.then);
+pub fn choose(queue: &Queue, named: Option<&str>, force: bool) -> Choice {
+    let order = || queue.order.iter();
     if let Some(name) = named {
         if let Some(found) = order().find(|c| c.project == name) {
             return Choice::Start(Target::of(found));
         }
         return Choice::Start(Target {
             project: name.to_string(),
+            kind: Kind::Repo,
             version: None,
             title: None,
             reason: None,
             unfinished: None,
-            why: pick.left_out.iter().find(|l| l.project == name).map(|l| match (&l.blocker, l.why) {
+            why: queue.left_out.iter().find(|l| l.project == name).map(|l| match (&l.blocker, l.why) {
                 (Some(blocker), _) => format!("blocked since {}: {}", blocker.since, blocker.head),
                 (None, Aside::NoStage) => "no stage planned".to_string(),
                 (None, _) => "left out of the order".to_string(),
@@ -95,10 +99,10 @@ pub fn choose(pick: &Pick, named: Option<&str>, force: bool) -> Choice {
         false => order().next(),
     };
     let Some(first) = first else {
-        return Choice::Nothing(match (force, pick.pick.is_some()) {
+        return Choice::Nothing(match (force, !queue.order.is_empty()) {
             (true, true) => "Nothing to go on to: every project in the order is unfinished.".to_string(),
-            _ if pick.left_out.is_empty() => "Nothing to work on: no project is in the work.".to_string(),
-            _ => "Nothing to work on: every project is left out - `rigger pick` says why.".to_string(),
+            _ if queue.left_out.is_empty() => "Nothing to work on: no project is in the work.".to_string(),
+            _ => "Nothing to work on: every project is left out - `rigger queue` says why.".to_string(),
         });
     };
     if let Some(since) = first.unfinished.as_ref().and_then(|u| u.sitting.as_ref()) {
@@ -111,10 +115,10 @@ pub fn choose(pick: &Pick, named: Option<&str>, force: bool) -> Choice {
 }
 
 /// The projects `--force` walks past to reach `target`.
-pub fn passed_over(pick: &Pick, target: &Target) -> Vec<String> {
-    pick.pick
+pub fn passed_over(queue: &Queue, target: &Target) -> Vec<String> {
+    queue
+        .order
         .iter()
-        .chain(&pick.then)
         .take_while(|c| c.project != target.project)
         .map(|c| c.project.clone())
         .collect()
@@ -131,9 +135,11 @@ pub fn passed_over(pick: &Pick, target: &Target) -> Vec<String> {
 /// hold whatever their authors typed, and this passes through `cmd`.
 pub fn first_message(target: &Target) -> String {
     let project = &target.project;
-    let order = match &target.version {
-        Some(version) => format!("Work on {project}: take {version} to a release - one sitting, one tag, without stopping to ask."),
-        None => format!("Work on {project}: no stage is planned, so plan one and take it to a release - one sitting, one tag."),
+    let order = match (&target.version, target.kind) {
+        // A folder has no tags: what a turn there comes to is for its rules to say.
+        (_, Kind::Folder) => format!("Work on {project}: one turn, one finished piece of work, as its rules say, without stopping to ask."),
+        (Some(version), _) => format!("Work on {project}: take {version} to a release - one sitting, one tag, without stopping to ask."),
+        (None, _) => format!("Work on {project}: no stage is planned, so plan one and take it to a release - one sitting, one tag."),
     };
     let unfinished = match target.unfinished.as_ref().map(Unfinished::parts) {
         Some(parts) if !parts.is_empty() => format!(" It was left unfinished ({}): finish that first.", parts.join(", ")),
@@ -158,30 +164,30 @@ pub fn before(target: &Target, program: &str, dir: &str) -> String {
 
 /// What the screen says after it stopped: how the turn went, and what comes
 /// next. Starting that is another `go`: the owner sees each turn end.
-pub fn after(target: &Target, shipped: Option<&str>, pick: &Pick) -> String {
+pub fn after(target: &Target, shipped: Option<&str>, queue: &Queue) -> String {
     let project = target.project.as_str();
     let mut out = String::from("\n");
-    let order = || pick.pick.iter().chain(&pick.then);
+    let order = || queue.order.iter();
     if let Some(version) = shipped {
         out.push_str(&format!("{project} {version} went out.\n"));
     }
     if let Some(left) = order().find(|c| c.project == project && c.unfinished.is_some()) {
         out.push_str(&format!(
             "{project} is not finished: {}. `rigger go` comes back to it; `rigger go --force` goes past it.\n",
-            crate::pick::unfinished_parts(left)
+            crate::queue::unfinished_parts(left)
         ));
-    } else if let Some(blocked) = pick.left_out.iter().find(|l| l.project == project).and_then(|l| l.blocker.as_ref()) {
+    } else if let Some(blocked) = queue.left_out.iter().find(|l| l.project == project).and_then(|l| l.blocker.as_ref()) {
         out.push_str(&format!(
             "{project} is blocked: {}. The queue goes on without it; `rigger resolve {project} {}` puts it back.\n",
             blocked.head, blocked.id
         ));
     } else if shipped.is_none() {
-        out.push_str(&format!("{project} has no new tag, and nothing left over.\n"));
+        out.push_str(&format!("{project} has no new tag, and nothing left over: it is still its turn.\n"));
     }
     match order().next() {
         Some(next) if next.project == project => {}
         Some(next) => out.push_str(&format!("Next: {} {} - `rigger go`\n", next.project, next.version)),
-        None => out.push_str("Nothing comes next: `rigger pick` says why.\n"),
+        None => out.push_str("Nothing comes next: `rigger queue` says why.\n"),
     }
     out
 }
@@ -194,21 +200,19 @@ pub fn busy(project: &str, since: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calendar::Week;
-    use crate::pick::{LeftOut, Pick};
+    use crate::queue::{LeftOut, Note};
 
     fn candidate(project: &str, unfinished: Option<Unfinished>) -> Candidate {
         Candidate {
             project: project.to_string(),
-            tier: None,
+            kind: Kind::Repo,
+            weight: 2,
             reason: if unfinished.is_some() { Reason::Unfinished } else { Reason::Turn },
             version: "v0.2.0".to_string(),
             title: Some("Second".to_string()),
-            planned: None,
-            weeks_late: None,
             unfinished,
-            answered: 0,
-            behind: None,
+            moved: None,
+            waited: 0,
             last_turn: None,
             waiting: 0,
             asked: 0,
@@ -217,13 +221,11 @@ mod tests {
         }
     }
 
-    fn pick_of(order: Vec<Candidate>, left_out: Vec<LeftOut>) -> Pick {
-        let mut order = order.into_iter();
-        Pick {
-            week: Week::parse("2026-W45").unwrap(),
-            pick: order.next(),
-            then: order.collect(),
+    fn pick_of(order: Vec<Candidate>, left_out: Vec<LeftOut>) -> Queue {
+        Queue {
+            order,
             left_out,
+            parted: Vec::new(),
             unread: Vec::new(),
         }
     }
@@ -361,7 +363,7 @@ mod tests {
             vec![LeftOut {
                 project: "stuck".to_string(),
                 why: Aside::Blocked,
-                blocker: Some(crate::pick::Blocker {
+                blocker: Some(Note {
                     id: 9,
                     head: "No signing key".to_string(),
                     since: "2026-11-05".to_string(),
@@ -379,6 +381,6 @@ mod tests {
         let target = started(choose(&pick_of(vec![candidate("idle", None)], vec![]), None, false));
         let pick = pick_of(vec![candidate("next", None), candidate("idle", None)], vec![]);
         let said = after(&target, None, &pick);
-        assert!(said.contains("idle has no new tag, and nothing left over."), "{said}");
+        assert!(said.contains("idle has no new tag, and nothing left over: it is still its turn."), "{said}");
     }
 }

@@ -65,8 +65,7 @@ A retired project is listed with the day it left: `attic  C:\dev\attic  (retired
 | `[].path` | string | The repository's or the folder's directory, or the name itself for a service project. |
 | `[].remote` | string or null | The `origin` remote from git config; null when there is none. |
 | `[].created_at` | string | When the project was recorded, in RFC 3339 UTC. |
-| `[].tier` | string or null | The release tier: `A`, `B`, `C` or `out`; null until `project tier` sets one. |
-| `[].rhythm_weeks` | integer or null | Weeks meant to go between releases; null until a tier or `--rhythm` sets it. |
+| `[].weight` | integer | How often it comes round in the [queue](/rigger/reference/queue/); 0 is out of it. `rigger priority` changes it. |
 | `[].kind` | string | `repo` for a repository, `folder` for a directory of work with no repository, `service` for a place the record keeps for itself. |
 | `[].hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
 | `[].gate` | string or null | The command that says the project is fit to commit; null when none is set. |
@@ -101,16 +100,15 @@ $ rigger project show sample --json
   "path": "C:\\dev\\sample",
   "remote": "https://github.com/acme/sample.git",
   "created_at": "2026-09-04T07:41:10Z",
-  "tier": "A",
-  "rhythm_weeks": 2
+  "weight": 2
 }
 ```
 
-Timestamps are UTC in RFC 3339. `tier` and `rhythm_weeks` are null until `project tier` sets them.
+Timestamps are UTC in RFC 3339. A new project has weight 2.
 
-The commands that record or change a project - `add`, `service`, `set`, `mark`, `tier`, `retire` and `unretire` - print the same object under `--json`.
+The commands that record or change a project - `add`, `service`, `set`, `mark`, `retire` and `unretire` - print the same object under `--json`.
 
-<!-- json: project add, project service, project show, project set, project mark, project tier, project retire, project unretire -->
+<!-- json: project add, project service, project show, project set, project mark, project retire, project unretire -->
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | integer | The project's id in the record. |
@@ -118,8 +116,7 @@ The commands that record or change a project - `add`, `service`, `set`, `mark`, 
 | `path` | string | The repository's or the folder's directory, or the name itself for a service project. |
 | `remote` | string or null | The `origin` remote from git config; null when there is none. |
 | `created_at` | string | When the project was recorded, in RFC 3339 UTC. |
-| `tier` | string or null | The release tier: `A`, `B`, `C` or `out`; null until `project tier` sets one. |
-| `rhythm_weeks` | integer or null | Weeks meant to go between releases; null until a tier or `--rhythm` sets it. |
+| `weight` | integer | How often it comes round in the [queue](/rigger/reference/queue/); 0 is out of it. `rigger priority` changes it. |
 | `kind` | string | `repo` for a repository, `folder` for a directory of work with no repository, `service` for a place the record keeps for itself. |
 | `hub_path` | string or null | The directory of the project's hub; null until a hub is imported or exported. |
 | `gate` | string or null | The command that says the project is fit to commit; null when none is set. |
@@ -133,79 +130,6 @@ The commands that record or change a project - `add`, `service`, `set`, `mark`, 
 | `retired_by` | integer or null | The id of the decision that retired it, which `rigger event` reads; null while it is in the work. |
 | `about` | string or null | The line the record holds about the project, written by `project set --about` where no manifest describes it; null otherwise. |
 
-
-## `project tier`
-
-```
-rigger project tier <NAME> <A|B|C|out> [--rhythm <WEEKS>]
-rigger project tier --suggest [<NAME>] [--json]
-```
-
-Where a project sits in the release rotation, and how often it should ship. The tiers are the ones the line already works to: **A** carrying products that are released and used every day, **B** growing ones whose code works but whose circuit is not closed, **C** declared ones with a name and a plan and no product yet.
-
-```console
-$ rigger project tier sample A
-sample is tier A - carrying - released, in the registries, used every day
-  a release every 2 weeks
-```
-
-Each tier carries a rhythm of its own - two weeks for A, four for B, six for C - so setting one is a single word in the common case. `--rhythm` is for the project that keeps its tier's company but not its pace.
-
-`out` is for a project deliberately outside the rotation: it is worked on when asked, and [`next`](/rigger/reference/next/) never says it is behind. That is a decision, not an omission - a project given `out` **and** a rhythm is still left alone.
-
-A project with no tier at all is out by omission, and is equally left alone: rigger does not invent a schedule that nobody asked for.
-
-### `--suggest`
-
-```
-rigger project tier --suggest [<NAME>] [--json]
-```
-
-A tier for each project, read from the releases of the last cycle (seven weeks, as [`retro --cycle`](/rigger/reference/retro/) counts them). It sets nothing: each line that would move prints the `project tier` command to paste.
-
-```console
-$ rigger project tier --suggest
-From 2026-W33 to 2026-W39 (7 weeks) - nothing is set until you run the command
-
-idle     stalled in B - 0 shipped, B asks 1
-         rigger project tier idle C
-racing   outgrew C - 12 shipped, C asks 1
-         rigger project tier racing A
-fresh    no tier yet - 2 shipped
-         rigger project tier fresh B
-steady   holds A - 3 shipped, A asks 3
-aside    out by decision - 4 shipped
-```
-
-| Verdict | What the numbers say | Suggested |
-| --- | --- | --- |
-| `stalled` | the tier asked for releases and none came | one tier down; C goes `out` |
-| `outgrown` | twice the tier's pace or more | the tier the pace describes; a racing A keeps A with a shorter `--rhythm` |
-| `holds` | the tier describes what happened | the same tier |
-| `out` | out of the rotation by decision | left out - the numbers are not held against it |
-| `untiered` | no tier yet | the slowest tier whose rhythm the pace keeps; with nothing shipped, C if it has a plan and `out` if not |
-
-A stall moves one step and a race as far as the pace goes, on purpose: stalling is a fact about the last weeks rather than a verdict on the product, and a product shipping forty times what its tier asks is not one step away from its tier. What would move is listed first, stalls before the rest. `--json` gives each project's `verdict`, `suggested`, `current`, `rhythm_weeks`, `shipped` and `expected`.
-
-### JSON
-
-With `--suggest`, `--json` prints the window and one suggestion per project.
-
-<!-- json: project tier -->
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `from` | string | The first week of the window, as `YYYY-Www`. |
-| `to` | string | The last week of the window, as `YYYY-Www`. |
-| `weeks` | integer | How many weeks the window spans. |
-| `suggestions` | array | One element per project, the ones that would move first. |
-| `suggestions[]` | object | One project's suggestion. |
-| `suggestions[].project` | string | The project's name. |
-| `suggestions[].current` | string or null | The tier now: `A`, `B`, `C` or `out`; null when none is set. |
-| `suggestions[].verdict` | string | What the numbers say: `stalled`, `outgrown`, `holds`, `out` or `untiered`. |
-| `suggestions[].suggested` | string | The tier suggested: `A`, `B`, `C` or `out`. |
-| `suggestions[].rhythm_weeks` | integer or null | A rhythm to go with the tier when its own would not fit; null otherwise. |
-| `suggestions[].shipped` | integer | Versions shipped in the window. |
-| `suggestions[].expected` | integer or null | Releases the current tier asks for over the window; null when it asks for none. |
 
 ## `project set`
 
@@ -324,27 +248,27 @@ Takes a project out of the work for good, keeping everything it has done readabl
 $ rigger project retire attic --why "Folded into sample; nobody climbs up there any more."
 attic is retired, as of 2026-10-13: Folded into sample; nobody climbs up there any more.
   left as they were: 1 question, 1 wish, 1 open task - kept in its history, gone from the inbox and the plan
-  gone from the line's skill, the registry, the calendar, the rotation, the inbox and sync
+  gone from the line's skill, the registry, the queue, the inbox and sync
   `rigger show attic` still reads it; nothing new is recorded against it
   `rigger project unretire attic` brings it back
   C:\Users\you\.claude\skills\line\SKILL.md now lists 1 project
 ```
 
-The tier `out` is not this. `out` is a project worked on when asked: the line's skill goes on offering it, the calendar goes on giving it a row, the inbox goes on asking its questions. A retired project is one nobody will work on, and every list that looks ahead leaves it out:
+Weight 0 is not this. A project at weight 0 is worked on when asked: the line's skill goes on offering it, the queue goes on listing it, the inbox goes on asking its questions. A retired project is one nobody will work on, and every list that looks ahead leaves it out:
 
 | Leaves it out | Still reads it by name |
 | --- | --- |
-| the line's [skill](/rigger/reference/skill/) - an installed one is written again on the spot | [`show`](/rigger/reference/show/), which says so in place of the tier, and the [context packet](/rigger/reference/context/), which opens with the day it was retired and the decision that says why |
+| the line's [skill](/rigger/reference/skill/) - an installed one is written again on the spot | [`show`](/rigger/reference/show/), which says so in place of the weight, and the [context packet](/rigger/reference/context/), which opens with the day it was retired and the decision that says why |
 | the registry [`export --line`](/rigger/reference/export/) publishes | [`event`](/rigger/reference/event/), [`why`](/rigger/reference/why/), [`find`](/rigger/reference/find/) and [`export`](/rigger/reference/export/) |
-| [`calendar`](/rigger/reference/calendar/) and its `--ics`, [`next`](/rigger/reference/next/), [`week`](/rigger/reference/week/), [`release-day`](/rigger/reference/release-day/) | [`retro`](/rigger/reference/retro/) - what it shipped happened, and what it planned before it left was planned; a version aimed at a week after it left is not counted missed, and no tier is held against it |
-| the tier signals, `project tier --suggest`, and the pairs [`link`](/rigger/reference/link/) warns have parted | `link list <name>` |
+| [`queue`](/rigger/reference/queue/) and [`priority`](/rigger/reference/priority/) | what it shipped happened, and stays in its history |
+| the pairs [`link`](/rigger/reference/link/) warns have parted | `link list <name>` |
 | [`inbox`](/rigger/reference/inbox/) - its questions wait for nobody now - and [`digest`](/rigger/reference/digest/) | `digest` with its name; its questions and wishes in its own packet |
 | [`sync`](/rigger/reference/sync/), [`adopt`](/rigger/reference/adopt/) and `doctor --hubs` | `project list`, which marks it `(retired YYYY-MM-DD)`; [`doctor`](/rigger/reference/doctor/) counts it |
 | the resources the [MCP server](/rigger/reference/mcp/) lists | every MCP tool that reads |
 
 `--why` is required: a retirement is a decision, and it is recorded as one against the project before the door closes. What the project leaves open - questions, wishes, tasks - is counted and left as it was, part of its history rather than tidied away on its behalf.
 
-Nothing new is recorded against it afterwards. `note`, `wish`, `session start`, `open`, `gate`, `version add` and `plan`, `project tier`, `link add`, `doc add`, `skill`, `sync` and `import` refuse it by name; so do the MCP tools that write. Below them the database refuses on its own: new events, sittings, stages and tasks of a retired project are rejected by the schema, whatever writes them. What it already holds can still be edited - a wish sorted with [`resolve`](/rigger/reference/resolve/), a task closed - so that it can be tidied; an answer to one of its questions is a new decision, and is refused.
+Nothing new is recorded against it afterwards. `note`, `wish`, `session start`, `open`, `gate`, `version add` and `plan`, `link add`, `doc add`, `skill`, `sync` and `import` refuse it by name; so do the MCP tools that write. Below them the database refuses on its own: new events, sittings, stages and tasks of a retired project are rejected by the schema, whatever writes them. What it already holds can still be edited - a wish sorted with [`resolve`](/rigger/reference/resolve/), a task closed - so that it can be tidied; an answer to one of its questions is a new decision, and is refused.
 
 ```console
 $ rigger note attic --kind decision "Paint it after all"
@@ -353,12 +277,12 @@ error: attic is retired since 2026-10-13: its history reads, but nothing new is 
 
 A sitting still open on the project is refused first - close it with `session end`. A place the record keeps for itself (`project service`) is not in the work and cannot be retired. Retiring a retired project changes nothing and says so.
 
-`unretire` brings it back, with the tier and rhythm it had. `--why` is optional there; the return is recorded as a decision either way.
+`unretire` brings it back, with the weight it had. `--why` is optional there; the return is recorded as a decision either way.
 
 ```console
 $ rigger project unretire attic --why "The ladder arrived"
 attic is back in the work
-  its tier is A, as it was; `rigger project tier` moves it
+  its weight is 2, as it was; `rigger priority` moves it
 ```
 
 Under `--json`, both print the project as `project show` does.
@@ -373,7 +297,7 @@ Recorded 'line' as a place the record keeps for itself
   no repository: sync will not ask git about it
 ```
 
-There is one thing this exists for. A [`retro`](/rigger/reference/retro/) is about every project at once, so its summary belongs to none of them - filing it under one would make it findable from the wrong place and invisible from the rest.
+There is one thing this exists for: a note about every project at once belongs to none of them - filing it under one would make it findable from the wrong place and invisible from the rest.
 
 Such a place is not a repository that happens to be missing, and saying so matters: recorded as an ordinary project it made [`sync`](/rigger/reference/sync/) warn on every run that there was no git to read, and [`doctor`](/rigger/reference/doctor/) list it for ever among the projects waiting to be synced - the record nagging about a project working exactly as intended. Now `sync` does not ask git about it, and `doctor` does not count it as unsynced.
 
@@ -383,6 +307,6 @@ Everything else works on it as usual: events, questions, wishes, [`digest`](/rig
 
 - [`init`](/rigger/reference/init/) - the database `project` writes to.
 - [`doctor`](/rigger/reference/doctor/) - how many projects are recorded.
-- [`calendar`](/rigger/reference/calendar/) - where a tier and its rhythm are read.
-- [`retro`](/rigger/reference/retro/) - what a service project is made for, and what it keeps of a retired one.
+- [`queue`](/rigger/reference/queue/) - where a project's weight is read.
+- [`priority`](/rigger/reference/priority/) - how a weight is changed.
 - [`gate`](/rigger/reference/gate/) - running the command `project set --gate` records.

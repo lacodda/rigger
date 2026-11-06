@@ -70,7 +70,7 @@ Two things are reported, and only for pairs:
 
 **One half ran ahead.** Neither end has shipped its half yet, but one has released two or more versions past where the pair was agreed while the other stood still. One version apart is the ordinary shape of the work - a pair is built one end at a time - so two is where the threshold sits.
 
-You do not have to ask. [`next`](/rigger/reference/next/), [`week`](/rigger/reference/week/) and [`retro`](/rigger/reference/retro/) print the same lines under **Pairs out of step**, because a pair belongs to no single project and every screen that reads one project at a time is the reason the drift went unseen.
+You do not have to ask. [`rigger queue`](/rigger/reference/queue/) prints the same lines under **Pairs out of step**, because a pair belongs to no single project and every screen that reads one project at a time is the reason the drift went unseen.
 
 ## Listing and forgetting
 
@@ -150,6 +150,6 @@ Recording the same link twice changes nothing rather than adding a second row. A
 ## Related
 
 - [`show`](/rigger/reference/show/) - the neighbours on a project's screen.
-- [`week`](/rigger/reference/week/) - where the drift is raised without being asked for.
+- [`queue`](/rigger/reference/queue/) - where the drift is raised without being asked for.
 - [`note`](/rigger/reference/note/) - `--from`, for a wish one project asks another for.
 - [`mcp`](/rigger/reference/mcp/) - `link` and `links`, as an assistant's tools.

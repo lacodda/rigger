@@ -45,8 +45,6 @@ fn a_stage_and_its_tasks_are_planned_without_a_hub() {
             "read the sheet",
             "--task",
             "write the report",
-            "--week",
-            "2026-W43",
         ],
     );
     assert!(said.contains("Added v0.1.0 to sample, with 2 tasks"), "{said}");
@@ -64,7 +62,6 @@ fn a_stage_and_its_tasks_are_planned_without_a_hub() {
     let shown: serde_json::Value = serde_json::from_str(&output(data.path(), &["version", "show", "sample", "v0.1.0", "--json"])).unwrap();
     let titles: Vec<&str> = shown["tasks"].as_array().unwrap().iter().map(|t| t["title"].as_str().unwrap()).collect();
     assert_eq!(titles, ["read the sheet", "write the report", "draw the chart"]);
-    assert_eq!(shown["week"], "2026-W43");
     assert_eq!(shown["title"], "First light");
 }
 

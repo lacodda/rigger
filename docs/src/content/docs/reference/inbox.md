@@ -13,15 +13,15 @@ The queue of questions waiting on you, gathered from every project at once. Unti
 $ rigger inbox
 6 questions in 3 projects
 
-alpha        [  1] 2026-09-04  Place in the release calendar
+alpha        [  1] 2026-09-04  Place in the queue
              [  2] 2026-09-04  Sign the binaries?
-beta         [  3] 2026-09-04  Place in the release calendar
+beta         [  3] 2026-09-04  Place in the queue
              [  4] 2026-09-04  Sign the binaries?
-gamma        [  5] 2026-09-04  Place in the release calendar
+gamma        [  5] 2026-09-04  Place in the queue
              [  6] 2026-09-04  Sign the binaries?
 
 Asked by several projects - one answer settles each group:
-  Place in the release calendar — alpha, beta, gamma
+  Place in the queue — alpha, beta, gamma
   Sign the binaries? — alpha, beta, gamma
 
 Answer one with: rigger resolve <project> <id> "<answer>"
@@ -45,7 +45,7 @@ sample       [  7] 2026-09-18  Which registry goes first?  overdue since 2026-09
 
 ## One answer, several projects
 
-The block at the bottom is the reason this command groups rather than lists. Questions are copied between projects: a real record had three of them waiting on the same decision about a release calendar, and without the grouping it read as three separate jobs.
+The block at the bottom is the reason this command groups rather than lists. Questions are copied between projects: a real record had three of them waiting on the same decision about a place in the queue, and without the grouping it read as three separate jobs.
 
 Grouping is by wording, not by meaning. rigger notices that two questions are spelt alike - case and punctuation aside - and does not guess at what they have in common. That is enough for the case it exists for: the same question written into several hubs.
 
@@ -101,8 +101,8 @@ Under `--json` it prints the three groups of the screen.
 [`rigger resolve`](/rigger/reference/resolve/) takes a question off the queue, and the answer becomes a decision in the record:
 
 ```console
-$ rigger resolve alpha 1 "Tier B, reviewed each cycle."
-Answered [1]: **Place in the release calendar:** no tier assigned yet.
+$ rigger resolve alpha 1 "Weight 3, reviewed each cycle."
+Answered [1]: **Place in the queue:** no weight assigned yet.
   the answer is recorded as a decision
 ```
 

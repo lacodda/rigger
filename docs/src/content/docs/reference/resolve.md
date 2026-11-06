@@ -29,7 +29,7 @@ Sorted [4]: Show how many days the project has gone without a commit.
 A question takes one, and the answer becomes a decision - which is what an answer to a question about a project is:
 
 ```console
-$ rigger resolve sample 1 "Friday, as the calendar has it."
+$ rigger resolve sample 1 "CSV first, ODS later."
 Answered [1]: Pick the release day.
   the answer is recorded as a decision
 ```

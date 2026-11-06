@@ -20,12 +20,11 @@ Recorded 'sample' at C:\dev\sample
   remote: https://github.com/acme/sample.git
 ```
 
-A plan is a list of stages, and a stage is a version that will end in a tag. [`version add`](/rigger/reference/version/#version-add) plans one with its tasks, and `--week` aims it at a week of the calendar:
+A plan is a list of stages, and a stage is a version that will end in a tag. [`version add`](/rigger/reference/version/#version-add) plans one with its tasks:
 
 ```console
-$ rigger version add sample v0.1.0 --title "First light" --task "read a sheet" --task "write the report" --week 2026-W43
+$ rigger version add sample v0.1.0 --title "First light" --task "read a sheet" --task "write the report"
 Added v0.1.0 to sample, with 2 tasks
-  aimed at 2026-W43 - the week of 2026-10-23
 
 $ rigger version add sample v0.2.0 --title "Charts" --task "draw a chart"
 Added v0.2.0 to sample, with 1 task
@@ -67,7 +66,7 @@ Nothing shipped yet
 (Any [id] above reads whole with `rigger event sample <id>`.)
 ```
 
-[`rigger go sample`](/rigger/reference/go/) starts the assistant in the project, with a sitting open and that packet the first thing it reads; `rigger go` alone works out which project comes next. Connected to the [MCP server](/rigger/reference/mcp/) - the installer registers it - the assistant reads and writes the record itself; everything below is what it does through its tools, shown as the commands a person would type.
+[`rigger go sample`](/rigger/reference/go/) starts the assistant in the project, with a sitting open and that packet the first thing it reads; `rigger go` alone works out which project comes next, by the [queue](/rigger/reference/queue/). Connected to the [MCP server](/rigger/reference/mcp/) - the installer registers it - the assistant reads and writes the record itself; everything below is what it does through its tools, shown as the commands a person would type.
 
 A [session](/rigger/reference/session/) holds a sitting together: what is recorded between `start` and `end` belongs to it.
 
@@ -85,7 +84,6 @@ Tasks are closed by their id, which `version show` lists:
 $ rigger version show sample
 sample v0.1.0 · First light
 
-aimed at   2026-W43 - releases on 2026-10-23
 tasks      2 open of 2
   [1] new     read a sheet
   [2] new     write the report
@@ -181,19 +179,25 @@ the work from the start of the record
 2026-10-07  change    feat: write the report
 ```
 
-And the calendar, comparing what was aimed at with what the tags say happened - this release came two weeks before its week:
+Which project comes next, across all of them, and why:
 
 ```console
-$ rigger calendar --from 2026-W41 --weeks 4
-         2026-W41*  2026-W42  2026-W43  2026-W44
-sample   <v0.1.0
+$ rigger queue
+Next: sample  v0.2.0 · Charts
+  its turn: last turn 2026-10-07, at weight 2
 
-+ shipped as planned   < early   > slipped   ! overdue   * unplanned   · planned
-
-sample   v0.1.0 — aimed at 2026-W43, 2 weeks early
+Left out
+  archive  weight 0 - worked on when asked
 ```
 
-On Monday, [`rigger week`](/rigger/reference/week/) gathers the focus, what ships on Friday and what waits on you into one screen; [`rigger digest`](/rigger/reference/digest/) says what moved, five lines per project. On any day, [`rigger pick`](/rigger/reference/pick/) says which project to take up next, and why.
+[`rigger go`](/rigger/reference/go/) starts the assistant on that project. Each project comes round by its weight - a new one has 2, and [`rigger priority`](/rigger/reference/priority/) shows or changes it:
+
+```console
+$ rigger priority sample up
+sample has weight 3
+```
+
+[`rigger digest`](/rigger/reference/digest/) says what moved, five lines per project.
 
 ## For a program rather than a person
 

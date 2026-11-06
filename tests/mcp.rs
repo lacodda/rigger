@@ -141,9 +141,9 @@ fn a_session_reads_the_record_and_writes_to_it() {
     assert!(packet.contains("Which tier is this project?"), "{packet}");
     assert!(packet.contains("Count days without a commit."), "{packet}");
 
-    // With no project named, the tool says which one, as `rigger pick` does.
-    let picked = server.call(9, "pick", json!({}));
-    assert!(picked.starts_with("Work on proj  v0.2.0 · Second stage"), "{picked}");
+    // With no project named, the tool says which one, as `rigger queue` does.
+    let picked = server.call(9, "queue", json!({}));
+    assert!(picked.starts_with("Next: proj  v0.2.0 · Second stage"), "{picked}");
     assert!(picked.contains("2 questions wait on the owner"), "{picked}");
 
     server.finish();
@@ -419,13 +419,13 @@ fn a_blocker_recorded_over_mcp_takes_the_project_out_of_the_pick() {
 
     let mut server = Server::start(data.path());
     server.request(1, "initialize", json!({}));
-    let said = server.call(2, "pick", json!({}));
-    assert!(said.starts_with("Work on alpha"), "{said}");
+    let said = server.call(2, "queue", json!({}));
+    assert!(said.starts_with("Next: alpha"), "{said}");
 
     let said = server.call(3, "record_blocker", json!({ "project": "alpha", "text": "The signing key has expired" }));
     assert!(said.contains("blocker"), "{said}");
-    let said = server.call(4, "pick", json!({}));
-    assert!(said.contains("Nothing to pick"), "{said}");
+    let said = server.call(4, "queue", json!({}));
+    assert!(said.contains("Nothing in the queue"), "{said}");
     assert!(said.contains("The signing key has expired"), "{said}");
 
     let packet = server.call(5, "context", json!({ "project": "alpha" }));
@@ -433,7 +433,16 @@ fn a_blocker_recorded_over_mcp_takes_the_project_out_of_the_pick() {
     let id: i64 = said.split('[').nth(1).unwrap().split(']').next().unwrap().parse().unwrap();
 
     server.call(6, "resolve", json!({ "project": "alpha", "id": id }));
-    let said = server.call(7, "pick", json!({}));
-    assert!(said.starts_with("Work on alpha"), "{said}");
+    let said = server.call(7, "queue", json!({}));
+    assert!(said.starts_with("Next: alpha"), "{said}");
+
+    // The owner's "raise it" and "it cannot wait", said to the assistant.
+    let said = server.call(8, "set_priority", json!({ "project": "alpha", "change": "up" }));
+    assert!(said.contains("weight 3"), "{said}");
+    let said = server.call(9, "set_priority", json!({ "project": "alpha", "change": "7" }));
+    assert!(said.contains("weight 7"), "{said}");
+    server.call(10, "move_first", json!({ "project": "alpha", "why": "the owner needs it for Monday" }));
+    let said = server.call(11, "queue", json!({}));
+    assert!(said.contains("moved up: the owner needs it for Monday"), "{said}");
     server.finish();
 }

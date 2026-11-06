@@ -73,7 +73,7 @@ Asked the owner about sample; it waits in the inbox until answered
   due 2026-09-25
 ```
 
-`--due` is the day the answer is needed by - a release waiting on it, say. It takes a date, `today`, `tomorrow`, `+3d`, or a weekday meaning the coming one (today included). Once the day has gone by, the question is called **overdue** wherever it is shown: first in its line of the [inbox](/rigger/reference/inbox/), under **Waiting on you** in the [Monday brief](/rigger/reference/week/), in the week's [toast](/rigger/reference/week/#the-week-as-a-toast), and in the packet as `(overdue since 2026-09-25)`. For a person at a terminal the word is also red; in a pipe it is just the word. The day itself is not overdue: a question due today can still be answered on time.
+`--due` is the day the answer is needed by - a release waiting on it, say. It takes a date, `today`, `tomorrow`, `+3d`, or a weekday meaning the coming one (today included). Once the day has gone by, the question is called **overdue** wherever it is shown: first in its line of the [inbox](/rigger/reference/inbox/), and in the packet as `(overdue since 2026-09-25)`. For a person at a terminal the word is also red; in a pipe it is just the word. The day itself is not overdue: a question due today can still be answered on time.
 
 Asking the same question again with `--due` gives the one already waiting a day, rather than a second copy. `--due` on anything but a question, or a day that is not a day, is refused before anything is written.
 

@@ -17,7 +17,7 @@ A sample product
 path       C:\dev\sample
 remote     https://github.com/example/sample.git
 hub        C:\notes\Projects\sample
-tier       C · a version a week
+weight     2
 gate       cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 Last shipped v0.2.0 on 2026-09-10, 2 commits since
@@ -57,9 +57,8 @@ The screen as data: the same facts, without the text form's sentences.
 | `path` | string | The project's directory. |
 | `kind` | string | `repo`, `folder` (a directory of work with no repository) or `service`; the text form says which beside the path. |
 | `remote` | string or null | The git remote's URL. |
-| `tier` | string or null | The project's tier letter. |
-| `rhythm_weeks` | integer or null | The tier's rhythm: how many weeks one version takes. |
-| `retired_at` | string or null | When the project was [retired](/rigger/reference/project/#project-retire), in RFC 3339 UTC; null while it is in the work. The screen then says so in place of the tier. |
+| `weight` | integer | How often the project comes round in the [queue](/rigger/reference/queue/); 0 is out of it. |
+| `retired_at` | string or null | When the project was [retired](/rigger/reference/project/#project-retire), in RFC 3339 UTC; null while it is in the work. The screen then says so in place of the weight. |
 | `gate` | string or null | The command that says the project is fit to commit. |
 | `on_session_end` | string or null | The command the project runs when a session ends. |
 | `hub_path` | string or null | The project's hub directory in the notes vault. |
@@ -128,7 +127,7 @@ So `show` has no budget and no event log. It replaces the hub's README as the su
 
 ## The columns
 
-Only what the record knows is printed; a project with no tier has no tier line. The task marks are `x` done, `-` dropped, `>` active, `~` frozen or waiting, and a space for a task not started.
+Only what the record knows is printed; a retired project has no weight line. The task marks are `x` done, `-` dropped, `>` active, `~` frozen or waiting, and a space for a task not started.
 
 Each document carries the command that opens it, so that knowing a vision exists and reading it are one step apart rather than two.
 
@@ -146,4 +145,4 @@ A project tied to nothing prints no heading at all, rather than an empty one tha
 
 - [`context`](/rigger/reference/context/) - the same record, written for an assistant.
 - [`doc`](/rigger/reference/doc/) - the handwritten texts the screen lists.
-- [`project`](/rigger/reference/project/) - what sets the tier, the gate and the mark.
+- [`project`](/rigger/reference/project/) - what sets the gate and the mark.

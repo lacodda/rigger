@@ -3,12 +3,12 @@ title: The model
 description: Projects, versions, tasks, sessions and events - and where each fact comes from.
 ---
 
-rigger records five kinds of things. Everything it shows - the digest, the calendar, the inbox, the context packet, the exported hub - is derived from them.
+rigger records five kinds of things. Everything it shows - the digest, the queue, the inbox, the context packet, the exported hub - is derived from them.
 
 | Entity | What it is | Where it comes from |
 | --- | --- | --- |
-| **Project** | A repository with a name, a tier and a map of versions | `rigger project add <path>`, then hub import |
-| **Version** | A stage that ends in a tag: its items, planned week, tag date | The plan on import; the tag from git on sync |
+| **Project** | A repository with a name, a weight and a map of versions | `rigger project add <path>`, then hub import |
+| **Version** | A stage that ends in a tag: its items, tag date | The plan on import; the tag from git on sync |
 | **Task** | A unit of work: an item of a version at home, a ticket with an id, aliases and branches at work; may span several projects | The plan, or `rigger task new` |
 | **Session** | One conversation of the assistant about a project or a task: start, end, events | `rigger session`, or the MCP server |
 | **Event** | A decision, finding, pitfall, change, next step or question to the owner - dated, attributed, tied to a session | MCP recording tools, or `rigger note` |
@@ -24,6 +24,6 @@ Two sources can describe the same version: the plan and git. When they disagree,
 
 `rigger sync` reads tags, branches and commits in-process and never runs `git`; `rigger doctor` lists the mismatches.
 
-## The calendar is a view
+## The queue is a view
 
-Tiers, rhythm and the weekly focus are properties of projects and versions. The calendar is a query over them, so it cannot go stale on its own.
+A weight is a property of a project, and the releases are facts read from git. The queue is a query over them, worked out each time and never kept as a list, so it cannot go stale on its own.

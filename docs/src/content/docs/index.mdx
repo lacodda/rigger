@@ -34,7 +34,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## The problem
 
-Run more than a handful of projects and the record scatters: a plan here, a changelog there, a session log the assistant writes for itself, a release calendar kept by hand. You stop reading it, because prose cannot be filtered or summed across projects. The assistant reads it every session at full price, and the biggest project no longer fits in a context window. The facts about what shipped live in git, where nobody looks.
+Run more than a handful of projects and the record scatters: a plan here, a changelog there, a session log the assistant writes for itself, a list of what is next kept by hand. You stop reading it, because prose cannot be filtered or summed across projects. The assistant reads it every session at full price, and the biggest project no longer fits in a context window. The facts about what shipped live in git, where nobody looks.
 
 rigger keeps the record as data in a local SQLite file and derives everything else from it.
 
@@ -57,7 +57,7 @@ rigger keeps the record as data in a local SQLite file and derives everything el
 		Every question waiting for your answer, across all projects, in one list. Answer it and the answer becomes a decision on record.
 	</Card>
 	<Card title="What to work on now" icon="right-arrow">
-		`rigger go` works out which project comes next, the stage it is on and the one reason it comes first, and starts your assistant on it. A turn left unfinished comes back before anything new begins, and a blocker takes a project out of the way with its reason. `rigger pick` and an MCP tool give the same answer without starting anything.
+		`rigger go` works out which project comes next, the stage it is on and the one reason it comes first, and starts your assistant on it. A turn left unfinished comes back before anything new begins, and a blocker takes a project out of the way with its reason. `rigger queue` and an MCP tool give the same answer without starting anything, and the order is set by a weight per project.
 	</Card>
 	<Card title="Hubs as an export" icon="open-book">
 		The markdown you keep in your notes is generated from the database: stable bytes for a stable database, so the history in git stays readable. The end of every sitting writes it again wherever nobody touched it, and `doctor --hubs` names a file somebody wrote in.

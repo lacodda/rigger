@@ -67,11 +67,18 @@ fn commands_in(help: &str) -> Vec<String> {
 /// about, without anybody remembering to list it.
 fn leaves() -> Vec<String> {
     let mut out = Vec::new();
-    for top in commands_in(&help_of(&[])) {
-        let subs = commands_in(&help_of(&[&top]));
+    // The whole list: the plain help shows only what a person types.
+    let everything = String::from_utf8(rigger_bin().args(["--help", "--all"]).output().unwrap().stdout).unwrap();
+    for top in commands_in(&everything) {
+        let help = help_of(&[&top]);
+        let subs = commands_in(&help);
         if subs.is_empty() {
             out.push(top);
         } else {
+            // Subcommands in brackets: it also runs on its own.
+            if help.contains("[COMMAND]") {
+                out.push(top.clone());
+            }
             out.extend(subs.into_iter().map(|s| format!("{top} {s}")));
         }
     }
@@ -212,7 +219,7 @@ struct Row {
 /// A JSON table, and the leaves whose output it documents. Commands that
 /// print one shape - every write that answers with the card it changed -
 /// share one table: `<!-- json: task new, task open -->`. A command that
-/// prints two shapes - `project tier` sets a tier or suggests them - may
+/// prints two shapes - `priority` shows one weight or all of them - may
 /// sit in two tables; its output is then held to their rows together.
 struct Table {
     page: String,
@@ -414,13 +421,6 @@ fn a_path_with_a_star_stands_for_any_key() {
     assert!(!names("*[].id", "[].id"));
 }
 
-/// The ISO week of today, as `2026-W41`: the window `release-day` and
-/// `digest` read is the current one.
-fn this_week() -> String {
-    let week = jiff::Zoned::now().date().iso_week_date();
-    format!("{}-W{:02}", week.year(), week.week())
-}
-
 /// Builds the record and runs every command against it, in an order that
 /// gives each one something to say: every list a command prints is meant
 /// to hold at least one item here, so that the fields of its items are
@@ -428,7 +428,6 @@ fn this_week() -> String {
 fn fill(r: &mut Record, data: &Path) {
     let bin = data.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let now = this_week();
 
     // Stand-ins for what the record reaches outside itself.
     let inbox = bin.join("inbox.json");
@@ -450,12 +449,10 @@ fn fill(r: &mut Record, data: &Path) {
         "case \"$1 $2\" in\n\"release view\") echo 'release not found' >&2; exit 1 ;;\n\"release list\") echo '[{\"tagName\":\"v0.0.9\"}]'; exit 0 ;;\n\"run list\") echo '[]'; exit 0 ;;\nesac\nexit 1",
     );
     let editor = program(&bin, "editor", "exit /b 0", "exit 0");
-    let notify = program(&bin, "notify", "exit /b 0", "exit 0");
     let assistant = program(&bin, "assistant", "exit /b 0", "exit 0");
     r.with("RIGGER_KASL", &kasl);
     r.with("RIGGER_GH", &gh);
     r.with("RIGGER_EDITOR", editor.as_os_str());
-    r.with("RIGGER_NOTIFY", &notify);
     r.with("RIGGER_ASSISTANT", &assistant);
 
     // ---- the record and its projects ------------------------------------
@@ -558,10 +555,11 @@ fn fill(r: &mut Record, data: &Path) {
         ],
     );
     r.json("project mark", &["project", "mark", "alpha"]);
-    r.json("project tier", &["project", "tier", "alpha", "A"]);
-    r.json("project tier", &["project", "tier", "beta", "B", "--rhythm", "3"]);
-    r.json("project tier", &["project", "tier", "notes", "C"]);
-    r.json("project tier", &["project", "tier", "--suggest"]);
+    r.json("priority", &["priority", "alpha", "3"]);
+    r.json("priority", &["priority", "beta", "up"]);
+    r.json("priority", &["priority", "notes", "down"]);
+    r.json("priority", &["priority", "notes"]);
+    r.json("priority", &["priority"]);
     r.json("project list", &["project", "list"]);
     r.json("project show", &["project", "show", "alpha"]);
     r.json("project show", &["project", "show", "line"]);
@@ -678,6 +676,7 @@ fn fill(r: &mut Record, data: &Path) {
     let later = r.json("version show", &["version", "show", "alpha", "v0.4.0"]);
     let later_id = |n: usize| later["tasks"][n]["id"].as_i64().unwrap_or_default().to_string();
     r.json("task snooze", &["task", "snooze", &later_id(1), "--until", "+7d"]);
+    r.json("version show", &["version", "show", "alpha", "v0.4.0"]);
     r.json("task freeze", &["task", "freeze", &later_id(2), "--why", "waits for the margins"]);
     let patch = r.json("version show", &["version", "show", "alpha", "v0.3.1"]);
     let patch_id = patch["tasks"][0]["id"].as_i64().unwrap_or_default().to_string();
@@ -685,49 +684,15 @@ fn fill(r: &mut Record, data: &Path) {
 
     r.json(
         "version add",
-        &[
-            "version",
-            "add",
-            "beta",
-            "v0.2.0",
-            "--title",
-            "The writer",
-            "--task",
-            "write the sheet",
-            "--week",
-            "2026-W46",
-        ],
+        &["version", "add", "beta", "v0.2.0", "--title", "The writer", "--task", "write the sheet"],
     );
     r.json(
         "version add",
         &["version", "add", "beta", "v0.2", "--task", "write the sheet", "--task", "keep the format"],
     );
 
-    // ---- the calendar ---------------------------------------------------------
-    r.json("version plan", &["version", "plan", "alpha", "v0.3.0", "--week", "2026-W45"]);
-    r.json("version plan", &["version", "plan", "alpha", "v0.4.0", "--week", &now]);
     r.json("version show", &["version", "show", "alpha", "v0.3.0"]);
     r.json("version show", &["version", "show", "alpha", "v0.2.0"]);
-    r.json("version plan", &["version", "plan", "alpha", "v0.2.0", "--week", "2026-W39"]);
-    r.json("calendar", &["calendar", "--from", "2026-W38", "--weeks", "10"]);
-    r.json(
-        "calendar",
-        &[
-            "calendar",
-            "--from",
-            "2026-W38",
-            "--weeks",
-            "10",
-            "--ics",
-            data.join("line.ics").to_str().unwrap(),
-        ],
-    );
-    r.json("calendar", &["calendar", "--from", "2026-W38", "--weeks", "10", "--ics", "-"]);
-    r.json("next", &["next", "--week", "2026-W45"]);
-    r.json("next", &["next", "--week", "2026-W52"]);
-    r.json("week", &["week", "--week", "2026-W45"]);
-    r.json("week", &["week"]);
-    r.json("week", &["week", "--week", "2026-W52"]);
 
     // ---- a sitting -------------------------------------------------------------
     r.json("session start", &["session", "start", "alpha"]);
@@ -773,10 +738,6 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("session start", &["session", "start", "beta"]);
     r.json("session end", &["session", "end", "beta"]);
     r.with("RIGGER_KASL", &kasl);
-
-    r.json("release-day", &["release-day"]);
-    r.json("retro", &["retro", "--to", "2026-W45", "--weeks", "8"]);
-    r.json("retro", &["retro", "--to", "2026-W45", "--cycle", "--record"]);
 
     // ---- reading the record ----------------------------------------------------
     r.json("context", &["context", "alpha"]);
@@ -968,17 +929,16 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("doctor", &["doctor", "--hubs"]);
 
     // ---- the pick ----------------------------------------------------------------
-    // gamma has a change no release has taken and a tier that asks for more.
-    r.json("project tier", &["project", "tier", "gamma", "A"]);
-    r.json("pick", &["pick"]);
-    // With its neighbours blocked, gamma itself is the pick, with all it
-    // carries, and a sitting open on it stops `go`.
+    // gamma has a change no release has taken.
+    r.json("queue", &["queue"]);
+    // With its neighbours blocked, gamma itself is first, with all it carries,
+    // and a sitting open on it stops `go`.
     let blocked = [
         r.json("note", &["note", "alpha", "The runner is down.", "--kind", "blocker"]),
         r.json("note", &["note", "beta", "The signing key has expired.", "--kind", "blocker"]),
     ];
     r.json("context", &["context", "beta"]);
-    r.json("pick", &["pick"]);
+    r.json("queue", &["queue"]);
     r.json("go", &["go"]);
     r.json("session start", &["session", "start", "gamma"]);
     r.json("go", &["go"]);
@@ -987,11 +947,9 @@ fn fill(r: &mut Record, data: &Path) {
         let id = note["event"]["id"].as_i64().unwrap().to_string();
         r.json("resolve", &["resolve", project, &id]);
     }
-    // The calendar speaks where nothing is left unfinished.
-    r.json("version plan", &["version", "plan", "alpha", "v0.4.0", "--clear"]);
-    r.json("pick", &["pick"]);
-    r.json("version plan", &["version", "plan", "beta", "v0.2.0", "--week", "2026-W30"]);
-    r.json("pick", &["pick"]);
+    // Moved up, and put back.
+    r.json("queue first", &["queue", "first", "beta", "--why", "It cannot wait"]);
+    r.json("queue back", &["queue", "back", "beta"]);
 
     // ---- profiles, last: `use` moves every command after it ------------------
     r.json("profile list", &["profile", "list"]);

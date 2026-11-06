@@ -46,7 +46,6 @@ Under `--json` it prints the window and one entry per project, moved or not. Wit
 | `projects[].next` | string or null | The current stage as `version · title`, or the bare version; null when there is none. |
 | `projects[].lines` | array | The lines the text digest prints for the project. |
 | `projects[].lines[]` | string | One line. |
-| `projects[].signal` | string or null | A tier signal for the current week, such as a carrying product that stopped releasing; null when none. |
 | `note` | object | Present only with `--md`: the note that was written. |
 | `note.path` | string | The file named. |
 | `note.changed` | boolean | False when the file already held this digest. |

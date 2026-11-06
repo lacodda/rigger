@@ -103,7 +103,14 @@ fn stand_in(data: &Path, work: &[String], code: i32) -> (PathBuf, PathBuf) {
 fn go(data: &Path, bin: &Path, args: &[&str]) -> TestCommand {
     let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
     let mut cmd = rigger(data);
-    cmd.env("PATH", path).env("RIGGER_ASSISTANT", "stand-in").arg("go").args(args);
+    cmd.env("PATH", path)
+        .env("RIGGER_ASSISTANT", "stand-in")
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.com")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.com")
+        .arg("go")
+        .args(args);
     cmd
 }
 
@@ -144,7 +151,7 @@ fn go_starts_the_assistant_on_what_comes_next() {
     project(data.path(), "second");
 
     let during = data.path().join("during.json");
-    let (bin, log) = stand_in(data.path(), &[format!("{} > \"{}\"", rigger_line("pick --json"), during.display())], 0);
+    let (bin, log) = stand_in(data.path(), &[format!("{} > \"{}\"", rigger_line("queue --json"), during.display())], 0);
     let said = stdout(go(data.path(), &bin, &[]).assert().success());
 
     let (cwd, args) = given(&log);
@@ -158,14 +165,15 @@ fn go_starts_the_assistant_on_what_comes_next() {
 
     // While the assistant runs, a second `go` can see someone is at it.
     let during: Value = serde_json::from_str(&std::fs::read_to_string(&during).unwrap()).unwrap();
-    assert!(during["pick"]["unfinished"]["sitting"].is_string(), "{during:#}");
+    assert!(during["order"][0]["unfinished"]["sitting"].is_string(), "{during:#}");
 
-    // And when it has gone, nobody is.
-    let after = json(rigger(data.path()).args(["pick", "--json"]));
-    assert!(after["pick"]["unfinished"].is_null(), "{after:#}");
-    assert_eq!(after["pick"]["project"], "second", "the turn moved on: {after:#}");
-    assert!(said.contains("first has no new tag, and nothing left over."), "{said}");
-    assert!(said.contains("Next: second v0.2.0 - `rigger go`"), "{said}");
+    // And when it has gone, nobody is. Only a release ends a turn, so it is
+    // still this project's.
+    let after = json(rigger(data.path()).args(["queue", "--json"]));
+    assert!(after["order"][0]["unfinished"].is_null(), "{after:#}");
+    assert_eq!(after["order"][0]["project"], "first", "{after:#}");
+    assert!(said.contains("first has no new tag, and nothing left over: it is still its turn."), "{said}");
+    assert!(!said.contains("Next:"), "{said}");
 }
 
 /// A release is what a turn is for, and the screen says it happened - read from
@@ -177,7 +185,14 @@ fn a_release_is_said_and_the_next_project_named() {
     project(data.path(), "first");
     project(data.path(), "second");
 
-    let (bin, _) = stand_in(data.path(), &["git tag v0.2.0".to_string()], 0);
+    let (bin, _) = stand_in(
+        data.path(),
+        &[
+            "git commit --quiet --allow-empty -m \"chore(release): v0.2.0\"".to_string(),
+            "git tag v0.2.0".to_string(),
+        ],
+        0,
+    );
     let said = stdout(go(data.path(), &bin, &[]).assert().success());
 
     assert!(said.contains("first v0.2.0 went out."), "{said}");
@@ -236,9 +251,12 @@ fn an_open_sitting_stops_go_and_naming_the_project_joins_it() {
     go(data.path(), &bin, &["second"]).assert().success();
     let (cwd, _) = given(&log);
     assert!(cwd.to_lowercase().ends_with("second"), "{cwd}");
-    let still = json(rigger(data.path()).args(["pick", "--json"]));
-    assert_eq!(still["pick"]["project"], "second", "{still:#}");
-    assert!(still["pick"]["unfinished"]["sitting"].is_string(), "the joined sitting was closed: {still:#}");
+    let still = json(rigger(data.path()).args(["queue", "--json"]));
+    assert_eq!(still["order"][0]["project"], "second", "{still:#}");
+    assert!(
+        still["order"][0]["unfinished"]["sitting"].is_string(),
+        "the joined sitting was closed: {still:#}"
+    );
 
     std::fs::remove_file(&log).unwrap();
     go(data.path(), &bin, &["--force"]).assert().success();
@@ -269,8 +287,8 @@ fn a_blocker_takes_a_project_out_of_the_way_and_is_lifted() {
     assert!(said.contains("Next: second v0.2.0"), "{said}");
 
     // No force needed, though first holds an untracked file.
-    let found = json(rigger(data.path()).args(["pick", "--json"]));
-    assert_eq!(found["pick"]["project"], "second", "{found:#}");
+    let found = json(rigger(data.path()).args(["queue", "--json"]));
+    assert_eq!(found["order"][0]["project"], "second", "{found:#}");
     assert_eq!(found["left_out"][0]["why"], "blocked");
     let id = found["left_out"][0]["blocker"]["id"].as_i64().unwrap().to_string();
 
@@ -282,21 +300,21 @@ fn a_blocker_takes_a_project_out_of_the_way_and_is_lifted() {
     // Cleared, it is back - and still unfinished, so it comes first.
     let cleared = stdout(rigger(data.path()).args(["resolve", "first", &id]).assert().success());
     assert!(cleared.contains(&format!("Cleared [{id}]")), "{cleared}");
-    let found = json(rigger(data.path()).args(["pick", "--json"]));
-    assert_eq!(found["pick"]["project"], "first", "{found:#}");
-    assert_eq!(found["pick"]["reason"], "unfinished");
+    let found = json(rigger(data.path()).args(["queue", "--json"]));
+    assert_eq!(found["order"][0]["project"], "first", "{found:#}");
+    assert_eq!(found["order"][0]["reason"], "unfinished");
 
     // A release settles one nobody cleared: it did not stop that tag.
     rigger(data.path())
         .args(["note", "first", "The runner is down", "--kind", "blocker"])
         .assert()
         .success();
-    assert_eq!(json(rigger(data.path()).args(["pick", "--json"]))["pick"]["project"], "second");
+    assert_eq!(json(rigger(data.path()).args(["queue", "--json"]))["order"][0]["project"], "second");
     std::fs::remove_file(first.join("left.txt")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1100));
     commit(&first, "b.txt", "feat: the second thing");
     git(&first, &["tag", "v0.2.0"]);
-    let found = json(rigger(data.path()).args(["pick", "--json"]));
+    let found = json(rigger(data.path()).args(["queue", "--json"]));
     assert!(found["left_out"].as_array().unwrap().iter().all(|l| l["why"] != "blocked"), "{found:#}");
 }
 

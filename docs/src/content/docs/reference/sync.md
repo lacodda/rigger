@@ -108,7 +108,7 @@ widget:
 
 [`show`](/rigger/reference/show/) carries the state beside the last release, and the [context packet](/rigger/reference/context/) carries it when it falls short - `Last shipped: v0.4.0 on 2026-09-04 - tag exists, no release`.
 
-The tag is still what the calendar counts. Delivery sits beside it rather than replacing it: a project that tags and never makes GitHub releases is working that way on purpose, and un-shipping all its versions would rewrite its history. Such a repository - one with no releases at all - is not asked about its tags.
+The tag is still what the queue counts. Delivery sits beside it rather than replacing it: a project that tags and never makes GitHub releases is working that way on purpose, and un-shipping all its versions would rewrite its history. Such a repository - one with no releases at all - is not asked about its tags.
 
 What the release engine reported with [`note --kind shipped`](/rigger/reference/note/#a-release-as-the-engine-made-it) is not overwritten by what `sync` sees: the engine is the thing that made the release, and a look at GitHub is how the record learns when there was no engine. A version already `published` is not asked about again.
 

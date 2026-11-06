@@ -11,18 +11,17 @@
 
 ## Why
 
-Run more than a handful of projects and the record of them scatters: a plan in one file, a changelog in another, a session log the assistant writes for itself, a release calendar kept by hand. You stop reading it, because prose cannot be filtered or summed up across projects. The assistant reads it every session at full price. And what actually shipped lives in git, where nobody looks.
+Run more than a handful of projects and the record of them scatters: a plan in one file, a changelog in another, a session log the assistant writes for itself, a list of what is next kept by hand. You stop reading it, because prose cannot be filtered or summed up across projects. The assistant reads it every session at full price. And what actually shipped lives in git, where nobody looks.
 
-rigger keeps the record as data, in one local SQLite file, and derives the rest from it: the packet an assistant starts from, the questions waiting for you, the calendar of what ships when - with git, not the plan, deciding what shipped.
+rigger keeps the record as data, in one local SQLite file, and derives the rest from it: the packet an assistant starts from, the questions waiting for you, the order projects come round in - with git, not the plan, deciding what shipped.
 
 ## A day with rigger
 
 Plan a stage, and write down what was decided and what only you can answer:
 
 ```console
-$ rigger version add sample v0.1.0 --title "First light" --task "read a sheet" --task "write the report" --week 2026-W43
+$ rigger version add sample v0.1.0 --title "First light" --task "read a sheet" --task "write the report"
 Added v0.1.0 to sample, with 2 tasks
-  aimed at 2026-W43 - the week of 2026-10-23
 
 $ rigger note sample "Which file formats come first?" --kind question
 Asked the owner about sample; it waits in the inbox until answered
@@ -118,7 +117,7 @@ The whole first week, command by command: [Your first week](https://lacodda.gith
 - **Facts from git.** A tag means the version shipped, on that date; the plan cannot claim more than git confirms, and `doctor` names where they part.
 - **An MCP server as the assistant's only pen**, and a context packet held to a token budget.
 - **`rigger go`** - which project to work on now, the one reason it comes first, and your assistant started on it; nothing new starts while a tag is not out.
-- **Your inbox, a weekly brief and a release calendar**, derived from the same record rather than kept by hand.
+- **Your inbox and a queue with weights** - `rigger queue` puts every project in the order it gets a turn, `rigger priority` sets how often one comes round - derived from the same record rather than kept by hand.
 - **`--json` on every command**, each field held by a test to its reference page.
 - **Hubs as an export.** Markdown notes are written from the record and kept that way: the end of each sitting writes again what nobody touched, and `doctor --hubs` names what somebody did. A hand-kept hub [moves into the record](https://lacodda.github.io/rigger/guides/from-a-hub/) in one command, every note in it.
 

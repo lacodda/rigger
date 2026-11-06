@@ -167,4 +167,4 @@ The handwritten texts - vision, rituals, research, and every other note the hub 
 
 ## When the hub is no longer read
 
-Once nothing reads the hub - the packet, the inbox and the calendar all come from the record - it is a cache. Keep exporting it while you like reading markdown; delete it when you do not. Nothing in it is anywhere else but the record.
+Once nothing reads the hub - the packet, the inbox and the queue all come from the record - it is a cache. Keep exporting it while you like reading markdown; delete it when you do not. Nothing in it is anywhere else but the record.

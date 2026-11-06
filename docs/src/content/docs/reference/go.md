@@ -7,12 +7,12 @@ description: Work on what comes next - the project, its stage, and your assistan
 rigger go [PROJECT] [--force]
 ```
 
-One command for a whole turn. It reads git, asks [`pick`](/rigger/reference/pick/) what comes next, opens a [sitting](/rigger/reference/session/), and starts your coding assistant in that project with one line that says what the sitting is for. When the assistant stops, it says how the turn went and names what comes next.
+One command for a whole turn. It reads git, asks the [queue](/rigger/reference/queue/) what comes next, opens a [sitting](/rigger/reference/session/), and starts your coding assistant in that project with one line that says what the sitting is for. When the assistant stops, it says how the turn went and names what comes next.
 
 ```console
 $ rigger go
 Work on widget  v0.2.0 · Plugins
-  nothing presses - its last sitting, 2026-10-27, is the longest ago
+  its turn: last turn 2026-10-27, at weight 2
 Starting claude in C:\dev\widget
 
 ...the session...
@@ -34,7 +34,7 @@ Work on widget  v0.2.0 · Plugins
 Starting claude in C:\dev\widget
 ```
 
-What counts is the [`unfinished`](/rigger/reference/pick/#the-rule) reason of `pick`: work not committed or not pushed, an operation git left halfway, a feature or a fix since the last release, a release that did not get out, a sitting left open. A docs or chore commit after a tag holds nothing up.
+What counts is the [`unfinished`](/rigger/reference/queue/#the-rule) reason of the queue: work not committed or not pushed, an operation git left halfway, a feature or a fix since the last release, a release that did not get out, a sitting left open. A docs or chore commit after a tag holds nothing up.
 
 ## `--force`
 
@@ -95,8 +95,8 @@ Under `--json` it starts nothing and opens no sitting, and prints what it would 
 | `project` | string or null | The project it would start; `null` when it would start nothing. |
 | `version` | string or null | The stage to take to a release; `null` when none is planned. |
 | `title` | string or null | That stage's title, or `null`. |
-| `reason` | string or null | Why it comes now, as for [`pick`](/rigger/reference/pick/); `null` for a project named outright that the rule leaves out. |
-| `unfinished` | object or null | What it holds that has not gone out, in the shape of `pick.unfinished`; `null` when nothing. |
+| `reason` | string or null | Why it comes now: `unfinished`, `moved` or `turn`, as for [`queue`](/rigger/reference/queue/); `null` for a project named outright that the rule leaves out. |
+| `unfinished` | object or null | What it holds that has not gone out, in the shape of `queue` `order[].unfinished`; `null` when nothing. |
 | `unfinished.changed` | integer | Tracked files changed and not committed. |
 | `unfinished.untracked` | integer | Files git does not know and does not ignore. |
 | `unfinished.unpushed` | integer | Commits on no remote. |
@@ -121,7 +121,9 @@ The assistant's exit status becomes rigger's, after the report. A sitting open o
 
 ## Related
 
-- [`pick`](/rigger/reference/pick/) - the same answer, without starting anything.
+- [`queue`](/rigger/reference/queue/) - the same answer, without starting anything.
+- [`priority`](/rigger/reference/priority/) - how often a project comes round.
+- [`priority`](/rigger/reference/priority/) - how often a project comes round.
 - [`session`](/rigger/reference/session/) - the sitting it opens.
 - [`context`](/rigger/reference/context/) - the packet the assistant reads first.
 - [`note`](/rigger/reference/note/) - what a session records as it goes.

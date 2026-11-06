@@ -1,0 +1,843 @@
+//! What comes next: every project in the work, in the order they get a turn.
+//!
+//! A line of products goes round. Each project has a weight, the projects with
+//! more of it come round more often, and nothing here is tied to a date: a
+//! place in the queue is all there is. The order is worked out from the record
+//! each time rather than kept as a list, so there is no second copy to fall out
+//! of step: change a weight and the order has changed, ship a version by hand
+//! and that was its turn.
+//!
+//! The rule is an order of reasons, and a project's first reason that holds is
+//! its reason:
+//!
+//! 1. `unfinished` - a turn begun and not over: work uncommitted or unpushed, a
+//!    feature or a fix since the last release, a release that did not get out,
+//!    a sitting left open. The line does not move on past it.
+//! 2. `moved` - something asked for it to come first, and it has not shipped
+//!    since.
+//! 3. `turn` - nothing presses, so it goes by waiting and weight: the highest
+//!    `(waited + 1) * weight` is next, where `waited` is how many releases the
+//!    line has made since this project's last one.
+//!
+//! Counting releases rather than days is what keeps the queue free of dates: a
+//! week off changes nothing about whose turn it is. And that formula gives each
+//! project exactly its weight's share of the turns, spaced evenly; without the
+//! `+ 1` the lightest projects get more than their share.
+//!
+//! What cannot be finished from here is not unfinished: a project whose tag is
+//! stopped by something out of reach - a missing key, a red pipeline, a broken
+//! service - says so with a blocker, and is left out of the order with that
+//! reason until the blocker is cleared or a release settles it. Without that,
+//! the one project waiting on the outside world would stop every other.
+//!
+//! Questions waiting on the owner do not take a project out - by the line's
+//! rules a question does not stop a stage - and neither do its neighbours'
+//! orders. Both are counted on its line instead.
+
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+use anyhow::Result;
+use serde::Serialize;
+
+use crate::db::{Db, Kind};
+use crate::plural;
+
+/// Why a project comes where it does, strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reason {
+    Unfinished,
+    Moved,
+    Turn,
+}
+
+/// What a project holds that has not gone out: the turn it is on is not over.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Unfinished {
+    /// Tracked files changed and not committed.
+    pub changed: usize,
+    /// Files git does not know, and does not ignore.
+    pub untracked: usize,
+    /// Commits on no remote.
+    pub unpushed: usize,
+    /// An operation git started and has not finished: `merge`, `rebase`.
+    pub operation: Option<String>,
+    /// The subjects of the features and fixes since the last release. Docs
+    /// and chores are not here: they wait for the next tag without holding
+    /// the line up, and are never recorded as changes at all.
+    pub untagged: Vec<String>,
+    /// How the last release fell short of getting out, in a few words.
+    pub undelivered: Option<String>,
+    /// When the sitting left open began.
+    pub sitting: Option<String>,
+}
+
+impl Unfinished {
+    fn is_empty(&self) -> bool {
+        *self == Unfinished::default()
+    }
+
+    /// What is unfinished, a few words for each thing.
+    ///
+    /// Counts rather than subjects: this reaches an assistant's command
+    /// line, and a commit message may hold whatever its author typed.
+    pub fn parts(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.changed > 0 {
+            out.push(format!("{} not committed", plural(self.changed, "changed file", "changed files")));
+        }
+        if self.untracked > 0 {
+            out.push(plural(self.untracked, "untracked file", "untracked files"));
+        }
+        if let Some(operation) = &self.operation {
+            out.push(format!("a {operation} left halfway"));
+        }
+        if self.unpushed > 0 {
+            out.push(format!("{} not pushed", plural(self.unpushed, "commit", "commits")));
+        }
+        if !self.untagged.is_empty() {
+            out.push(format!("{} since the last release", plural(self.untagged.len(), "change", "changes")));
+        }
+        if let Some(undelivered) = &self.undelivered {
+            out.push(undelivered.clone());
+        }
+        if let Some(sitting) = &self.sitting {
+            out.push(format!("a sitting open since {}", day_of(sitting)));
+        }
+        out
+    }
+}
+
+/// An event that says something about a project's place: what stops its tag,
+/// or what asked for it to come first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Note {
+    /// The id `rigger resolve` closes it by.
+    pub id: i64,
+    pub head: String,
+    pub since: String,
+}
+
+/// What one project brings to the queue.
+#[derive(Debug, Clone)]
+pub struct Standing {
+    pub project: String,
+    pub kind: Kind,
+    pub weight: u32,
+    pub stage: Option<Stage>,
+    /// Changes since its last release, oldest first: moment and subject.
+    pub untagged: Vec<(String, String)>,
+    /// What git says the repository holds that has gone nowhere yet.
+    pub held: crate::git::Held,
+    /// How its last release fell short of getting out.
+    pub undelivered: Option<String>,
+    /// When the sitting left open began.
+    pub sitting: Option<String>,
+    /// When it last had a turn: its last release, or for a folder, which makes
+    /// none, the end of its last sitting.
+    pub last_turn: Option<String>,
+    /// How many releases the line has made since then.
+    pub waited: usize,
+    /// What stops its tag and is out of reach, oldest first.
+    pub blockers: Vec<Note>,
+    /// What asked for it to come first, oldest first.
+    pub moves: Vec<Note>,
+    pub waiting: usize,
+    pub asked: usize,
+}
+
+/// The stage a project is on.
+#[derive(Debug, Clone)]
+pub struct Stage {
+    pub version: String,
+    pub title: Option<String>,
+    /// Every open task of it is frozen or asleep: nobody is building it.
+    pub put_down: bool,
+}
+
+/// One project in the order, with what put it there.
+#[derive(Debug, Clone, Serialize)]
+pub struct Candidate {
+    pub project: String,
+    pub kind: Kind,
+    pub weight: u32,
+    pub reason: Reason,
+    /// The current stage; `unplanned` when there is none.
+    pub version: String,
+    pub title: Option<String>,
+    /// What it holds that has not gone out, for `unfinished`.
+    pub unfinished: Option<Unfinished>,
+    /// What asked for it to come first, for `moved`.
+    pub moved: Option<Note>,
+    /// How many releases the line has made since its last turn.
+    pub waited: usize,
+    /// The day of its last turn.
+    pub last_turn: Option<String>,
+    pub waiting: usize,
+    pub asked: usize,
+    /// When the reason began to hold.
+    #[serde(skip)]
+    pub(crate) since: Option<String>,
+    #[serde(skip)]
+    pub(crate) turn_at: Option<String>,
+}
+
+/// Why a project is not in the order at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Aside {
+    /// Something out of reach stops its tag.
+    Blocked,
+    /// Its weight is 0: worked on when asked.
+    Out,
+    /// Nothing is planned for it, so there is no stage to work on.
+    NoStage,
+    /// Everything planned was frozen or put to sleep on purpose.
+    PutDown,
+}
+
+impl Aside {
+    fn describe(self) -> &'static str {
+        match self {
+            Aside::Blocked => "blocked",
+            Aside::Out => "weight 0 - worked on when asked",
+            Aside::NoStage => "no stage planned",
+            Aside::PutDown => "everything planned is put down",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LeftOut {
+    pub project: String,
+    pub why: Aside,
+    /// What blocks it, for `blocked`.
+    pub blocker: Option<Note>,
+}
+
+/// The whole answer: the order, and what it does not consider.
+#[derive(Debug, Clone, Serialize)]
+pub struct Queue {
+    pub order: Vec<Candidate>,
+    pub left_out: Vec<LeftOut>,
+    /// Pairs whose halves have parted company: a warning, not a place in the
+    /// order. The next turn of the half behind is what puts it right.
+    pub parted: Vec<crate::link::Parted>,
+    /// Projects whose git did not read: their facts are as of the last
+    /// time it did.
+    pub unread: Vec<String>,
+}
+
+/// The queue as it stands now: git read first, so that a commit made since the
+/// last sitting counts, then the rule.
+pub fn now(db: &Db) -> Result<Queue> {
+    let unread = read_git(db)?;
+    let mut queue = choose(&gather(db)?);
+    queue.parted = crate::link::parted(&db.pairs()?);
+    queue.unread = unread;
+    Ok(queue)
+}
+
+/// Reads git for every repository in the work, as `sync` does and without
+/// asking GitHub, so the order stands on today's commits rather than on the
+/// last sitting's. A commit made in one project from a neighbour's sitting is
+/// exactly what the record would otherwise not know. Returns the projects
+/// whose git did not read.
+pub fn read_git(db: &Db) -> Result<Vec<String>> {
+    let mut unread = Vec::new();
+    for project in db.projects()? {
+        if !project.kind.reads_git() {
+            continue;
+        }
+        if !crate::sync::sync(db, &project)?.warnings.is_empty() {
+            unread.push(project.name);
+        }
+    }
+    Ok(unread)
+}
+
+/// What a repository holds that has gone nowhere, and how its last release
+/// fell short of getting out. Nothing, for one that does not read: `read_git`
+/// has said so already, and what cannot be read cannot hold the line up.
+fn held_by(project: &crate::db::Project, latest: Option<&crate::db::Delivered>) -> (crate::git::Held, Option<String>) {
+    if !project.kind.reads_git() {
+        return Default::default();
+    }
+    let Ok(repo) = crate::git::open(&project.path) else {
+        return Default::default();
+    };
+    let held = crate::git::held(&repo).unwrap_or_default();
+    let undelivered = latest.and_then(|latest| match latest.delivery {
+        Some(state) if state.is_short() => Some(format!("{}: {}", latest.version, state.describe())),
+        Some(_) => None,
+        // No word on how far it got, so the one thing that can be asked
+        // cheaply is: did the tag leave this machine at all?
+        None => (crate::git::tag_on_remote(&repo, &latest.version) == Some(false)).then(|| format!("{}: the tag is not on the remote", latest.version)),
+    });
+    (held, undelivered)
+}
+
+/// When a project last had a turn: its last release, or for a folder, which
+/// makes none, the end of its last sitting.
+pub fn last_turn(db: &Db, project: &crate::db::Project) -> Result<Option<String>> {
+    Ok(match project.kind {
+        Kind::Folder => db.last_ended_session(project.id)?.and_then(|s| s.ended_at),
+        _ => db.last_release_moment(project.id)?,
+    })
+}
+
+/// A weight after `up`, `down` or a number.
+pub fn changed_weight(current: u32, change: &str) -> Result<u32> {
+    match change {
+        "up" => Ok(current + 1),
+        "down" => Ok(current.saturating_sub(1)),
+        number => number
+            .parse()
+            .map_err(|_| anyhow::anyhow!("'{number}' is not a change of weight: say `up`, `down`, or a whole number")),
+    }
+}
+
+/// What every repository holds, read side by side. Walking a working tree is
+/// nearly all waiting on the disk, and the only slow part of this that a
+/// person is sitting in front of, so nothing is gained by taking turns.
+fn read_held(db: &Db, projects: &[crate::db::Project]) -> Result<HashMap<i64, (crate::git::Held, Option<String>)>> {
+    // The record first: its connection stays on this thread.
+    let asked = projects
+        .iter()
+        .map(|project| Ok((project, db.latest_delivery(project.id)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(std::thread::scope(|scope| {
+        let readers: Vec<_> = asked
+            .iter()
+            .map(|(project, latest)| scope.spawn(move || (project.id, held_by(project, latest.as_ref()))))
+            .collect();
+        readers
+            .into_iter()
+            .map(|reader| reader.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+            .collect()
+    }))
+}
+
+fn notes(events: Vec<crate::db::Queued>) -> Vec<Note> {
+    events
+        .into_iter()
+        .map(|event| Note {
+            id: event.id,
+            head: crate::context::headline(&event.body),
+            since: event.date,
+        })
+        .collect()
+}
+
+/// What each project in the work brings, read from the record and from git.
+pub fn gather(db: &Db) -> Result<Vec<Standing>> {
+    let mut out = Vec::new();
+    let projects = db.projects()?;
+    let mut held = read_held(db, &projects)?;
+    let releases = db.release_moments()?;
+    for project in projects {
+        // A place the record keeps for itself is not work anyone does.
+        if !project.kind.has_a_place() {
+            continue;
+        }
+        let stage = db.current_stage(project.id)?.map(|stage| {
+            let open: Vec<&crate::db::Task> = stage.tasks.iter().chain(&stage.asleep).collect();
+            Stage {
+                put_down: !open.is_empty() && open.iter().all(|t| t.is_put_down()),
+                version: stage.version,
+                title: stage.title,
+            }
+        });
+
+        let released = db.last_release_moment(project.id)?;
+        let open = db.open_session(project.id)?;
+        let last_turn = last_turn(db, &project)?;
+        let waited = last_turn
+            .as_deref()
+            .map_or(releases.len(), |at| releases.iter().filter(|moment| moment.as_str() > at).count());
+        let (held, undelivered) = held.remove(&project.id).unwrap_or_default();
+
+        out.push(Standing {
+            kind: project.kind,
+            weight: project.weight,
+            stage,
+            untagged: db.changes_after(project.id, released.as_deref())?,
+            held,
+            undelivered,
+            sitting: open.map(|s| s.started_at),
+            blockers: notes(db.blockers(project.id)?),
+            moves: notes(db.moves(project.id, last_turn.as_deref())?),
+            last_turn,
+            waited,
+            waiting: db.count_open_events(project.id, "question")? as usize,
+            asked: db.asked_wishes(project.id)?.len(),
+            project: project.name,
+        });
+    }
+    Ok(out)
+}
+
+/// Puts every project in its place: the order, and what is left out of it.
+pub fn choose(standings: &[Standing]) -> Queue {
+    let mut order = Vec::new();
+    let mut left_out = Vec::new();
+    for standing in standings {
+        match candidate(standing) {
+            Ok(found) => order.push(found),
+            Err(why) => left_out.push(LeftOut {
+                project: standing.project.clone(),
+                why,
+                blocker: standing.blockers.first().filter(|_| why == Aside::Blocked).cloned(),
+            }),
+        }
+    }
+    order.sort_by(in_order);
+    left_out.sort_by(|a, b| a.project.cmp(&b.project));
+    Queue {
+        order,
+        left_out,
+        parted: Vec::new(),
+        unread: Vec::new(),
+    }
+}
+
+/// The reason a project is in the order, or the reason it is not.
+fn candidate(s: &Standing) -> Result<Candidate, Aside> {
+    // Before anything else: nobody can ask for work that something out of
+    // reach is stopping.
+    if !s.blockers.is_empty() {
+        return Err(Aside::Blocked);
+    }
+    let unfinished = Unfinished {
+        changed: s.held.changed,
+        untracked: s.held.untracked,
+        unpushed: s.held.unpushed,
+        operation: s.held.operation.clone(),
+        untagged: s.untagged.iter().map(|(_, subject)| subject.clone()).collect(),
+        undelivered: s.undelivered.clone(),
+        sitting: s.sitting.clone(),
+    };
+    let moved = s.moves.first();
+
+    // Set aside on purpose, a project is not holding the line up, whatever it
+    // was left holding - unless it was moved up, which is asking for it.
+    let out = s.weight == 0;
+    let put_down = s.stage.as_ref().is_some_and(|stage| stage.put_down);
+    let is_unfinished = !unfinished.is_empty() && !out && !put_down;
+    if !is_unfinished && moved.is_none() {
+        if out {
+            return Err(Aside::Out);
+        }
+        if put_down {
+            return Err(Aside::PutDown);
+        }
+        // A folder's turn is what its rules say, and needs no version planned.
+        // Work done with nothing planned still has to go out, which is the
+        // unfinished case above.
+        if s.stage.is_none() && s.kind != Kind::Folder {
+            return Err(Aside::NoStage);
+        }
+    }
+
+    let (reason, since) = if is_unfinished {
+        let since = s.untagged.first().map(|(at, _)| at.clone()).or_else(|| s.last_turn.clone());
+        (Reason::Unfinished, since)
+    } else if let Some(moved) = moved {
+        (Reason::Moved, Some(moved.since.clone()))
+    } else {
+        (Reason::Turn, None)
+    };
+
+    Ok(Candidate {
+        project: s.project.clone(),
+        kind: s.kind,
+        weight: s.weight,
+        reason,
+        version: s.stage.as_ref().map_or_else(|| "unplanned".to_string(), |stage| stage.version.clone()),
+        title: s.stage.as_ref().and_then(|stage| stage.title.clone()),
+        unfinished: (reason == Reason::Unfinished).then_some(unfinished),
+        moved: if reason == Reason::Moved { moved.cloned() } else { None },
+        waited: s.waited,
+        last_turn: s.last_turn.as_deref().map(day_of),
+        waiting: s.waiting,
+        asked: s.asked,
+        since,
+        turn_at: s.last_turn.clone(),
+    })
+}
+
+/// How strongly a turn is due: see the head of this module.
+fn due(c: &Candidate) -> usize {
+    (c.waited + 1) * c.weight as usize
+}
+
+/// The order: the reason first, then what weighs within it, then the name, so
+/// that two runs over one record agree.
+fn in_order(a: &Candidate, b: &Candidate) -> Ordering {
+    a.reason
+        .cmp(&b.reason)
+        .then_with(|| match a.reason {
+            // What has waited longest first.
+            Reason::Unfinished | Reason::Moved => a.since.cmp(&b.since),
+            // On a tie the heavier one: it comes round sooner anyway, and the
+            // lighter one's next look at the queue has one more to its count.
+            Reason::Turn => due(b)
+                .cmp(&due(a))
+                .then_with(|| b.weight.cmp(&a.weight))
+                .then_with(|| a.turn_at.cmp(&b.turn_at)),
+        })
+        .then_with(|| a.project.cmp(&b.project))
+}
+
+fn day_of(moment: &str) -> String {
+    moment.split(['T', ' ']).next().unwrap_or(moment).to_string()
+}
+
+/// What a project left unfinished holds, in a phrase.
+pub fn unfinished_parts(c: &Candidate) -> String {
+    c.unfinished.as_ref().map(|u| u.parts().join(", ")).unwrap_or_default()
+}
+
+/// The reason in a sentence.
+pub fn why(c: &Candidate) -> String {
+    match c.reason {
+        Reason::Unfinished => format!("not finished: {}", unfinished_parts(c)),
+        Reason::Moved => match &c.moved {
+            Some(moved) => format!("moved up: {}", moved.head),
+            None => "moved up".to_string(),
+        },
+        Reason::Turn => match &c.last_turn {
+            Some(_) => format!("its turn: {} since its last, at weight {}", plural(c.waited, "release", "releases"), c.weight),
+            None => format!("its turn: it has had none yet, at weight {}", c.weight),
+        },
+    }
+}
+
+/// The reason in a few words, for a line among others.
+fn short(c: &Candidate) -> String {
+    match c.reason {
+        Reason::Unfinished => unfinished_parts(c),
+        Reason::Moved => c
+            .moved
+            .as_ref()
+            .map_or_else(|| "moved up".to_string(), |moved| format!("moved up: {}", moved.head)),
+        Reason::Turn => match &c.last_turn {
+            Some(_) => format!("waited {}", plural(c.waited, "release", "releases")),
+            None => "no turn yet".to_string(),
+        },
+    }
+}
+
+/// "1 question waits", "2 questions wait".
+fn waits(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", plural(n, one, many), if n == 1 { "waits" } else { "wait" })
+}
+
+/// What else is true of a project, beside its reason.
+fn also(c: &Candidate) -> Vec<String> {
+    let mut out = Vec::new();
+    if c.waiting > 0 {
+        out.push(format!("{} on the owner", waits(c.waiting, "question", "questions")));
+    }
+    if c.asked > 0 {
+        out.push(format!("{} from neighbours", plural(c.asked, "order", "orders")));
+    }
+    out
+}
+
+/// The screen: the next project with all it carries, then the order of the rest.
+pub fn render(queue: &Queue) -> String {
+    let mut out = String::new();
+    match queue.order.first() {
+        Some(first) => {
+            let title = first.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default();
+            out.push_str(&format!("Next: {}  {}{title}\n", first.project, first.version));
+            out.push_str(&format!("  {}\n", why(first)));
+            let also = also(first);
+            if !also.is_empty() {
+                out.push_str(&format!("  {}\n", also.join(" · ")));
+            }
+        }
+        None if queue.left_out.is_empty() => out.push_str("Nothing in the queue: no project is in the work.\n"),
+        None => out.push_str("Nothing in the queue: every project is left out, below.\n"),
+    }
+
+    let rest = queue.order.get(1..).unwrap_or_default();
+    if !rest.is_empty() {
+        let name = rest.iter().map(|c| c.project.chars().count()).max().unwrap_or(0);
+        let version = rest.iter().map(|c| c.version.chars().count()).max().unwrap_or(0);
+        out.push_str("\nThen\n");
+        for c in rest {
+            out.push_str(&format!("  {:<name$}  {:<version$}  {}\n", c.project, c.version, short(c)));
+        }
+    }
+
+    if !queue.left_out.is_empty() {
+        let name = queue.left_out.iter().map(|l| l.project.chars().count()).max().unwrap_or(0);
+        out.push_str("\nLeft out\n");
+        for item in &queue.left_out {
+            let why = match &item.blocker {
+                Some(blocker) => format!("blocked since {}: {} [{}]", blocker.since, blocker.head, blocker.id),
+                None => item.why.describe().to_string(),
+            };
+            out.push_str(&format!("  {:<name$}  {why}\n", item.project));
+        }
+    }
+
+    if !queue.parted.is_empty() {
+        out.push_str("\nPairs out of step\n");
+        for item in &queue.parted {
+            out.push_str(&format!("  {}\n", crate::drift_line(item)));
+        }
+    }
+
+    if !queue.unread.is_empty() {
+        out.push_str(&format!(
+            "\nGit did not read for {}: what this knows of {} is as of the last time it did.\n",
+            queue.unread.join(", "),
+            if queue.unread.len() == 1 { "it" } else { "them" }
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, HashSet};
+
+    fn on_stage(project: &str, weight: u32, waited: usize) -> Standing {
+        Standing {
+            project: project.to_string(),
+            kind: Kind::Repo,
+            weight,
+            stage: Some(Stage {
+                version: "v0.2.0".to_string(),
+                title: Some("Second".to_string()),
+                put_down: false,
+            }),
+            untagged: Vec::new(),
+            held: Default::default(),
+            undelivered: None,
+            sitting: None,
+            last_turn: Some("2026-10-26T10:00:00Z".to_string()),
+            waited,
+            blockers: Vec::new(),
+            moves: Vec::new(),
+            waiting: 0,
+            asked: 0,
+        }
+    }
+
+    fn note(id: i64, head: &str, since: &str) -> Note {
+        Note {
+            id,
+            head: head.to_string(),
+            since: since.to_string(),
+        }
+    }
+
+    fn order_of(standings: &[Standing]) -> Vec<String> {
+        choose(standings).order.iter().map(|c| c.project.clone()).collect()
+    }
+
+    /// The whole point of the formula: played out over many turns, each project
+    /// gets its weight's share, and no long gaps open between its turns.
+    #[test]
+    fn every_project_gets_its_weights_share_of_the_turns() {
+        let weights = [("a", 6), ("b", 3), ("c", 3), ("d", 2), ("e", 2), ("f", 1), ("g", 1), ("h", 1), ("i", 1)];
+        let total: usize = weights.iter().map(|(_, w)| *w as usize).sum();
+        let mut waited: BTreeMap<&str, usize> = weights.iter().enumerate().map(|(i, (name, _))| (*name, i)).collect();
+        let mut turns: Vec<String> = Vec::new();
+        let rounds = 40;
+        for _ in 0..total * rounds {
+            let standings: Vec<Standing> = weights.iter().map(|(name, w)| on_stage(name, *w, waited[name])).collect();
+            let first = choose(&standings).order[0].project.clone();
+            for count in waited.values_mut() {
+                *count += 1;
+            }
+            *waited.get_mut(first.as_str()).unwrap() = 0;
+            turns.push(first);
+        }
+        // Past the first few rounds, where the starting order still shows.
+        let settled = &turns[total * 4..];
+        for (name, weight) in weights {
+            let got = settled.iter().filter(|t| t.as_str() == name).count();
+            let wanted = (rounds - 4) * weight as usize;
+            assert!(got.abs_diff(wanted) <= 1, "{name} at weight {weight}: {got} turns, wanted {wanted}");
+            let at: Vec<usize> = settled.iter().enumerate().filter(|(_, t)| t.as_str() == name).map(|(i, _)| i).collect();
+            let widest = at.windows(2).map(|w| w[1] - w[0]).max().unwrap();
+            assert!(widest <= total / weight as usize + 2, "{name}: a gap of {widest} in a round of {total}");
+        }
+    }
+
+    #[test]
+    fn a_higher_weight_comes_first_and_waiting_catches_it_up() {
+        assert_eq!(order_of(&[on_stage("light", 1, 3), on_stage("heavy", 3, 3)]), vec!["heavy", "light"]);
+        // Six releases at weight 1 outweigh one at weight 3.
+        assert_eq!(order_of(&[on_stage("light", 1, 6), on_stage("heavy", 3, 1)]), vec!["light", "heavy"]);
+        // Level: the heavier one, then the older turn, then the name.
+        assert_eq!(order_of(&[on_stage("light", 1, 5), on_stage("heavy", 3, 1)]), vec!["heavy", "light"]);
+        let mut older = on_stage("older", 2, 2);
+        older.last_turn = Some("2026-10-01T10:00:00Z".into());
+        assert_eq!(order_of(&[on_stage("newer", 2, 2), older.clone()]), vec!["older", "newer"]);
+        assert_eq!(order_of(&[on_stage("b", 2, 2), on_stage("a", 2, 2)]), vec!["a", "b"]);
+    }
+
+    /// The order of the reasons is the rule itself, whatever the waiting says.
+    #[test]
+    fn each_reason_outranks_the_next() {
+        let turn = on_stage("turn", 9, 99);
+        let mut moved = on_stage("moved", 1, 0);
+        moved.moves = vec![note(1, "the owner put it first", "2026-11-01")];
+        let mut unfinished = on_stage("unfinished", 1, 0);
+        unfinished.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: a thing".into())];
+        assert_eq!(order_of(&[turn, moved, unfinished]), vec!["unfinished", "moved", "turn"]);
+    }
+
+    /// Each thing a turn can be left holding is enough on its own, and says
+    /// what it is.
+    #[test]
+    fn whatever_has_not_gone_out_leaves_a_project_unfinished() {
+        type Case = (&'static str, fn(&mut Standing));
+        let cases: [Case; 7] = [
+            ("1 changed file not committed", |s| s.held.changed = 1),
+            ("2 untracked files", |s| s.held.untracked = 2),
+            ("a merge left halfway", |s| s.held.operation = Some("merge".into())),
+            ("3 commits not pushed", |s| s.held.unpushed = 3),
+            ("1 change since the last release", |s| {
+                s.untagged = vec![("2026-10-27T09:00:00Z".into(), "fix: a thing".into())]
+            }),
+            ("v0.1.0: released, publish failed", |s| {
+                s.undelivered = Some("v0.1.0: released, publish failed".into())
+            }),
+            ("a sitting open since 2026-11-05", |s| s.sitting = Some("2026-11-05T10:00:00Z".into())),
+        ];
+        for (said, set) in cases {
+            let mut s = on_stage("alpha", 2, 0);
+            set(&mut s);
+            let queue = choose(&[s]);
+            assert_eq!(queue.order[0].reason, Reason::Unfinished, "{said}");
+            assert_eq!(why(&queue.order[0]), format!("not finished: {said}"));
+        }
+        // With nothing held, nothing is said.
+        let queue = choose(&[on_stage("alpha", 2, 0)]);
+        assert_eq!(queue.order[0].reason, Reason::Turn);
+        assert_eq!(queue.order[0].unfinished, None);
+    }
+
+    /// Work done with nothing planned still has to go out; work left in a
+    /// project set aside on purpose holds nothing up.
+    #[test]
+    fn a_project_set_aside_is_not_unfinished_and_one_without_a_plan_is() {
+        let mut bare = on_stage("bare", 2, 0);
+        bare.stage = None;
+        bare.held.changed = 1;
+        let queue = choose(&[bare]);
+        assert_eq!(queue.order[0].reason, Reason::Unfinished);
+        assert_eq!(queue.order[0].version, "unplanned");
+
+        let mut out = on_stage("out", 0, 0);
+        out.held.changed = 1;
+        let mut asleep = on_stage("asleep", 2, 0);
+        asleep.stage.as_mut().unwrap().put_down = true;
+        asleep.held.changed = 1;
+        let queue = choose(&[out, asleep]);
+        assert!(queue.order.is_empty(), "{:?}", queue.order);
+        let aside: Vec<Aside> = queue.left_out.iter().map(|l| l.why).collect();
+        assert_eq!(aside, vec![Aside::PutDown, Aside::Out]);
+    }
+
+    /// A blocker is the way out for a project waiting on the outside world: it
+    /// leaves the order with its reason, unfinished or moved or not.
+    #[test]
+    fn a_blocked_project_is_left_out_with_what_blocks_it() {
+        let mut blocked = on_stage("blocked", 9, 99);
+        blocked.held.unpushed = 2;
+        blocked.moves = vec![note(2, "asked for", "2026-11-02")];
+        blocked.blockers = vec![note(7, "The signing key has expired", "2026-11-01")];
+        let queue = choose(&[blocked, on_stage("next", 1, 0)]);
+        assert_eq!(queue.order[0].project, "next");
+        assert_eq!(queue.left_out[0].why, Aside::Blocked);
+        let said = render(&queue);
+        assert!(said.contains("blocked since 2026-11-01: The signing key has expired [7]"), "{said}");
+    }
+
+    /// Weight 0, no stage and everything put down are left out, each with its
+    /// reason - and being moved up brings any of them back, because that is
+    /// asking for it. A folder needs no version planned for its turn.
+    #[test]
+    fn out_no_stage_and_put_down_are_left_out_unless_moved() {
+        let out = on_stage("out", 0, 9);
+        let mut bare = on_stage("bare", 2, 9);
+        bare.stage = None;
+        let mut asleep = on_stage("asleep", 2, 9);
+        asleep.stage.as_mut().unwrap().put_down = true;
+        let mut asked = on_stage("asked", 0, 9);
+        asked.stage = None;
+        asked.moves = vec![note(1, "the owner put it first", "2026-11-01")];
+        let mut folder = on_stage("folder", 1, 0);
+        folder.kind = Kind::Folder;
+        folder.stage = None;
+
+        let queue = choose(&[out, bare, asleep, asked, folder]);
+        let order: Vec<(&str, Reason)> = queue.order.iter().map(|c| (c.project.as_str(), c.reason)).collect();
+        assert_eq!(order, vec![("asked", Reason::Moved), ("folder", Reason::Turn)]);
+        assert_eq!(queue.order[0].version, "unplanned");
+        let aside: Vec<(&str, Aside)> = queue.left_out.iter().map(|l| (l.project.as_str(), l.why)).collect();
+        assert_eq!(aside, vec![("asleep", Aside::PutDown), ("bare", Aside::NoStage), ("out", Aside::Out)]);
+    }
+
+    #[test]
+    fn of_two_moved_or_unfinished_the_one_waiting_longer_comes_first() {
+        let mut newer = on_stage("newer", 9, 9);
+        newer.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: b".into())];
+        let mut older = on_stage("older", 1, 0);
+        older.untagged = vec![("2026-10-26T11:00:00Z".into(), "feat: a".into())];
+        assert_eq!(order_of(&[newer, older]), vec!["older", "newer"]);
+
+        let mut newer = on_stage("newer", 9, 9);
+        newer.moves = vec![note(2, "b", "2026-11-02")];
+        let mut older = on_stage("older", 1, 0);
+        older.moves = vec![note(1, "a", "2026-11-01")];
+        assert_eq!(order_of(&[newer, older]), vec!["older", "newer"]);
+    }
+
+    /// A question to the owner does not stop a stage, so it does not take a
+    /// project out - it is counted on its line.
+    #[test]
+    fn questions_and_orders_are_counted_not_obeyed() {
+        let mut s = on_stage("alpha", 2, 0);
+        s.waiting = 3;
+        s.asked = 2;
+        let queue = choose(&[s]);
+        assert_eq!(queue.order[0].reason, Reason::Turn);
+        let said = render(&queue);
+        assert!(said.contains("3 questions wait on the owner"), "{said}");
+        assert!(said.contains("2 orders from neighbours"), "{said}");
+    }
+
+    #[test]
+    fn the_screen_says_why_and_lists_every_project() {
+        let standings: Vec<Standing> = (0..9).map(|n| on_stage(&format!("p{n}"), 1, 20 - n)).collect();
+        let said = render(&choose(&standings));
+        assert!(
+            said.starts_with("Next: p0  v0.2.0 · Second\n  its turn: 20 releases since its last, at weight 1\n"),
+            "{said}"
+        );
+        let named: HashSet<&str> = said.split_whitespace().collect();
+        for n in 0..9 {
+            assert!(named.contains(format!("p{n}").as_str()), "{said}");
+        }
+        assert!(said.contains("waited 12 releases"), "{said}");
+    }
+
+    #[test]
+    fn an_empty_queue_says_so() {
+        assert!(render(&choose(&[])).starts_with("Nothing in the queue: no project"));
+        let mut bare = on_stage("bare", 2, 0);
+        bare.stage = None;
+        assert!(render(&choose(&[bare])).starts_with("Nothing in the queue: every project is left out"));
+    }
+}

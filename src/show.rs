@@ -29,9 +29,9 @@ pub struct Screen {
     /// read as git's.
     pub kind: crate::db::Kind,
     pub remote: Option<String>,
-    pub tier: Option<String>,
-    pub rhythm_weeks: Option<u32>,
-    /// When it was taken out of the work, if it was; a tier is then beside
+    /// How often it comes round in the queue; 0 leaves it out.
+    pub weight: u32,
+    /// When it was taken out of the work, if it was; a weight is then beside
     /// the point and is not shown.
     pub retired_at: Option<String>,
     pub gate: Option<String>,
@@ -88,8 +88,7 @@ pub fn build(db: &Db, project: &Project, about: Option<String>) -> Result<Screen
         path: project.path.clone(),
         kind: project.kind,
         remote: project.remote.clone(),
-        tier: project.tier.clone(),
-        rhythm_weeks: project.rhythm_weeks,
+        weight: project.weight,
         retired_at: project.retired_at.clone(),
         gate: project.gate.clone(),
         on_session_end: project.on_session_end.clone(),
@@ -144,13 +143,8 @@ pub fn render(screen: &Screen) -> String {
     if let Some(at) = &screen.retired_at {
         let day = at.split('T').next().unwrap_or(at);
         let _ = writeln!(out, "{:<10} since {day} - its history reads, nothing new is recorded", "retired");
-    } else if let Some(tier) = &screen.tier {
-        let rhythm = match screen.rhythm_weeks {
-            Some(1) => " · a version a week".to_string(),
-            Some(n) => format!(" · a version every {n} weeks"),
-            None => String::new(),
-        };
-        let _ = writeln!(out, "{:<10} {tier}{rhythm}", "tier");
+    } else {
+        let _ = writeln!(out, "{:<10} {}", "weight", screen.weight);
     }
     if let Some(gate) = &screen.gate {
         let _ = writeln!(out, "{:<10} {gate}", "gate");
@@ -339,8 +333,7 @@ mod tests {
             path: "C:\\dev\\sample".into(),
             kind: crate::db::Kind::Repo,
             remote: None,
-            tier: Some("C".into()),
-            rhythm_weeks: Some(1),
+            weight: 3,
             retired_at: None,
             gate: Some("cargo test".into()),
             on_session_end: None,

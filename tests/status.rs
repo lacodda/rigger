@@ -151,6 +151,8 @@ fn an_open_task_from_before_reads_as_new() {
          DROP TRIGGER events_not_into_retired; DROP TRIGGER sessions_not_into_retired;
          DROP TRIGGER versions_not_into_retired; DROP TRIGGER tasks_not_into_retired;
          ALTER TABLE projects DROP COLUMN retired_by; ALTER TABLE projects DROP COLUMN retired_at;
+         ALTER TABLE projects DROP COLUMN weight; ALTER TABLE projects ADD COLUMN tier TEXT;
+         ALTER TABLE projects ADD COLUMN rhythm_weeks INTEGER; ALTER TABLE versions ADD COLUMN planned_week TEXT;
          ALTER TABLE projects DROP COLUMN about;
          DROP TABLE hub_files;
          DROP TABLE attachments;
@@ -164,4 +166,48 @@ fn an_open_task_from_before_reads_as_new() {
     let db = rusqlite::Connection::open(&db_path).unwrap();
     let left: i64 = db.query_row("SELECT COUNT(*) FROM tasks WHERE status = 'open'", [], |r| r.get(0)).unwrap();
     assert_eq!(left, 0, "no task is left under the old word");
+}
+
+/// The tiers a record kept become weights the first time this version opens it,
+/// so that a project keeps its place in the rotation, and one that sat out
+/// stays out.
+#[test]
+fn tiers_become_weights() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let names = ["high", "normal", "low", "aside", "none"];
+    for name in names {
+        let root = data.path().join(name);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    }
+
+    let db = data.path().join("profiles").join("line").join("rigger.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE projects DROP COLUMN weight; ALTER TABLE projects ADD COLUMN tier TEXT;
+         ALTER TABLE projects ADD COLUMN rhythm_weeks INTEGER; ALTER TABLE versions ADD COLUMN planned_week TEXT;
+         UPDATE projects SET tier = 'A', rhythm_weeks = 2 WHERE name = 'high';
+         UPDATE projects SET tier = 'B', rhythm_weeks = 4 WHERE name = 'normal';
+         UPDATE projects SET tier = 'C', rhythm_weeks = 6 WHERE name = 'low';
+         UPDATE projects SET tier = 'out' WHERE name = 'aside';
+         INSERT OR REPLACE INTO settings (key, value) VALUES ('week_toast', '2026-W45');
+         PRAGMA user_version = 31;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let out = rigger(data.path()).args(["priority", "--json"]).assert().success();
+    let found: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let weight = |name: &str| {
+        found["weights"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["project"] == name)
+            .unwrap_or_else(|| panic!("{name} is missing: {found}"))["weight"]
+            .as_i64()
+            .unwrap()
+    };
+    assert_eq!(names.map(weight), [3, 2, 1, 0, 2], "{found}");
 }

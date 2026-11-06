@@ -624,6 +624,18 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE (project_id, path)
     );
     ",
+    // v32: a place in a queue instead of a calendar. A project has a weight,
+    // and how often it comes round follows from it; the tiers and rhythms that
+    // described a calendar nobody aimed anything at go, and so does the week a
+    // version was aimed at.
+    "
+    ALTER TABLE projects ADD COLUMN weight INTEGER NOT NULL DEFAULT 2;
+    UPDATE projects SET weight = CASE tier WHEN 'A' THEN 3 WHEN 'B' THEN 2 WHEN 'C' THEN 1 WHEN 'out' THEN 0 ELSE 2 END;
+    ALTER TABLE projects DROP COLUMN rhythm_weeks;
+    ALTER TABLE projects DROP COLUMN tier;
+    ALTER TABLE versions DROP COLUMN planned_week;
+    DELETE FROM settings WHERE key = 'week_toast';
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -746,9 +758,8 @@ pub struct Project {
     pub remote: Option<String>,
     pub created_at: String,
     /// Where the project sits in the release rotation, once someone says.
-    pub tier: Option<String>,
-    /// Weeks it is meant to go between releases.
-    pub rhythm_weeks: Option<u32>,
+    /// How often it comes round in the queue; 0 leaves it out.
+    pub weight: u32,
     /// What kind of thing this is: a repository, or a place the record
     /// keeps for itself.
     pub kind: Kind,
@@ -1080,8 +1091,6 @@ pub struct VersionCard {
     pub version: String,
     pub title: Option<String>,
     pub status: String,
-    /// The week it is aimed at, as `2026-W39`.
-    pub week: Option<String>,
     pub shipped_at: Option<String>,
     pub delivery: Option<crate::delivery::Delivery>,
     pub registries: Vec<String>,
@@ -2141,17 +2150,16 @@ impl Db {
             return Ok(None);
         };
         let mut card = self.conn.query_row(
-            "SELECT name, title, status, planned_week, shipped_at, delivery, registries FROM versions WHERE id = ?1",
+            "SELECT name, title, status, shipped_at, delivery, registries FROM versions WHERE id = ?1",
             [id],
             |r| {
-                let registries: Option<String> = r.get(6)?;
+                let registries: Option<String> = r.get(5)?;
                 Ok(VersionCard {
                     version: r.get(0)?,
                     title: r.get(1)?,
                     status: r.get(2)?,
-                    week: r.get(3)?,
-                    shipped_at: r.get(4)?,
-                    delivery: r.get::<_, Option<String>>(5)?.as_deref().and_then(crate::delivery::Delivery::parse),
+                    shipped_at: r.get(3)?,
+                    delivery: r.get::<_, Option<String>>(4)?.as_deref().and_then(crate::delivery::Delivery::parse),
                     registries: registries
                         .map(|all| all.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect())
                         .unwrap_or_default(),
@@ -2657,7 +2665,7 @@ impl Db {
         let Some((kind, body)) = found else {
             bail!("no open question or wish [{id}] in this project; the packet lists the ids");
         };
-        if !matches!(kind.as_str(), "question" | "wish" | "blocker") {
+        if !matches!(kind.as_str(), "question" | "wish" | "blocker" | "moved") {
             bail!("[{id}] is a {kind}, not a question, a wish or a blocker; only those are resolved");
         }
 
@@ -2667,6 +2675,7 @@ impl Db {
         let resolved = match kind.as_str() {
             "question" => "answered",
             "wish" => "sorted",
+            "moved" => "returned",
             _ => "cleared",
         };
         self.conn.execute("UPDATE events SET kind = ?1 WHERE id = ?2", params![resolved, id])?;
@@ -3286,13 +3295,10 @@ impl Db {
         Ok(None)
     }
 
-    /// Records where a project sits in the rotation and how fast it is
-    /// meant to release. A tier without a rhythm takes the tier's own.
-    pub fn set_tier(&self, project_id: i64, tier: &str, rhythm_weeks: Option<u32>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE projects SET tier = ?2, rhythm_weeks = ?3 WHERE id = ?1",
-            params![project_id, tier, rhythm_weeks],
-        )?;
+    /// How often a project comes round in the queue.
+    pub fn set_weight(&self, project_id: i64, weight: u32) -> Result<()> {
+        self.conn
+            .execute("UPDATE projects SET weight = ?2 WHERE id = ?1", params![project_id, weight])?;
         Ok(())
     }
 
@@ -3515,64 +3521,6 @@ impl Db {
             params![project_id, version_id, title, now(), position],
         )?;
         Ok(Change::Added)
-    }
-
-    pub fn set_planned_week(&self, project_id: i64, version: &str, week: Option<&str>) -> Result<Change> {
-        let existing: Option<Option<String>> = self
-            .conn
-            .query_row(
-                "SELECT planned_week FROM versions WHERE project_id = ?1 AND name = ?2",
-                params![project_id, version],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let Some(current) = existing else {
-            bail!("no version '{version}' in the record; see `rigger project show`");
-        };
-        if current.as_deref() == week {
-            return Ok(Change::Unchanged);
-        }
-        self.conn.execute(
-            "UPDATE versions SET planned_week = ?3 WHERE project_id = ?1 AND name = ?2",
-            params![project_id, version, week],
-        )?;
-        Ok(Change::Updated)
-    }
-
-    /// Every version of a project that has a place in the calendar: aimed
-    /// at a week, or shipped, or both. A version that is neither is in the
-    /// plan and not yet on the calendar, which is a different screen.
-    pub fn calendar_versions(&self, project_id: i64, project: &str) -> Result<Vec<crate::calendar::Planned>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT name, title, planned_week, shipped_at
-             FROM versions
-             WHERE project_id = ?1 AND status <> 'dropped' AND (planned_week IS NOT NULL OR shipped_at IS NOT NULL)",
-        )?;
-        let rows = stmt.query_map([project_id], |r| {
-            let name: String = r.get(0)?;
-            let title: Option<String> = r.get(1)?;
-            let planned: Option<String> = r.get(2)?;
-            let shipped_at: Option<String> = r.get(3)?;
-            Ok((name, title, planned, shipped_at))
-        })?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            let (version, title, planned, shipped_at) = row?;
-            out.push(crate::calendar::Planned {
-                project: project.to_string(),
-                version,
-                title,
-                // A week that cannot be read is dropped rather than
-                // refused: it came from an import or an older rigger, and
-                // one bad string should not empty the calendar.
-                planned: planned.as_deref().and_then(|w| crate::calendar::Week::parse(w).ok()),
-                shipped: shipped_at.as_deref().and_then(crate::calendar::Week::of_recorded),
-                shipped_at,
-            });
-        }
-        out.sort_by_key(|a| version_order(&a.version));
-        Ok(out)
     }
 
     /// Every version name the record holds for a project.
@@ -4084,21 +4032,6 @@ impl Db {
         Ok(())
     }
 
-    /// Claims a once-per-period duty: true for the caller that moved the
-    /// setting to `value`, false for everyone who found it there already.
-    ///
-    /// One statement, so two processes starting in the same second - the MCP
-    /// server and a command at the terminal, on a Monday morning - cannot
-    /// both see the old week and both toast.
-    pub fn claim_setting(&self, key: &str, value: &str) -> Result<bool> {
-        let changed = self.conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value WHERE settings.value <> excluded.value",
-            params![key, value],
-        )?;
-        Ok(changed > 0)
-    }
-
     pub fn count_open_tasks(&self, project_id: i64) -> Result<u64> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('done', 'dropped')",
@@ -4179,6 +4112,38 @@ impl Db {
                 date: r.get(3)?,
                 due: r.get(4)?,
                 asked_by: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The moments the line's working projects released at, in no order: how
+    /// the queue counts how long a project has waited.
+    pub fn release_moments(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(v.shipped_ts, v.shipped_at) FROM versions v JOIN projects p ON p.id = v.project_id
+              WHERE p.retired_at IS NULL AND v.shipped_at IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What asked for this project to come first, oldest first. Its next turn
+    /// settles it, so being moved up needs nobody to remember to undo it.
+    pub fn moves(&self, project_id: i64, last_turn: Option<&str>) -> Result<Vec<Queued>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
+              WHERE project_id = ?1 AND kind = 'moved' AND created_at > ?2
+              ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, last_turn.unwrap_or_default()], |r| {
+            Ok(Queued {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                body: r.get(2)?,
+                date: r.get(3)?,
+                due: r.get(4)?,
+                asked_by: None,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -4385,20 +4350,6 @@ impl Db {
             )
             .optional()?
             .flatten())
-    }
-
-    /// The moments of what the owner decided after a moment - ever, for
-    /// `None` - outside any sitting: an answer given from the inbox, a
-    /// questionnaire read in. What was said inside a sitting, that sitting
-    /// already heard.
-    pub fn owner_words_after(&self, project_id: i64, after: Option<&str>) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT created_at FROM events
-             WHERE project_id = ?1 AND kind = 'decision' AND author = 'owner' AND session_id IS NULL AND created_at > ?2
-             ORDER BY created_at, id",
-        )?;
-        let rows = stmt.query_map(params![project_id, after.unwrap_or("")], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Tasks closed between two moments.
@@ -4971,7 +4922,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
 /// One constant rather than the same list spelt at each query: the column
 /// added in migration 21 had to reach four places, and a list spelt four
 /// times is a list that reaches three.
-const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, tier, rhythm_weeks, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end, retired_at, retired_by, about";
+const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, weight, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end, retired_at, retired_by, about";
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project {
@@ -4980,20 +4931,19 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         path: row.get(2)?,
         remote: row.get(3)?,
         created_at: row.get(4)?,
-        tier: row.get(5)?,
-        rhythm_weeks: row.get(6)?,
-        kind: row.get::<_, String>(7)?.into(),
-        hub_path: row.get(8)?,
-        gate: row.get(9)?,
-        mark_code: row.get(10)?,
-        accent: row.get(11)?,
-        accent2: row.get(12)?,
-        form: row.get(13)?,
-        docs_url: row.get(14)?,
-        on_session_end: row.get(15)?,
-        retired_at: row.get(16)?,
-        retired_by: row.get(17)?,
-        about: row.get(18)?,
+        weight: row.get(5)?,
+        kind: row.get::<_, String>(6)?.into(),
+        hub_path: row.get(7)?,
+        gate: row.get(8)?,
+        mark_code: row.get(9)?,
+        accent: row.get(10)?,
+        accent2: row.get(11)?,
+        form: row.get(12)?,
+        docs_url: row.get(13)?,
+        on_session_end: row.get(14)?,
+        retired_at: row.get(15)?,
+        retired_by: row.get(16)?,
+        about: row.get(17)?,
     })
 }
 

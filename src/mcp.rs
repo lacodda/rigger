@@ -166,7 +166,7 @@ fn initialize() -> Value {
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": "The record of this project: what is done, what is next, what waits for the owner. \
-    When the owner names no project, `pick` says which one to work on and why. \
+    When the owner names no project, `queue` says which one comes next and why. \
     Start a session with the `context` tool, or the `start session` prompt; it names each question, wish and \
     event in one line, and `event` reads one whole by its id. Record what you decide, find or \
     break with `record_decision`, `record_finding`, `record_pitfall` and `record_change` as it happens, not \
@@ -223,10 +223,28 @@ fn tools() -> Vec<Value> {
             &["project"],
         ),
         tool(
-            "pick",
-            "What to work on now across the whole line: one project and its stage, the reason it comes first, and the order the rest wait in. Reads git first. Use it when the owner asks to get on with the line without naming a project - then read that project's `context` and take its stage to a release.",
+            "queue",
+            "What comes next across the whole line: every project in the order it gets a turn, with its stage and the reason it comes where it does. Reads git first. Use it when the owner asks to get on with the line without naming a project - then read the first project's `context` and take its stage to a release.",
             json!({}),
             &[],
+        ),
+        tool(
+            "set_priority",
+            "Change how often a project comes round when the owner says so: `up`, `down`, or a weight. 3 comes round three times as often as 1; 0 leaves the queue.",
+            json!({
+                "project": project_arg(),
+                "change": { "type": "string", "description": "`up`, `down`, or a whole number" },
+            }),
+            &["project", "change"],
+        ),
+        tool(
+            "move_first",
+            "Put a project first in the queue until its next release, when the owner says it cannot wait for its turn.",
+            json!({
+                "project": project_arg(),
+                "why": { "type": "string", "description": "Why it cannot wait; the owner's words" },
+            }),
+            &["project"],
         ),
         tool(
             "event",
@@ -508,7 +526,27 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             let project = project(db)?;
             Ok(render_plan(db, &project)?)
         }
-        "pick" => Ok(crate::pick::render(&crate::pick_now(db, crate::calendar::Week::current())?)),
+        "queue" => Ok(crate::queue::render(&crate::queue::now(db)?)),
+        "set_priority" => {
+            let mut project = working(db)?;
+            let Some(change) = args.get("change").and_then(Value::as_str).map(str::trim).filter(|c| !c.is_empty()) else {
+                bail!("give `change`: `up`, `down`, or a weight");
+            };
+            project.weight = crate::queue::changed_weight(project.weight, change)?;
+            db.set_weight(project.id, project.weight)?;
+            Ok(format!("{} now has weight {}.", project.name, project.weight))
+        }
+        "move_first" => {
+            let project = working(db)?;
+            let why = args
+                .get("why")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|w| !w.is_empty())
+                .unwrap_or("the owner put it first");
+            db.record_event(project.id, "moved", why, &crate::db::now(), "owner")?;
+            Ok(format!("{} comes first until its next release: {why}", project.name))
+        }
         "record_shipped" => {
             let project = working(db)?;
             let Some(tag) = args.get("tag").and_then(Value::as_str) else {
@@ -1039,7 +1077,9 @@ mod tests {
         let names: Vec<String> = tools().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         for promised in [
             "context",
-            "pick",
+            "queue",
+            "set_priority",
+            "move_first",
             "event",
             "plan",
             "record_decision",

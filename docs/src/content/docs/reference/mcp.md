@@ -27,7 +27,7 @@ In Git Bash the command needs `MSYS_NO_PATHCONV=1` in front of it: otherwise the
 ```console
 $ rigger doctor
 ...
-mcp:       answers - protocol 2025-06-18, 18 tools, 1 prompt
+mcp:       answers - protocol 2025-06-18, 20 tools, 1 prompt
 ```
 
 It asks the server rather than starting a process and speaking the protocol down a pipe. "Does the server answer" is a question about this code; a subprocess would test the shell, the PATH and the binary on disk instead - three things that can be wrong while the server is fine, and one, a stale binary earlier in the PATH, that would make a broken install look healthy.
@@ -41,7 +41,9 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | Tool | What it does |
 | --- | --- |
 | `context` | Where the project stands - the packet, as a session's first read |
-| `pick` | Which project to work on now, when none was named - the answer [`rigger pick`](/rigger/reference/pick/) prints, read from git first |
+| `queue` | Which project to work on now, when none was named - the answer [`rigger queue`](/rigger/reference/queue/) prints, read from git first |
+| `set_priority` | A project's weight: `project` and `change`, which is `up`, `down` or a whole number |
+| `move_first` | Puts a project first until its next release, with a `why`; the same as [`queue first`](/rigger/reference/queue/#queue-first) |
 | `event` | One recorded event whole, by the `[id]` the packet printed: a wish before building it, a decision the packet cut to its first sentence |
 | `plan` | The stage being built and its open tasks, each with an id |
 | `record_decision` | A decision and the reason behind it |
@@ -76,7 +78,7 @@ This is what lets an assistant write a research note or fix a vision into the re
 
 `wish` takes a `from`, naming the project that is asking, when one product needs something of another. The order then shows on the neighbour's packet and in the owner's [inbox](/rigger/reference/inbox/) as theirs - it is still an ordinary wish, sorted by the same `resolve`.
 
-`ask_owner` takes a `due` - a date, `tomorrow`, `+3d`, `friday` - when the answer is needed by a day; past it, the question is shown as overdue in the inbox, the Monday brief and the packet. See [`note`](/rigger/reference/note/#a-question-with-the-day-it-is-due).
+`ask_owner` takes a `due` - a date, `tomorrow`, `+3d`, `friday` - when the answer is needed by a day; past it, the question is shown as overdue in the inbox, the queue and the packet. See [`note`](/rigger/reference/note/#a-question-with-the-day-it-is-due).
 
 `record_shipped` is what a release engine calls when it has made a release: the `tag`, whether a `release` with its archives went out, and the `registries` it reached. The version closes on it, and `sync`'s own look at GitHub does not overwrite it. See [`note --kind shipped`](/rigger/reference/note/#a-release-as-the-engine-made-it).
 

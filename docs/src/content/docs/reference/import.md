@@ -90,7 +90,7 @@ There is no flag for this: a retired project has no other way to be read. Until 
 
 ## The line's own place
 
-The directory a [profile](/rigger/reference/profile/) keeps its hubs in holds more than the hubs: a register of the marks, research about the whole line, a calendar. Those belong to no project. They belong to the line's own place - the service project named after the profile - and its hub is that directory:
+The directory a [profile](/rigger/reference/profile/) keeps its hubs in holds more than the hubs: a register of the marks, research about the whole line, a schedule. Those belong to no project. They belong to the line's own place - the service project named after the profile - and its hub is that directory:
 
 ```console
 $ rigger import line

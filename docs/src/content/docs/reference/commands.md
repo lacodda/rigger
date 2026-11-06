@@ -22,12 +22,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger why`](/rigger/reference/why/) | v0.8.0 | The work that went into a version |
 | [`rigger inbox`](/rigger/reference/inbox/) | v0.9.0 | Questions waiting for your answer |
 | [`rigger digest`](/rigger/reference/digest/) | v0.9.0 | What moved lately, five lines per project |
-| [`rigger version`](/rigger/reference/version/) | v0.10.0 | Aim a version at a week of the calendar |
-| [`rigger calendar`](/rigger/reference/calendar/) | v0.10.0 | Weeks by projects: planned, shipped, slipped |
-| [`rigger next`](/rigger/reference/next/) | v0.10.0 | This week's focus, and what is behind |
-| [`rigger week`](/rigger/reference/week/) | v0.11.0 | The Monday brief: focus, Friday, what waits |
-| [`rigger release-day`](/rigger/reference/release-day/) | v0.11.0 | The shopfront queue: what is out, what waits for Friday |
-| [`rigger retro`](/rigger/reference/retro/) | v0.12.0 | Planned against shipped, per cycle |
+| [`rigger version`](/rigger/reference/version/) | v0.10.0 | Plan a stage and read one whole |
 | [`rigger session`](/rigger/reference/session/) | v0.13.0 | Start and end a sitting; the end writes the journal |
 | [`rigger export`](/rigger/reference/export/) | v0.14.0 | Write a hub back out of the record |
 | [`rigger adopt`](/rigger/reference/adopt/) | v0.15.0 | Record every repository under a directory, with its hub and its tags |
@@ -39,7 +34,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger gate`](/rigger/reference/gate/) | v0.20.0 | Run the command that says a project is fit to commit, and record how it went |
 | [`rigger show`](/rigger/reference/show/) | v0.21.0 | The project's screen: what it is, where it stands, what it has written down |
 | [`rigger link`](/rigger/reference/link/) | v0.22.0 | Tie two projects together, and see when a pair has parted company |
-| [`rigger version show`](/rigger/reference/version/#version-show) | v0.23.0 | One version whole: its number, its week, how far it got; the JSON is a contract |
+| [`rigger version show`](/rigger/reference/version/#version-show) | v0.23.0 | One version whole: its number, how far it got; the JSON is a contract |
 | [`rigger session draft`](/rigger/reference/session/#session-draft) | v0.23.0 | The diary entry the open sitting would leave, to edit before `end --entry` |
 | [`rigger version add`](/rigger/reference/version/#version-add) | v0.27.0 | Plan a stage and its tasks without a hub |
 | [`rigger tray`](/rigger/reference/tray/) | v0.25.0 | A card's tray: the material that arrives for a task - fetched, taken in, sorted into the card's archive |
@@ -48,26 +43,27 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
 | [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
 | [`rigger go`](/rigger/reference/go/) | v0.34.0 | Work on what comes next: the project, its stage, your assistant started on it; a turn left unfinished comes back |
-| [`rigger pick`](/rigger/reference/pick/) | v0.32.0 | What to work on now, across the line: one project and its stage, the reason it comes first, the order of the rest; the Monday brief names it, and so does the MCP tool |
+| [`rigger queue`](/rigger/reference/queue/) | v0.35.0 | What comes next, across the line: every project in the order it gets a turn and the reason for its place; `first` and `back` move one; bare `rigger` prints it, and so does the MCP tool |
+| [`rigger priority`](/rigger/reference/priority/) | v0.35.0 | How often a project comes round: show or change its weight, `up`, `down` or a number; 0 leaves the queue |
 | [`rigger doc files`](/rigger/reference/doc/#the-files-that-are-not-texts), [`export --all`](/rigger/reference/export/#--all-every-hub-back-where-it-lay), [`doctor --hubs`](/rigger/reference/doctor/#can-the-hubs-go) verdict | v0.33.0 | The record keeps every file of a hub - the files that are not texts byte for byte, a retired project's texts, the line's own files beside the hubs; `doctor --hubs` says whether the hubs may go, and `export --all` writes them back |
 
 ## Common to all commands
 
 - `--version` and `--help` on the bare binary; `--help` on every command.
 - `RIGGER_DATA_DIR` overrides the data directory for every command; `RIGGER_PROFILE` names the [profile](/rigger/reference/profile/) to use over the one the config points at.
-- A record under `RIGGER_DATA_DIR` is a scratch one, and reaches nothing outside its own files - no toast, no GitHub, no kasl - unless the program is named: `RIGGER_NOTIFY` for the [week's toast](/rigger/reference/week/#the-week-as-a-toast), `RIGGER_GH` for [`sync`](/rigger/reference/sync/#releases-and-publishing), `RIGGER_KASL` for [sessions](/rigger/reference/session/#told-to-kasl) and [tickets](/rigger/reference/task/#tickets-from-kasls-inbox), `RIGGER_INTAKE_DIRS` for [`tray intake`](/rigger/reference/tray/#tray-intake).
-- The first command of a new week shows the [week as a toast](/rigger/reference/week/#the-week-as-a-toast).
+- A record under `RIGGER_DATA_DIR` is a scratch one, and reaches nothing outside its own files - no GitHub, no kasl - unless the program is named: `RIGGER_GH` for [`sync`](/rigger/reference/sync/#releases-and-publishing), `RIGGER_KASL` for [sessions](/rigger/reference/session/#told-to-kasl) and [tickets](/rigger/reference/task/#tickets-from-kasls-inbox), `RIGGER_INTAKE_DIRS` for [`tray intake`](/rigger/reference/tray/#tray-intake).
+- `rigger` alone prints the [queue](/rigger/reference/queue/); before `rigger init` it prints the help. `rigger --help` lists only the commands a person types - `go`, `queue`, `priority`, `inbox`, `init`, `project`, `doctor` and `help` - and `rigger --help --all` lists every command. All of them work either way.
 - `--json` is taken by every command, and prints one JSON document on standard output - see [JSON output](#json-output).
 - Exit status is `0` on success and `1` on any failure, with the reason on stderr prefixed `error:`. Never `2`, including for a usage error: an assistant's `Stop` hook reads 2 as a refusal to stop, and a mistyped hook must be ignored rather than hold a session open.
 
 ## JSON output
 
-`--json` is one flag on the root of the command line, so every command takes it - before the command or after it, `rigger --json next` and `rigger next --json` alike. Under it a command prints exactly one JSON document on standard output and nothing else there: what a gate or an end-of-session command prints on its own standard output goes to standard error instead, so that the document stays whole. Errors keep their form - a message on standard error and exit code `1`.
+`--json` is one flag on the root of the command line, so every command takes it - before the command or after it, `rigger --json queue` and `rigger queue --json` alike. Under it a command prints exactly one JSON document on standard output and nothing else there: what a gate or an end-of-session command prints on its own standard output goes to standard error instead, so that the document stays whole. Errors keep their form - a message on standard error and exit code `1`.
 
 What a command prints is the contract a program reading it relies on:
 
 - **A command that shows prints what it shows.** Each page has a table under the marker of its command - every field, as a path (`card.key`, `links[].project`, `[].version` for the items of a list printed whole), its type, and what it means.
-- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event as [`event`](/rigger/reference/event/) reads it, and whether this write is what put it there; `version plan` with the version as `version show` prints it; `project add` and the rest with the project as `project show` prints it.
+- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event as [`event`](/rigger/reference/event/) reads it, and whether this write is what put it there; `version add` with the version as `version show` prints it; `project add` and the rest with the project as `project show` prints it.
 - **One type per field.** A field is a string or a number or an object - plus `null` where it can be absent - and never one of two shapes depending on the case.
 - **Held by a test.** Every command is run with `--json` against one synthetic record; a field printed without its row in the table, a row nothing prints, or a type the table does not allow fails the build. A field is not renamed or removed without the table - and the reader - finding out.
 
