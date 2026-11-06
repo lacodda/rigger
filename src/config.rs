@@ -22,8 +22,10 @@ pub const TAIL_FLOOR: &str = "tail.floor";
 pub const TAIL_CAP: &str = "tail.cap";
 pub const TAIL_SORT_DAYS: &str = "tail.sort_days";
 pub const IDEAS_EVERY_DAYS: &str = "ideas.every_days";
+pub const REFACTOR_MIN_VERSIONS: &str = "refactor.min_versions";
+pub const REFACTOR_PER_WEEK: &str = "refactor.per_week";
 
-pub const SETTINGS: [Setting; 4] = [
+pub const SETTINGS: [Setting; 6] = [
     Setting {
         key: TAIL_FLOOR,
         default: 3,
@@ -43,6 +45,16 @@ pub const SETTINGS: [Setting; 4] = [
         key: IDEAS_EVERY_DAYS,
         default: 30,
         about: "How many days between the questionnaires that ask about big ideas",
+    },
+    Setting {
+        key: REFACTOR_MIN_VERSIONS,
+        default: 10,
+        about: "How many versions a project ships before it is considered for a refactoring",
+    },
+    Setting {
+        key: REFACTOR_PER_WEEK,
+        default: 1,
+        about: "How many refactorings the whole line takes on in a week",
     },
 ];
 

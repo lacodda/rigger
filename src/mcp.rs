@@ -247,6 +247,15 @@ fn tools() -> Vec<Value> {
             &["project", "text"],
         ),
         tool(
+            "refactor_done",
+            "Say a project was refactored, or looked at and did not need it, as `rigger refactor ritual` asks. That starts the count to its next one, and takes this week's slot.",
+            json!({
+                "project": project_arg(),
+                "text": text_arg("The theme: what was measured, before and after"),
+            }),
+            &["project", "text"],
+        ),
+        tool(
             "tail_done",
             "Say the plan has been gone through at the start of a turn, as `rigger tail ritual` asks, so this turn does not ask again.",
             json!({
@@ -560,6 +569,11 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             let project = working(db)?;
             db.record_event(project.id, "idea", text()?, &crate::db::now(), "assistant")?;
             Ok(format!("Raised a big idea for {}: it waits for the next questionnaire.", project.name))
+        }
+        "refactor_done" => {
+            let project = working(db)?;
+            crate::refactor::done(db, &project, text()?)?;
+            Ok(format!("{} starts counting again.", project.name))
         }
         "tail_done" => {
             let project = working(db)?;
@@ -1126,6 +1140,7 @@ mod tests {
             "move_first",
             "raise_idea",
             "tail_done",
+            "refactor_done",
             "event",
             "plan",
             "record_decision",

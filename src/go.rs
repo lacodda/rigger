@@ -219,6 +219,7 @@ mod tests {
             last_turn: None,
             waiting: 0,
             asked: 0,
+            refactor: false,
             since: None,
             turn_at: None,
         }

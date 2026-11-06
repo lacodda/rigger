@@ -973,6 +973,14 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("ideas take", &["ideas", "take", "alpha", &idea(0)]);
     r.json("ideas drop", &["ideas", "drop", "alpha", &idea(1), "--note", "Not this year"]);
     r.json("ideas asked", &["ideas", "asked"]);
+    // Whose turn it is to be refactored.
+    r.json("refactor", &["refactor"]);
+    r.json("refactor ritual", &["refactor", "ritual"]);
+    r.json("refactor done", &["refactor", "done", "alpha", "The loader: 900 lines to 300"]);
+    r.json("refactor", &["refactor"]);
+    r.json("config", &["config", "refactor.per_week", "0"]);
+    r.json("refactor", &["refactor"]);
+    r.json("config", &["config", "refactor.per_week", "--clear"]);
     // Moved up, and put back.
     r.json("queue first", &["queue", "first", "beta", "--why", "It cannot wait"]);
     r.json("queue back", &["queue", "back", "beta"]);

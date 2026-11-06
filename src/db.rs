@@ -4168,7 +4168,7 @@ impl Db {
     pub fn moves(&self, project_id: i64, last_turn: Option<&str>) -> Result<Vec<Queued>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
-              WHERE project_id = ?1 AND kind = 'moved' AND created_at > ?2
+              WHERE project_id = ?1 AND kind = 'moved' AND created_at >= ?2
               ORDER BY created_at, id",
         )?;
         let rows = stmt.query_map(params![project_id, last_turn.unwrap_or_default()], |r| {
@@ -4272,6 +4272,29 @@ impl Db {
         Ok(n as usize)
     }
 
+    /// When a project was last refactored, or looked at for it.
+    pub fn last_refactor(&self, project_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT MAX(created_at) FROM events WHERE project_id = ?1 AND kind = 'refactor'",
+                [project_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// How many versions a project has shipped since a moment; ever, for `None`.
+    pub fn versions_shipped_since(&self, project_id: i64, since: Option<&str>) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL AND COALESCE(shipped_ts, shipped_at) > ?2",
+            params![project_id, since.unwrap_or_default()],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     /// When someone last went through a project's plan.
     pub fn last_tail_pass(&self, project_id: i64) -> Result<Option<String>> {
         Ok(self
@@ -4336,11 +4359,15 @@ impl Db {
     /// A release after a blocker settles it, cleared or not: whatever stopped
     /// the tag did not stop this one. Otherwise a blocker nobody remembered to
     /// clear would keep a working project out of the queue for good.
+    ///
+    /// One second holding both says nothing about which came first, and the
+    /// record keeps seconds: it counts as still open, since what stops a tag
+    /// said out loud is worse to lose than to clear by hand.
     pub fn blockers(&self, project_id: i64) -> Result<Vec<Queued>> {
         let released = self.last_release_moment(project_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
-              WHERE project_id = ?1 AND kind = 'blocker' AND created_at > ?2
+              WHERE project_id = ?1 AND kind = 'blocker' AND created_at >= ?2
               ORDER BY created_at, id",
         )?;
         let rows = stmt.query_map(params![project_id, released.unwrap_or_default()], |r| {

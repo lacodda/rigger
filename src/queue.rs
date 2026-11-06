@@ -142,6 +142,8 @@ pub struct Standing {
     pub last_turn: Option<String>,
     /// How many releases the line has made since then.
     pub waited: usize,
+    /// Its next turn is a refactoring.
+    pub refactor: bool,
     /// What stops its tag and is out of reach, oldest first.
     pub blockers: Vec<Note>,
     /// What the owner asked to come first, oldest first.
@@ -182,6 +184,8 @@ pub struct Candidate {
     pub last_turn: Option<String>,
     pub waiting: usize,
     pub asked: usize,
+    /// Its next turn is a refactoring instead of a stage.
+    pub refactor: bool,
     /// When the reason began to hold.
     #[serde(skip)]
     pub(crate) since: Option<String>,
@@ -461,6 +465,7 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
     let mut held = read_held(db, &projects)?;
     let releases = db.release_moments()?;
     let uses = uses(db)?;
+    let rota = crate::refactor::rota(db)?;
     for project in &projects {
         // A place the record keeps for itself is not work anyone does.
         if !project.kind.has_a_place() {
@@ -497,6 +502,7 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
             pulled,
             last_turn,
             waited,
+            refactor: rota.is_next(&project.name),
             waiting: db.count_open_events(project.id, "question")? as usize,
             asked: db.asked_wishes(project.id)?.len(),
             project: project.name.clone(),
@@ -585,6 +591,7 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         last_turn: s.last_turn.as_deref().map(day_of),
         waiting: s.waiting,
         asked: s.asked,
+        refactor: s.refactor,
         since,
         turn_at: s.last_turn.clone(),
     })
@@ -660,6 +667,9 @@ fn waits(n: usize, one: &str, many: &str) -> String {
 /// What else is true of a project, beside its reason.
 fn also(c: &Candidate) -> Vec<String> {
     let mut out = Vec::new();
+    if c.refactor {
+        out.push("this turn is a refactoring".to_string());
+    }
     if c.waiting > 0 {
         out.push(format!("{} on the owner", waits(c.waiting, "question", "questions")));
     }
@@ -746,6 +756,7 @@ mod tests {
             sitting: None,
             last_turn: Some("2026-10-26T10:00:00Z".to_string()),
             waited,
+            refactor: false,
             blockers: Vec::new(),
             moves: Vec::new(),
             pulled: Vec::new(),

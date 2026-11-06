@@ -133,6 +133,7 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `order[].waited` | integer | Releases the line has made since this project's last one. |
 | `order[].last_turn` | string or null | The day of its last sitting, as `YYYY-MM-DD`; `null` if it never had one. |
 | `order[].waiting` | integer | Its questions waiting on the owner. |
+| `order[].refactor` | boolean | Its next turn is a [refactoring](/rigger/reference/refactor/) instead of a stage. |
 | `order[].asked` | integer | The orders its neighbours placed with it, still open. |
 | `left_out` | array | The projects the rule does not consider. |
 | `left_out[]` | object | One of them. |

@@ -44,6 +44,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
 | [`rigger go`](/rigger/reference/go/) | v0.34.0 | Work on what comes next: the project, its stage, your assistant started on it; a turn left unfinished comes back |
 | [`rigger link uses`](/rigger/reference/link/#what-a-project-builds-against) | v0.36.0 | What the projects build against, from their manifests; a release that breaks its users moves them up the queue |
+| [`rigger refactor`](/rigger/reference/refactor/) | v0.38.0 | Whose turn it is to be refactored, one at a time across the line, and how |
 | [`rigger tail`](/rigger/reference/tail/) | v0.37.0 | How much of each plan is left; a turn starts by growing or sorting it when due |
 | [`rigger ideas`](/rigger/reference/ideas/) | v0.37.0 | Big ideas waiting for your answer, asked about together |
 | [`rigger config`](/rigger/reference/config/) | v0.37.0 | The numbers you can set, for the record or for one project |

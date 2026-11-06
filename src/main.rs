@@ -33,6 +33,7 @@ mod paint;
 mod paths;
 mod profile;
 mod queue;
+mod refactor;
 mod repo;
 mod search;
 mod session;
@@ -255,6 +256,11 @@ enum Command {
         /// Only this project
         #[arg(long)]
         project: Option<String>,
+    },
+    /// Whose turn it is to be refactored, one at a time across the line
+    Refactor {
+        #[command(subcommand)]
+        command: Option<RefactorCommand>,
     },
     /// Big ideas waiting for your answer, asked about together
     Ideas {
@@ -987,6 +993,19 @@ enum TailCommand {
 }
 
 #[derive(Subcommand)]
+enum RefactorCommand {
+    /// Print how a refactoring is done
+    Ritual,
+    /// Say a project was refactored, or looked at and did not need it
+    Done {
+        /// Project name
+        project: String,
+        /// The theme: what was measured, before and after
+        text: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum IdeasCommand {
     /// Raise a big idea: what, why, what it would cost, and where it came from
     Add {
@@ -1370,6 +1389,15 @@ fn run(cli: Cli) -> Result<()> {
                 Ok(())
             }
             Some(TailCommand::Done { project, text }) => tail_done(&project, &text, json),
+        },
+        Command::Refactor { command } => match command {
+            None => show_refactor(json),
+            Some(RefactorCommand::Ritual) if json => print_json(&serde_json::json!({ "ritual": refactor::RITUAL })),
+            Some(RefactorCommand::Ritual) => {
+                print!("{}", refactor::RITUAL);
+                Ok(())
+            }
+            Some(RefactorCommand::Done { project, text }) => refactor_done(&project, &text, json),
         },
         Command::Ideas { command } => match command {
             None => show_ideas(json),
@@ -1993,6 +2021,16 @@ fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Resu
     Ok(())
 }
 
+/// What a turn should start with besides its stage: a refactoring, when it is
+/// this project's, or the plan. One thing to a turn: a refactoring leaves the
+/// plan for the turn after.
+fn first_order(db: &Db, project: &db::Project) -> Result<Option<String>> {
+    if let Some(order) = refactor::rota(db)?.order(&project.name) {
+        return Ok(Some(order));
+    }
+    Ok(tail::of(db, project)?.order())
+}
+
 /// Starts the assistant on what comes next, and says how the turn went.
 ///
 /// One turn, and then it stops: the next project is another `go`, so the
@@ -2028,7 +2066,7 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
             "dir": start.map(|t| working_project(&db, &t.project).map(|p| p.path)).transpose()?,
             "program": program,
             "message": start.map(|t| {
-                let order = open_project(&db, &t.project).ok().and_then(|p| tail::of(&db, &p).ok()).and_then(|tail| tail.order());
+                let order = open_project(&db, &t.project).ok().and_then(|p| first_order(&db, &p).ok()).flatten();
                 go::first_message(t, order.as_deref())
             }),
             "passed_over": start.filter(|_| force && named.is_none()).map(|t| go::passed_over(&chosen, t)).unwrap_or_default(),
@@ -2065,8 +2103,7 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
     let dir = Path::new(&project.path);
     open::check_dir(dir)?;
     let (program, _) = open::assistant();
-    let tail = tail::of(&db, &project)?;
-    let message = go::first_message(&target, tail.order().as_deref());
+    let message = go::first_message(&target, first_order(&db, &project)?.as_deref());
     if force && named.is_none() {
         let past = go::passed_over(&chosen, &target);
         if !past.is_empty() {
@@ -5584,6 +5621,29 @@ fn show_weights(db: &Db, json: bool) -> Result<()> {
         };
         println!("{:<name$}  {:>2}  {turns}", project.name, project.weight);
     }
+    Ok(())
+}
+
+/// Whose turn it is to be refactored.
+fn show_refactor(json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let rota = refactor::rota(&db)?;
+    if json {
+        return print_json(&rota);
+    }
+    print!("{}", rota.render());
+    Ok(())
+}
+
+/// Says a project was refactored.
+fn refactor_done(project: &str, text: &str, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = working_project(&db, project)?;
+    refactor::done(&db, &project, text)?;
+    if json {
+        return show_refactor(true);
+    }
+    println!("{} starts counting again.", project.name);
     Ok(())
 }
 

@@ -52,6 +52,8 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `record_blocker` | What stops the tag and is out of reach: the project [leaves the queue](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) with this as its reason until `resolve` clears it or a later release settles it |
 | `record_change` | Something that changed in the product |
 | `record_state` | One line for the top of the hub's state block, when the state shifted |
+| `raise_idea` | A big idea for the owner, to wait for the next questionnaire |
+| `tail_done`, `refactor_done` | Say the plan was gone through, or the project was refactored, as those rituals ask |
 | `set_next_step` | The one line the next session starts from; the newest wins |
 | `ask_owner` | A question only the owner can settle; it waits in the packet, with a `due` day when the answer is needed by one |
 | `record_shipped` | A release as the release engine made it: `tag`, `release`, `registries` |

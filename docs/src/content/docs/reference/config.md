@@ -17,6 +17,8 @@ tail.floor       3  With this many versions planned or fewer, a project's turn s
 tail.cap         30  With this many versions planned, small ideas stop going into the plan by themselves
 tail.sort_days   30  How many days a project's wishes and orders may wait before a turn starts by sorting them
 ideas.every_days 30  How many days between the questionnaires that ask about big ideas
+refactor.min_versions 10  How many versions a project ships before it is considered for a refactoring
+refactor.per_week 1  How many refactorings the whole line takes on in a week
 
 $ rigger config tail.floor 5 --project widget
 ```
@@ -41,4 +43,4 @@ A project's own value comes first, then the record's, then the default. `--clear
 
 ## Related
 
-- [`tail`](/rigger/reference/tail/) and [`ideas`](/rigger/reference/ideas/) - what the numbers steer.
+- [`tail`](/rigger/reference/tail/), [`ideas`](/rigger/reference/ideas/) and [`refactor`](/rigger/reference/refactor/) - what the numbers steer.
