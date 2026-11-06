@@ -41,7 +41,7 @@ directories = "6"
 dunce = "1"
 # Every read of git goes through the line's git library, so that what the
 # line has learnt about gitoxide lives in one crate (see src/git.rs).
-furca-core = "0.10"
+furca-core = "0.11"
 jiff = "0.2"
 # bundled: no system SQLite to find or version-match on any platform.
 # backup: the database is copied through SQLite's own API before a migration,
