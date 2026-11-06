@@ -140,7 +140,9 @@ pub fn summarise(
         let into = match event.kind.as_str() {
             "decision" => &mut summary.decisions,
             "finding" => &mut summary.findings,
-            "pitfall" => &mut summary.pitfalls,
+            // A blocker is a trap that happens to stop the tag: the diary
+            // reads it among the others.
+            "pitfall" | "blocker" => &mut summary.pitfalls,
             "change" => &mut summary.changes,
             "question" => &mut summary.questions,
             _ => continue,

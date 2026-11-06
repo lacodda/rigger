@@ -36,7 +36,7 @@ The versions [aimed](/rigger/reference/version/) at this week that have no tag y
 
 ```console
 Focus
-  nothing is aimed at this week - rigger pick names widget v0.2.0 (1 change unseen)
+  nothing is aimed at this week - rigger pick names widget v0.2.0 (1 change since the last release)
 ```
 
 The pick is about now, so only the brief of the current week names it; like `pick`, that brief reads git first.
@@ -125,7 +125,7 @@ Pairs are recorded with [`rigger link`](/rigger/reference/link/), which also pri
 | `pick.project` | string | The project. |
 | `pick.version` | string | The version to work on. |
 | `pick.title` | string or null | Its title, or `null`. |
-| `pick.reason` | string | `late`, `due`, `unseen`, `answered`, `behind` or `turn`. |
+| `pick.reason` | string | `unfinished`, `late`, `due`, `answered`, `behind` or `turn`. |
 | `overdue` | array | The versions aimed at a week already gone, with no tag. |
 | `overdue[]` | object | A version aimed at a week already gone, with no tag. |
 | `overdue[].project` | string | The project. |

@@ -16,7 +16,6 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger note`](/rigger/reference/note/), `rigger wish` | v0.3.0 | Record an event or a wish |
 | [`rigger resolve`](/rigger/reference/resolve/) | v0.7.0 | Answer a question or sort a wish |
 | [`rigger event`](/rigger/reference/event/) | v0.28.0 | Read one recorded event whole, by the id the packet printed |
-| [`rigger open`](/rigger/reference/open/) | v0.4.0 | Start a Claude Code session with the packet |
 | [`rigger mcp`](/rigger/reference/mcp/) | v0.5.0 | Serve the packet and the recording tools over MCP |
 | [`rigger sync`](/rigger/reference/sync/) | v0.6.0 | Read tags and commits into facts; the branches and commits of task cards (v0.24.0) |
 | [`rigger find`](/rigger/reference/find/) | v0.8.0 | Search every project's events |
@@ -48,6 +47,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project add`](/rigger/reference/project/#project-add) on a folder | v0.30.0 | Record work that lives in a folder with no repository; git is never asked, and its skill has a template of its own |
 | [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
 | [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
+| [`rigger go`](/rigger/reference/go/) | v0.34.0 | Work on what comes next: the project, its stage, your assistant started on it; a turn left unfinished comes back |
 | [`rigger pick`](/rigger/reference/pick/) | v0.32.0 | What to work on now, across the line: one project and its stage, the reason it comes first, the order of the rest; the Monday brief names it, and so does the MCP tool |
 | [`rigger doc files`](/rigger/reference/doc/#the-files-that-are-not-texts), [`export --all`](/rigger/reference/export/#--all-every-hub-back-where-it-lay), [`doctor --hubs`](/rigger/reference/doctor/#can-the-hubs-go) verdict | v0.33.0 | The record keeps every file of a hub - the files that are not texts byte for byte, a retired project's texts, the line's own files beside the hubs; `doctor --hubs` says whether the hubs may go, and `export --all` writes them back |
 

@@ -1,16 +1,12 @@
-//! Starting a session with the packet already in it.
-//!
-//! The assistant runs in the project's directory and is handed the context
-//! packet as its first message, so a session begins where the last one
-//! stopped instead of with someone reading notes aloud.
+//! Starting a session: an assistant in the project's directory, with a first
+//! message that says what the sitting is for.
 //!
 //! rigger does not bundle an assistant: it launches whichever command the
-//! owner already uses, `claude` by default, and passes the packet through
+//! owner already uses, `claude` by default, and passes the message through
 //! its argument. `RIGGER_ASSISTANT` names another one.
 
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -30,11 +26,17 @@ pub fn assistant() -> (String, Vec<String>) {
     (program, parts.collect())
 }
 
-/// Runs the assistant in `dir`, handing it `packet` as its first message.
+/// Runs the assistant in `dir`, handing it `message` as its first message.
 ///
 /// The child inherits this process's terminal - it is an interactive session,
 /// not a captured one - and its exit status becomes ours.
-pub fn run(dir: &Path, packet: &str) -> Result<i32> {
+///
+/// An argument is the one way there is. Claude Code refuses to start with its
+/// input piped ("stdin is not a terminal"), which is how this used to hand
+/// over a packet of many lines on Windows: `open` failed there on every run,
+/// found by running it in a console of its own on the owner's machine. So the
+/// message has to be something a batch file can carry - see `carried_by_batch`.
+pub fn run(dir: &Path, message: &str) -> Result<i32> {
     let (program, args) = assistant();
     let program = resolve(&program);
     let context = || {
@@ -45,41 +47,47 @@ pub fn run(dir: &Path, packet: &str) -> Result<i32> {
         )
     };
 
-    // A multi-line argument cannot reach a batch file at all: Rust refuses
-    // one outright (CVE-2024-24576), and through `cmd /c` the newline ends
-    // the command line, so the assistant is handed the first line and
-    // nothing else. The packet is many lines by nature, so a batch assistant
-    // - which is what every npm install is on Windows - receives it on stdin
-    // instead. Recorded in the owner's notes since kilna hit the same wall.
-    if takes_message_on_stdin(&program) {
-        let mut child = launcher(&program)
-            .args(&args)
-            .current_dir(dir)
-            .stdin(Stdio::piped())
-            .spawn()
-            .with_context(context)?;
-        child
-            .stdin
-            .take()
-            .context("the assistant did not accept input")?
-            .write_all(packet.as_bytes())
-            .context("cannot hand the packet to the assistant")?;
-        return Ok(child.wait()?.code().unwrap_or(1));
-    }
-
-    let status = launcher(&program).args(&args).arg(packet).current_dir(dir).status().with_context(context)?;
+    let status = with_message(&program, &args, message)?.current_dir(dir).status().with_context(context)?;
     Ok(status.code().unwrap_or(1))
 }
 
-/// Whether the packet must travel on stdin rather than as an argument.
+/// The command that starts `program` with `args` and `message`.
 #[cfg(windows)]
-fn takes_message_on_stdin(program: &std::ffi::OsStr) -> bool {
-    is_batch(program)
+fn with_message(program: &std::ffi::OsStr, args: &[String], message: &str) -> Result<Command> {
+    use std::os::windows::process::CommandExt;
+
+    if !is_batch(program) {
+        let mut command = Command::new(program);
+        command.args(args).arg(message);
+        return Ok(command);
+    }
+    if !carried_by_batch(message) {
+        bail!("this cannot be handed to a batch file: {message}");
+    }
+    // Written out rather than left to Rust's quoting, which follows the rules
+    // of a program's arguments and not of `cmd`. `cmd /c` strips the first and
+    // last quote of what follows it, so the whole line goes in one more pair,
+    // and a path with a space in it survives alongside a quoted message.
+    let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
+    let mut command = Command::new(shell);
+    let flags = args.iter().map(|a| format!(" {a}")).collect::<String>();
+    command.arg("/c").raw_arg(format!("\"\"{}\"{flags} \"{message}\"\"", program.to_string_lossy()));
+    Ok(command)
 }
 
 #[cfg(not(windows))]
-fn takes_message_on_stdin(_program: &std::ffi::OsStr) -> bool {
-    false
+fn with_message(program: &std::ffi::OsStr, args: &[String], message: &str) -> Result<Command> {
+    let mut command = Command::new(program);
+    command.args(args).arg(message);
+    Ok(command)
+}
+
+/// Whether `cmd`, inside double quotes, hands this over as it is. A line break
+/// ends the command line, a quote ends the quoting, and a percent sign is
+/// expanded even inside it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn carried_by_batch(message: &str) -> bool {
+    !message.contains(['\n', '\r', '"', '%'])
 }
 
 /// The command that will actually be spawned.
@@ -149,20 +157,8 @@ pub fn resolve(program: &str) -> std::ffi::OsString {
     std::ffi::OsString::from(program)
 }
 
-/// The instruction the packet arrives with, so that the assistant treats it
-/// as the state of the work rather than as a request to summarise it.
-pub fn first_message(packet: &str) -> String {
-    format!(
-        "This is where the project stands, from rigger. Pick up from the next step; \
-         record what you decide or find with `rigger note`, and anything for the owner with `rigger wish`.\n\n{packet}"
-    )
-}
-
-/// The same packet, handed over by the MCP server.
-///
-/// The instruction differs in one thing that matters: an assistant reached
-/// through MCP has the recording tools in hand, so it is pointed at those
-/// rather than at a command it would have to shell out to.
+/// The packet as the MCP server hands it over, with the instruction that makes
+/// it read as the state of the work rather than as a request to summarise it.
 pub fn first_message_over_mcp(packet: &str) -> String {
     format!(
         "This is where the project stands, from rigger. Pick up from the next step; record what you decide \
@@ -203,10 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn the_first_message_tells_the_assistant_what_the_packet_is() {
-        let message = first_message("# proj\n");
-        assert!(message.contains("rigger note"), "{message}");
-        assert!(message.ends_with("# proj\n"), "the packet must come last: {message}");
+    fn what_cmd_would_read_is_not_carried_by_a_batch_file() {
+        assert!(carried_by_batch("Work on x: take v0.2.0 to a release (2 changed files), `rigger context x`."));
+        for bad in ["two\nlines", "two\rlines", "a \"quote\"", "100% done"] {
+            assert!(!carried_by_batch(bad), "{bad}");
+        }
     }
 
     #[cfg(windows)]

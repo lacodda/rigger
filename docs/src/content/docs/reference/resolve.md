@@ -1,6 +1,6 @@
 ---
 title: resolve
-description: Answer a question or sort a wish, so it leaves the packet.
+description: Answer a question, sort a wish or clear a blocker, so it leaves the packet.
 ---
 
 ```
@@ -36,15 +36,22 @@ Answered [1]: Pick the release day.
 
 The decision keeps the question above it, so the reasoning reads as a whole later.
 
+A [blocker](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) is cleared the same way, and the project is back in the queue:
+
+```console
+$ rigger resolve sample 9
+Cleared [9]: The signing key has expired.
+```
+
 ## Nothing is deleted
 
-The record is a history: a question that was asked stays asked. Resolving changes its kind - to `answered` or `sorted` - so it leaves the packet's waiting lists while remaining in the record.
+The record is a history: a question that was asked stays asked. Resolving changes its kind - to `answered`, `sorted` or `cleared` - so it leaves the packet's waiting lists while remaining in the record.
 
-Only questions and wishes can be resolved. A decision, finding or pitfall is refused: closing one would quietly rewrite what happened.
+Only questions, wishes and blockers can be resolved. A decision, finding or pitfall is refused: closing one would quietly rewrite what happened.
 
 ```console
 $ rigger resolve sample 7
-error: [7] is a decision, not a question or a wish; only those are answered
+error: [7] is a decision, not a question, a wish or a blocker; only those are resolved
 ```
 
 ## From an assistant
@@ -56,10 +63,10 @@ The MCP server offers the same as a `resolve` tool. An assistant should use it f
 <!-- json: resolve -->
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `resolved` | object | The question or wish that was closed. |
+| `resolved` | object | The question, wish or blocker that was closed. |
 | `resolved.id` | integer | Its id. |
 | `resolved.project` | string | The name of its project. |
-| `resolved.was` | string | What it was before: `question` or `wish`. |
+| `resolved.was` | string | What it was before: `question`, `wish` or `blocker`. |
 | `resolved.body` | string | Its text. |
 | `resolved.answer` | string or null | The answer recorded as a decision; null for a wish. |
 

@@ -92,12 +92,11 @@ fn order(found: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The case the pick exists for: a change landed in a project after its
-/// last sitting - made from a neighbour's sitting, and synced by nobody.
-/// The pick reads git itself, so the change counts without a `sync`, and
-/// the project comes before one that merely waited longer.
+/// A change nobody synced still counts, because the pick reads git itself; and
+/// it holds the line up however it was made - from a neighbour's sitting, or by
+/// a sitting that knew and chose not to tag. Only a release settles it.
 #[test]
-fn a_commit_nobody_synced_puts_its_project_first() {
+fn a_commit_nobody_synced_puts_its_project_first_until_it_is_released() {
     let data = tempfile::tempdir().unwrap();
     rigger(data.path()).arg("init").assert().success();
     project(data.path(), "waiting", &["v0.2.0 · Second"]);
@@ -113,21 +112,112 @@ fn a_commit_nobody_synced_puts_its_project_first() {
 
     let found = pick(data.path());
     assert_eq!(order(&found), vec!["busy", "waiting"], "{found:#}");
-    assert_eq!(found["pick"]["reason"], "unseen");
+    assert_eq!(found["pick"]["reason"], "unfinished");
     assert_eq!(found["pick"]["version"], "v0.2.0");
-    assert_eq!(found["pick"]["unseen"][0], "feat(plugin): generate plugins for a neighbour");
+    assert_eq!(found["pick"]["unfinished"]["untagged"][0], "feat(plugin): generate plugins for a neighbour");
 
     let said = text(data.path(), &["pick"]);
     assert!(said.starts_with("Work on busy  v0.2.0 · Second"), "{said}");
-    assert!(said.contains("feat(plugin): generate plugins for a neighbour"), "{said}");
+    assert!(said.contains("not finished: 1 change since the last release"), "{said}");
 
-    // A sitting that has seen the change settles it: left untagged on
-    // purpose, it is counted on the line, not picked again for ever.
+    // A sitting that has seen the change does not settle it.
     sitting(data.path(), "busy");
+    assert_eq!(pick(data.path())["pick"]["project"], "busy");
+
+    // The tag does.
+    git(&busy, &["tag", "v0.2.0"], None);
     let found = pick(data.path());
-    assert_eq!(order(&found), vec!["waiting", "busy"], "{found:#}");
-    assert_eq!(found["then"][0]["reason"], "turn");
-    assert_eq!(found["then"][0]["untagged"], 1);
+    assert!(found["pick"]["unfinished"].is_null(), "{found:#}");
+    assert_eq!(found["pick"]["project"], "waiting", "{found:#}");
+}
+
+/// The measure the rule was drawn from: on the real line, a docs commit and a
+/// chore commit after a tag sat in two projects with nothing wrong with them.
+/// They wait for the next tag without holding anything up.
+#[test]
+fn docs_and_chores_after_a_tag_are_not_unfinished() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let root = project(data.path(), "alpha", &["v0.2.0 · Second"]);
+    sitting(data.path(), "alpha");
+    commit(&root, "b.txt", "docs: say how it is used", None);
+    commit(&root, "c.txt", "chore(deps): take a newer lockfile", None);
+    let found = pick(data.path());
+    assert_eq!(found["pick"]["reason"], "turn", "{found:#}");
+    assert!(found["pick"]["unfinished"].is_null(), "{found:#}");
+
+    commit(&root, "d.txt", "fix: load the rows", None);
+    let found = pick(data.path());
+    assert_eq!(found["pick"]["reason"], "unfinished", "{found:#}");
+    assert_eq!(found["pick"]["unfinished"]["untagged"].as_array().unwrap().len(), 1, "{found:#}");
+}
+
+/// Everything else git can say a repository holds, read from a real one.
+#[test]
+fn what_a_repository_holds_is_read_from_it() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let root = project(data.path(), "alpha", &["v0.2.0 · Second"]);
+    sitting(data.path(), "alpha");
+    let unfinished = || pick(data.path())["pick"]["unfinished"].clone();
+    assert!(unfinished().is_null());
+
+    std::fs::write(root.join("new.txt"), "new").unwrap();
+    assert_eq!(unfinished()["untracked"], 1);
+    std::fs::remove_file(root.join("new.txt")).unwrap();
+
+    std::fs::write(root.join("a.txt"), "changed").unwrap();
+    assert_eq!(unfinished()["changed"], 1);
+    git(&root, &["add", "a.txt"], None);
+    assert_eq!(unfinished()["changed"], 1, "staged is still not committed");
+    git(&root, &["reset", "--quiet", "--hard"], None);
+    assert!(unfinished().is_null());
+
+    // A stash nobody means to finish by the next tag holds nothing up.
+    std::fs::write(root.join("a.txt"), "stashed").unwrap();
+    git(&root, &["stash", "--quiet"], None);
+    assert!(unfinished().is_null(), "a stash stopped the line");
+}
+
+/// A repository with a remote: a commit that has not reached it holds the line
+/// up, and so does a tag that has not. The fixture's remote is a path, which a
+/// scratch record may ask.
+#[test]
+fn what_has_not_reached_the_remote_is_unfinished() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let root = project(data.path(), "alpha", &["v0.2.0 · Second", "v0.3.0 · Third"]);
+    let bare = data.path().join("alpha.git");
+    git(
+        data.path(),
+        &["init", "--quiet", "--bare", "--initial-branch", "main", bare.to_str().unwrap()],
+        None,
+    );
+    git(&root, &["remote", "add", "origin", bare.to_str().unwrap()], None);
+    git(&root, &["push", "--quiet", "--set-upstream", "origin", "main", "v0.1.0"], None);
+    sitting(data.path(), "alpha");
+    let unfinished = || pick(data.path())["pick"]["unfinished"].clone();
+    assert!(unfinished().is_null(), "{}", unfinished());
+
+    commit(&root, "b.txt", "docs: a line nobody has pushed", None);
+    assert_eq!(unfinished()["unpushed"], 1);
+    assert!(text(data.path(), &["pick"]).contains("1 commit not pushed"));
+    git(&root, &["push", "--quiet"], None);
+    assert!(unfinished().is_null(), "{}", unfinished());
+
+    git(&root, &["tag", "v0.2.0"], None);
+    assert_eq!(unfinished()["undelivered"], "v0.2.0: the tag is not on the remote");
+    git(&root, &["push", "--quiet", "origin", "v0.2.0"], None);
+    assert!(unfinished().is_null(), "{}", unfinished());
+
+    // A release the record knows fell short holds it up as well, and one it
+    // knows got out is not asked about again.
+    rigger(data.path())
+        .args(["note", "alpha", "--kind", "shipped", "--tag", "v0.2.0", "--release", "--registry", "npm"])
+        .assert()
+        .success();
+    git(data.path(), &["--git-dir", bare.to_str().unwrap(), "tag", "--delete", "v0.2.0"], None);
+    assert!(unfinished().is_null(), "the record's word was asked about again: {}", unfinished());
 }
 
 /// Aiming a version at the week is the owner asking for it: it outranks
@@ -136,10 +226,10 @@ fn a_commit_nobody_synced_puts_its_project_first() {
 fn the_calendar_comes_first() {
     let data = tempfile::tempdir().unwrap();
     rigger(data.path()).arg("init").assert().success();
-    let busy = project(data.path(), "busy", &["v0.2.0 · Second"]);
+    project(data.path(), "busy", &["v0.2.0 · Second"]);
     project(data.path(), "aimed", &["v0.2.0 · Second", "v0.3.0 · Third"]);
+    sitting(data.path(), "aimed");
     sitting(data.path(), "busy");
-    commit(&busy, "b.txt", "feat: unseen work", None);
     rigger(data.path()).args(["project", "tier", "aimed", "out"]).assert().success();
 
     let now = jiff::Zoned::now().date().iso_week_date();
@@ -228,12 +318,12 @@ fn the_brief_names_the_same_pick() {
 
     let brief = text(data.path(), &["week"]);
     assert!(
-        brief.contains("nothing is aimed at this week - rigger pick names alpha v0.2.0 (1 change unseen)"),
+        brief.contains("nothing is aimed at this week - rigger pick names alpha v0.2.0 (1 change since the last release)"),
         "{brief}"
     );
     let brief: Value = serde_json::from_str(&text(data.path(), &["week", "--json"])).unwrap();
     assert_eq!(brief["pick"]["project"], "alpha");
-    assert_eq!(brief["pick"]["reason"], "unseen");
+    assert_eq!(brief["pick"]["reason"], "unfinished");
     assert_eq!(brief["pick"]["reason"], pick(data.path())["pick"]["reason"]);
 
     // Another week's brief names no pick: the pick is about now.

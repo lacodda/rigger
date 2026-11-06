@@ -67,7 +67,7 @@ Nothing shipped yet
 (Any [id] above reads whole with `rigger event sample <id>`.)
 ```
 
-[`rigger open sample`](/rigger/reference/open/) starts the assistant in the project with that packet as its first message. Connected to the [MCP server](/rigger/reference/mcp/) - the installer registers it - the assistant reads and writes the record itself; everything below is what it does through its tools, shown as the commands a person would type.
+[`rigger go sample`](/rigger/reference/go/) starts the assistant in the project, with a sitting open and that packet the first thing it reads; `rigger go` alone works out which project comes next. Connected to the [MCP server](/rigger/reference/mcp/) - the installer registers it - the assistant reads and writes the record itself; everything below is what it does through its tools, shown as the commands a person would type.
 
 A [session](/rigger/reference/session/) holds a sitting together: what is recorded between `start` and `end` belongs to it.
 

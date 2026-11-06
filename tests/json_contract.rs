@@ -925,7 +925,8 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("export", &["export", "--line", "--to", data.join("line.json").to_str().unwrap()]);
     r.json("export", &["export", "--all", "--check"]);
     r.json("export", &["export", "--all", "--docs", "--adopt"]);
-    r.json("open", &["open", "alpha"]);
+    r.json("go", &["go", "alpha"]);
+    r.json("go", &["go", "--force"]);
 
     let others = data.join("others");
     let others_hubs = data.join("others-hubs");
@@ -967,14 +968,28 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("doctor", &["doctor", "--hubs"]);
 
     // ---- the pick ----------------------------------------------------------------
-    // gamma has a change no sitting has seen and a tier that asks for more;
-    // alpha is aimed at this week, so it comes first and gamma follows.
+    // gamma has a change no release has taken and a tier that asks for more.
     r.json("project tier", &["project", "tier", "gamma", "A"]);
     r.json("pick", &["pick"]);
-    // Nothing aimed: gamma itself is the pick, with all it carries.
+    // With its neighbours blocked, gamma itself is the pick, with all it
+    // carries, and a sitting open on it stops `go`.
+    let blocked = [
+        r.json("note", &["note", "alpha", "The runner is down.", "--kind", "blocker"]),
+        r.json("note", &["note", "beta", "The signing key has expired.", "--kind", "blocker"]),
+    ];
+    r.json("context", &["context", "beta"]);
+    r.json("pick", &["pick"]);
+    r.json("go", &["go"]);
+    r.json("session start", &["session", "start", "gamma"]);
+    r.json("go", &["go"]);
+    r.json("session end", &["session", "end", "gamma"]);
+    for (project, note) in ["alpha", "beta"].iter().zip(&blocked) {
+        let id = note["event"]["id"].as_i64().unwrap().to_string();
+        r.json("resolve", &["resolve", project, &id]);
+    }
+    // The calendar speaks where nothing is left unfinished.
     r.json("version plan", &["version", "plan", "alpha", "v0.4.0", "--clear"]);
     r.json("pick", &["pick"]);
-    // A promise broken comes before everything.
     r.json("version plan", &["version", "plan", "beta", "v0.2.0", "--week", "2026-W30"]);
     r.json("pick", &["pick"]);
 

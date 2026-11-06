@@ -318,5 +318,5 @@ A red result does not fail the close - the session is already over and already r
 - [`project`](/rigger/reference/project/) - `--on-session-end` sets what a closing sitting runs.
 - [`note`](/rigger/reference/note/) - what a session fills with.
 - [`digest`](/rigger/reference/digest/) - the same question over days rather than sittings.
-- [`open`](/rigger/reference/open/) - starting an assistant with the packet in hand.
+- [`go`](/rigger/reference/go/) - starting an assistant on what comes next, with a sitting open from the first moment.
 - [`backup`](/rigger/reference/backup/) - the copy its end takes.

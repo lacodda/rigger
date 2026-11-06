@@ -2657,14 +2657,18 @@ impl Db {
         let Some((kind, body)) = found else {
             bail!("no open question or wish [{id}] in this project; the packet lists the ids");
         };
-        if !matches!(kind.as_str(), "question" | "wish") {
-            bail!("[{id}] is a {kind}, not a question or a wish; only those are answered");
+        if !matches!(kind.as_str(), "question" | "wish" | "blocker") {
+            bail!("[{id}] is a {kind}, not a question, a wish or a blocker; only those are resolved");
         }
 
-        // `answered` and `sorted` keep the kind readable in the record: one
-        // says the owner replied, the other that a wish found its place in
-        // the plan.
-        let resolved = if kind == "question" { "answered" } else { "sorted" };
+        // `answered`, `sorted` and `cleared` keep the kind readable in the
+        // record: the owner replied, a wish found its place in the plan, what
+        // stopped the tag stopped stopping it.
+        let resolved = match kind.as_str() {
+            "question" => "answered",
+            "wish" => "sorted",
+            _ => "cleared",
+        };
         self.conn.execute("UPDATE events SET kind = ?1 WHERE id = ?2", params![resolved, id])?;
 
         if let Some(answer) = answer {
@@ -4175,6 +4179,31 @@ impl Db {
                 date: r.get(3)?,
                 due: r.get(4)?,
                 asked_by: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What stops this project's tag and is out of reach, oldest first.
+    ///
+    /// A release after a blocker settles it, cleared or not: whatever stopped
+    /// the tag did not stop this one. Otherwise a blocker nobody remembered to
+    /// clear would keep a working project out of the queue for good.
+    pub fn blockers(&self, project_id: i64) -> Result<Vec<Queued>> {
+        let released = self.last_release_moment(project_id)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
+              WHERE project_id = ?1 AND kind = 'blocker' AND created_at > ?2
+              ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, released.unwrap_or_default()], |r| {
+            Ok(Queued {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                body: r.get(2)?,
+                date: r.get(3)?,
+                due: r.get(4)?,
+                asked_by: None,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

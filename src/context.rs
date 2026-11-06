@@ -45,6 +45,9 @@ pub struct Packet {
     pub project: String,
     pub state: State,
     pub current: Option<Stage>,
+    /// What stops this project's tag and is out of reach. Never left out by
+    /// the budget: a session that has not heard of it will walk into it.
+    pub blockers: Vec<Item>,
     pub questions: Vec<Item>,
     /// How many questions the budget left out - the newest; `inbox` lists
     /// every one.
@@ -312,11 +315,13 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     // neighbour would be paid on every one of them.
     let queue = db.queue(project.id)?;
     let next_step = db.latest_event_body(project.id, "next")?;
+    let blockers: Vec<Item> = db.blockers(project.id)?.iter().map(Item::of).collect();
 
     let mut packet = Packet {
         project: project.name.clone(),
         state,
         current,
+        blockers,
         questions: Vec::new(),
         questions_omitted: 0,
         wishes: Vec::new(),
@@ -416,6 +421,7 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
     Ok(packet)
 }
 
+const BLOCKED: &str = "Blocked: out of reach, and the queue has gone on without it";
 const QUESTIONS: &str = "Waiting for the owner";
 const WISHES: &str = "Wishes, not yet sorted";
 
@@ -508,7 +514,7 @@ fn fill_queue(packet: &mut Packet, queue: Vec<crate::db::Queued>, share: usize) 
 /// A heading that only announces what follows - `**Вопрос:**` - names
 /// nothing, so a heading ending in a colon gives way to the sentence it
 /// opens.
-fn headline(text: &str) -> String {
+pub fn headline(text: &str) -> String {
     let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let first = first.trim_start_matches('#').trim_start();
     if let Some(rest) = first.strip_prefix("**")
@@ -655,6 +661,10 @@ pub fn costs(packet: &Packet) -> Vec<Cost> {
         Cost {
             section: "current stage",
             tokens: packet.current.as_ref().map(|s| estimate_tokens(&render_stage(s))).unwrap_or(0),
+        },
+        Cost {
+            section: "blockers",
+            tokens: estimate_tokens(&render_list(BLOCKED, &packet.blockers, None)),
         },
         Cost {
             section: "questions",
@@ -857,6 +867,7 @@ pub fn render(packet: &Packet) -> String {
     if let Some(stage) = &packet.current {
         out.push_str(&render_stage(stage));
     }
+    out.push_str(&render_list(BLOCKED, &packet.blockers, None));
     out.push_str(&render_questions(packet));
     out.push_str(&render_wishes(packet));
     if !packet.events.is_empty() || packet.events_omitted > 0 {
@@ -868,7 +879,7 @@ pub fn render(packet: &Packet) -> String {
     }
     // Said once, under the last list that carries ids: a line that names
     // a text is only as good as the way to read it.
-    if !packet.questions.is_empty() || !packet.wishes.is_empty() || !packet.events.is_empty() {
+    if !packet.blockers.is_empty() || !packet.questions.is_empty() || !packet.wishes.is_empty() || !packet.events.is_empty() {
         out.push_str(&read_whole(&packet.project));
     }
     out.push_str(&render_documents(packet));

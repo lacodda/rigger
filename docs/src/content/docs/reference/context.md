@@ -175,6 +175,11 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `current.set_aside[].title` | string or null | The version's title. |
 | `current.set_aside[].frozen` | integer | How many of its open tasks are frozen. |
 | `current.set_aside[].asleep` | integer | How many of its open tasks are asleep. |
+| `blockers` | array | What stops this project's tag and is out of reach, oldest first; never left out by the budget. |
+| `blockers[]` | object | One [blocker](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag). |
+| `blockers[].id` | integer | Its id; `rigger event` reads it whole and `rigger resolve` clears it. |
+| `blockers[].head` | string | The line it is known by. |
+| `blockers[].more` | integer | How many characters longer the whole is than `head`. |
 | `questions` | array | Questions waiting for the owner. |
 | `questions[]` | object | One question. |
 | `questions[].id` | integer | The question's id; `rigger event` reads it whole. |

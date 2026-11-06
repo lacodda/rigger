@@ -389,3 +389,51 @@ fn a_question_carries_its_day_and_a_release_closes_its_version() {
     assert!(packet.contains("Last shipped: v0.2.0"), "{packet}");
     server.finish();
 }
+
+/// `record_blocker` takes the project out of the pick the same tool answers,
+/// and `resolve` puts it back.
+#[test]
+fn a_blocker_recorded_over_mcp_takes_the_project_out_of_the_pick() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("alpha");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    assert_cmd::Command::cargo_bin("rigger")
+        .unwrap()
+        .env("RIGGER_DATA_DIR", data.path())
+        .arg("init")
+        .assert()
+        .success();
+    assert_cmd::Command::cargo_bin("rigger")
+        .unwrap()
+        .env("RIGGER_DATA_DIR", data.path())
+        .args(["project", "add"])
+        .arg(&root)
+        .assert()
+        .success();
+    assert_cmd::Command::cargo_bin("rigger")
+        .unwrap()
+        .env("RIGGER_DATA_DIR", data.path())
+        .args(["version", "add", "alpha", "v0.1.0", "--task", "a task"])
+        .assert()
+        .success();
+
+    let mut server = Server::start(data.path());
+    server.request(1, "initialize", json!({}));
+    let said = server.call(2, "pick", json!({}));
+    assert!(said.starts_with("Work on alpha"), "{said}");
+
+    let said = server.call(3, "record_blocker", json!({ "project": "alpha", "text": "The signing key has expired" }));
+    assert!(said.contains("blocker"), "{said}");
+    let said = server.call(4, "pick", json!({}));
+    assert!(said.contains("Nothing to pick"), "{said}");
+    assert!(said.contains("The signing key has expired"), "{said}");
+
+    let packet = server.call(5, "context", json!({ "project": "alpha" }));
+    assert!(packet.contains("The signing key has expired"), "{packet}");
+    let id: i64 = said.split('[').nth(1).unwrap().split(']').next().unwrap().parse().unwrap();
+
+    server.call(6, "resolve", json!({ "project": "alpha", "id": id }));
+    let said = server.call(7, "pick", json!({}));
+    assert!(said.starts_with("Work on alpha"), "{said}");
+    server.finish();
+}

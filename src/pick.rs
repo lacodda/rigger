@@ -13,28 +13,31 @@
 //! project a tier and its rhythm is kept. The first reason that holds for a
 //! project is its reason, and the reasons rank so:
 //!
-//! 1. `late` - a version aimed at a week already gone: the owner's own
+//! 1. `unfinished` - a turn begun and not over: work uncommitted or unpushed,
+//!    a feature or a fix since the last release, a release that did not get
+//!    out, a sitting left open. The line does not move on past it.
+//! 2. `late` - a version aimed at a week already gone: the owner's own
 //!    promise, broken.
-//! 2. `due` - a version aimed at this week: the owner's own word.
-//! 3. `unseen` - changes since the last release that no finished sitting of
-//!    the project has seen: a commit made from a neighbour's sitting, or a
-//!    sitting left open. The record has lost the thread there, and work
-//!    nobody is following is the work that never ships.
+//! 3. `due` - a version aimed at this week: the owner's own word.
 //! 4. `answered` - the owner decided something about it outside a sitting,
 //!    after its last one. An answer waits to be acted on.
 //! 5. `behind` - its tier asks for more than it has had: a floor gone
 //!    under, or a rhythm lapsed.
 //! 6. `turn` - nothing presses, so the one longest without a sitting.
 //!
-//! Changes a sitting saw and left untagged are not a reason of their own:
-//! the sitting knew, and chose. Counting them as unfinished would pick the
-//! same project on every run while it waits on something outside it.
+//! What cannot be finished from here is not unfinished: a project whose tag
+//! is stopped by something out of reach - a missing key, a red pipeline, a
+//! broken service - says so with a blocker, and is left out of the order
+//! with that reason until the blocker is cleared or a release settles it.
+//! Without that, the one project waiting on the outside world would stop
+//! every other.
 //!
 //! Questions waiting on the owner do not take a project out of the pick -
 //! by the line's rules a question does not stop a stage - and neither do
 //! its neighbours' orders. Both are counted on its line instead.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -48,9 +51,9 @@ use crate::week::{Raised, Signal};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reason {
+    Unfinished,
     Late,
     Due,
-    Unseen,
     Answered,
     Behind,
     Turn,
@@ -73,6 +76,72 @@ impl Lag {
     fn is_a_floor(self) -> bool {
         self != Lag::Rhythm
     }
+}
+
+/// What a project holds that has not gone out: the turn it is on is not over.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Unfinished {
+    /// Tracked files changed and not committed.
+    pub changed: usize,
+    /// Files git does not know, and does not ignore.
+    pub untracked: usize,
+    /// Commits on no remote.
+    pub unpushed: usize,
+    /// An operation git started and has not finished: `merge`, `rebase`.
+    pub operation: Option<String>,
+    /// The subjects of the features and fixes since the last release. Docs
+    /// and chores are not here: they wait for the next tag without holding
+    /// the line up, and are never recorded as changes at all.
+    pub untagged: Vec<String>,
+    /// How the last release fell short of getting out, in a few words.
+    pub undelivered: Option<String>,
+    /// When the sitting left open began.
+    pub sitting: Option<String>,
+}
+
+impl Unfinished {
+    fn is_empty(&self) -> bool {
+        *self == Unfinished::default()
+    }
+
+    /// What is unfinished, a few words for each thing.
+    ///
+    /// Counts rather than subjects: this reaches an assistant's command
+    /// line, and a commit message may hold whatever its author typed.
+    pub fn parts(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.changed > 0 {
+            out.push(format!("{} not committed", plural(self.changed, "changed file", "changed files")));
+        }
+        if self.untracked > 0 {
+            out.push(plural(self.untracked, "untracked file", "untracked files"));
+        }
+        if let Some(operation) = &self.operation {
+            out.push(format!("a {operation} left halfway"));
+        }
+        if self.unpushed > 0 {
+            out.push(format!("{} not pushed", plural(self.unpushed, "commit", "commits")));
+        }
+        if !self.untagged.is_empty() {
+            out.push(format!("{} since the last release", plural(self.untagged.len(), "change", "changes")));
+        }
+        if let Some(undelivered) = &self.undelivered {
+            out.push(undelivered.clone());
+        }
+        if let Some(sitting) = &self.sitting {
+            out.push(format!("a sitting open since {}", day_of(sitting)));
+        }
+        out
+    }
+}
+
+/// What stops a project's tag and is out of reach, as it was recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Blocker {
+    /// The id `rigger resolve` clears it by.
+    pub id: i64,
+    pub head: String,
+    pub since: String,
 }
 
 /// A tier asking for more, with the number that says how much.
@@ -112,11 +181,16 @@ pub struct Standing {
     pub aimed: Option<Aimed>,
     /// Changes since its last release, oldest first: moment and subject.
     pub untagged: Vec<(String, String)>,
-    /// When its last finished sitting ended.
-    pub seen_until: Option<String>,
-    pub sitting_open: bool,
+    /// What git says the repository holds that has gone nowhere yet.
+    pub held: crate::git::Held,
+    /// How its last release fell short of getting out.
+    pub undelivered: Option<String>,
+    /// When the sitting left open began.
+    pub sitting: Option<String>,
     /// When it last had a sitting: the open one's start, or the last end.
     pub last_turn: Option<String>,
+    /// What stops its tag and is out of reach, oldest first.
+    pub blockers: Vec<Blocker>,
     /// Moments of what the owner decided outside a sitting since its last.
     pub answered: Vec<String>,
     pub behind: Option<Behind>,
@@ -137,28 +211,27 @@ pub struct Candidate {
     /// The week the version is aimed at, for `late` and `due`.
     pub planned: Option<Week>,
     pub weeks_late: Option<i64>,
-    /// Changes since the last release that no finished sitting has seen.
-    pub unseen: Vec<String>,
-    /// Changes since the last release, seen or not.
-    pub untagged: usize,
+    /// What it holds that has not gone out, for `unfinished`.
+    pub unfinished: Option<Unfinished>,
     pub answered: usize,
     pub behind: Option<Behind>,
     /// The day of its last sitting.
     pub last_turn: Option<String>,
-    pub sitting_open: bool,
     pub waiting: usize,
     pub asked: usize,
-    /// When the reason began to hold, for the two reasons that wait.
+    /// When the reason began to hold, for the reasons that wait.
     #[serde(skip)]
-    since: Option<String>,
+    pub(crate) since: Option<String>,
     #[serde(skip)]
-    turn_at: Option<String>,
+    pub(crate) turn_at: Option<String>,
 }
 
 /// Why a project is not in the order at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Aside {
+    /// Something out of reach stops its tag.
+    Blocked,
     /// Its tier is `out`: worked on when asked.
     Out,
     /// Nothing is planned for it, so there is no stage to work on.
@@ -170,6 +243,7 @@ pub enum Aside {
 impl Aside {
     fn describe(self) -> &'static str {
         match self {
+            Aside::Blocked => "blocked",
             Aside::Out => "out of the rotation - worked on when asked",
             Aside::NoStage => "no stage planned",
             Aside::PutDown => "everything planned is put down",
@@ -181,6 +255,8 @@ impl Aside {
 pub struct LeftOut {
     pub project: String,
     pub why: Aside,
+    /// What blocks it, for `blocked`.
+    pub blocker: Option<Blocker>,
 }
 
 /// The whole answer: the one to work on, the order the rest wait in, and
@@ -234,11 +310,55 @@ pub fn read_git(db: &Db) -> Result<Vec<String>> {
     Ok(unread)
 }
 
+/// What a repository holds that has gone nowhere, and how its last release
+/// fell short of getting out. Nothing, for one that does not read: `read_git`
+/// has said so already, and what cannot be read cannot hold the line up.
+fn held_by(project: &crate::db::Project, latest: Option<&crate::db::Delivered>) -> (crate::git::Held, Option<String>) {
+    if !project.kind.reads_git() {
+        return Default::default();
+    }
+    let Ok(repo) = crate::git::open(&project.path) else {
+        return Default::default();
+    };
+    let held = crate::git::held(&repo).unwrap_or_default();
+    let undelivered = latest.and_then(|latest| match latest.delivery {
+        Some(state) if state.is_short() => Some(format!("{}: {}", latest.version, state.describe())),
+        Some(_) => None,
+        // No word on how far it got, so the one thing that can be asked
+        // cheaply is: did the tag leave this machine at all?
+        None => (crate::git::tag_on_remote(&repo, &latest.version) == Some(false)).then(|| format!("{}: the tag is not on the remote", latest.version)),
+    });
+    (held, undelivered)
+}
+
+/// What every repository holds, read side by side. Walking a working tree is
+/// nearly all waiting on the disk, and the only slow part of a pick that a
+/// person is sitting in front of, so nothing is gained by taking turns.
+fn read_held(db: &Db, projects: &[crate::db::Project]) -> Result<HashMap<i64, (crate::git::Held, Option<String>)>> {
+    // The record first: its connection stays on this thread.
+    let asked = projects
+        .iter()
+        .map(|project| Ok((project, db.latest_delivery(project.id)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(std::thread::scope(|scope| {
+        let readers: Vec<_> = asked
+            .iter()
+            .map(|(project, latest)| scope.spawn(move || (project.id, held_by(project, latest.as_ref()))))
+            .collect();
+        readers
+            .into_iter()
+            .map(|reader| reader.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+            .collect()
+    }))
+}
+
 /// What each project in the work brings, read from the record and from
 /// the facts of the week the calendar screens already gather.
 pub fn gather(db: &Db, focus: &[Focus], overdue: &[Focus], lapsed: &[Overdue], signals: &[Raised]) -> Result<Vec<Standing>> {
     let mut out = Vec::new();
-    for project in db.projects()? {
+    let projects = db.projects()?;
+    let mut held = read_held(db, &projects)?;
+    for project in projects {
         // A place the record keeps for itself is not work anyone does.
         if !project.kind.has_a_place() {
             continue;
@@ -273,19 +393,30 @@ pub fn gather(db: &Db, focus: &[Focus], overdue: &[Focus], lapsed: &[Overdue], s
 
         let released = db.last_release_moment(project.id)?;
         let open = db.open_session(project.id)?;
-        let seen_until = db.last_ended_session(project.id)?.and_then(|s| s.ended_at);
-        let last_turn = open.as_ref().map(|s| s.started_at.clone()).or_else(|| seen_until.clone());
+        let ended = db.last_ended_session(project.id)?.and_then(|s| s.ended_at);
+        let last_turn = open.as_ref().map(|s| s.started_at.clone()).or_else(|| ended.clone());
+        let (held, undelivered) = held.remove(&project.id).unwrap_or_default();
 
         out.push(Standing {
             tier,
             stage,
             aimed,
             untagged: db.changes_after(project.id, released.as_deref())?,
-            sitting_open: open.is_some(),
+            held,
+            undelivered,
+            sitting: open.map(|s| s.started_at),
             last_turn,
-            answered: db.owner_words_after(project.id, seen_until.as_deref())?,
+            blockers: db
+                .blockers(project.id)?
+                .into_iter()
+                .map(|b| Blocker {
+                    id: b.id,
+                    head: crate::context::headline(&b.body),
+                    since: b.date,
+                })
+                .collect(),
+            answered: db.owner_words_after(project.id, ended.as_deref())?,
             behind: behind_of(&project.name, project.rhythm_weeks, lapsed, signals),
-            seen_until,
             waiting: db.count_open_events(project.id, "question")? as usize,
             asked: db.asked_wishes(project.id)?.len(),
             project: project.name,
@@ -335,6 +466,7 @@ pub fn choose(standings: &[Standing], now: Week) -> Pick {
             Err(why) => left_out.push(LeftOut {
                 project: standing.project.clone(),
                 why,
+                blocker: standing.blockers.first().filter(|_| why == Aside::Blocked).cloned(),
             }),
         }
     }
@@ -352,35 +484,57 @@ pub fn choose(standings: &[Standing], now: Week) -> Pick {
 
 /// The reason a project is in the order, or the reason it is not.
 fn candidate(s: &Standing) -> Result<Candidate, Aside> {
-    let unseen: Vec<&(String, String)> = s
-        .untagged
-        .iter()
-        .filter(|(at, _)| s.seen_until.as_deref().is_none_or(|end| at.as_str() > end))
-        .collect();
+    // Before anything else, the calendar included: nobody can ask for work
+    // that something out of reach is stopping.
+    if !s.blockers.is_empty() {
+        return Err(Aside::Blocked);
+    }
+    let unfinished = Unfinished {
+        changed: s.held.changed,
+        untracked: s.held.untracked,
+        unpushed: s.held.unpushed,
+        operation: s.held.operation.clone(),
+        untagged: s.untagged.iter().map(|(_, subject)| subject.clone()).collect(),
+        undelivered: s.undelivered.clone(),
+        sitting: s.sitting.clone(),
+    };
+    // A project set aside on purpose is not holding the line up, whatever
+    // it was left holding. Having no plan does not set it aside: work done
+    // with nothing planned still has to go out.
+    let set_aside = s.tier == Some(Tier::Out) || s.stage.as_ref().is_some_and(|stage| stage.put_down);
 
-    // The calendar is the owner's own word, so it holds even for a project
-    // the rule would otherwise leave out: aiming a version at a week is
-    // asking for it.
-    let (reason, version, title, planned, weeks_late, since) = match &s.aimed {
-        Some(aimed) if aimed.weeks_late > 0 => (Reason::Late, &aimed.version, &aimed.title, Some(aimed.week), Some(aimed.weeks_late), None),
-        Some(aimed) => (Reason::Due, &aimed.version, &aimed.title, Some(aimed.week), None, None),
-        None => {
-            if s.tier == Some(Tier::Out) {
-                return Err(Aside::Out);
+    let unplanned = String::from("unplanned");
+    let (reason, version, title, planned, weeks_late, since) = if !unfinished.is_empty() && !set_aside {
+        let since = s.untagged.first().map(|(at, _)| at.clone()).or_else(|| s.last_turn.clone());
+        let (version, title) = match &s.stage {
+            Some(stage) => (&stage.version, &stage.title),
+            None => (&unplanned, &None),
+        };
+        (Reason::Unfinished, version, title, None, None, since)
+    } else {
+        // The calendar is the owner's own word, so it holds even for a
+        // project the rule would otherwise leave out: aiming a version at a
+        // week is asking for it.
+        match &s.aimed {
+            Some(aimed) if aimed.weeks_late > 0 => (Reason::Late, &aimed.version, &aimed.title, Some(aimed.week), Some(aimed.weeks_late), None),
+            Some(aimed) => (Reason::Due, &aimed.version, &aimed.title, Some(aimed.week), None, None),
+            None => {
+                if s.tier == Some(Tier::Out) {
+                    return Err(Aside::Out);
+                }
+                let Some(stage) = &s.stage else {
+                    return Err(Aside::NoStage);
+                };
+                if stage.put_down {
+                    return Err(Aside::PutDown);
+                }
+                let (reason, since) = match (s.answered.first(), s.behind.is_some()) {
+                    (Some(at), _) => (Reason::Answered, Some(at.clone())),
+                    (None, true) => (Reason::Behind, None),
+                    (None, false) => (Reason::Turn, None),
+                };
+                (reason, &stage.version, &stage.title, None, None, since)
             }
-            let Some(stage) = &s.stage else {
-                return Err(Aside::NoStage);
-            };
-            if stage.put_down {
-                return Err(Aside::PutDown);
-            }
-            let (reason, since) = match (unseen.first(), s.answered.first()) {
-                (Some((at, _)), _) => (Reason::Unseen, Some(at.clone())),
-                (None, Some(at)) => (Reason::Answered, Some(at.clone())),
-                (None, None) if s.behind.is_some() => (Reason::Behind, None),
-                (None, None) => (Reason::Turn, None),
-            };
-            (reason, &stage.version, &stage.title, None, None, since)
         }
     };
 
@@ -392,12 +546,10 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         title: title.clone(),
         planned,
         weeks_late,
-        unseen: unseen.iter().map(|(_, subject)| subject.clone()).collect(),
-        untagged: s.untagged.len(),
+        unfinished: (reason == Reason::Unfinished).then_some(unfinished),
         answered: s.answered.len(),
         behind: s.behind.clone(),
         last_turn: s.last_turn.as_deref().map(day_of),
-        sitting_open: s.sitting_open,
         waiting: s.waiting,
         asked: s.asked,
         since,
@@ -421,7 +573,7 @@ fn order(a: &Candidate, b: &Candidate) -> Ordering {
                 .then_with(|| a.turn_at.cmp(&b.turn_at)),
             Reason::Due => tier(a).cmp(&tier(b)).then_with(|| a.turn_at.cmp(&b.turn_at)),
             // What has waited longest first.
-            Reason::Unseen | Reason::Answered => a.since.cmp(&b.since),
+            Reason::Unfinished | Reason::Answered => a.since.cmp(&b.since),
             Reason::Behind => {
                 let pace = |c: &Candidate| !c.behind.as_ref().is_some_and(|b| b.lag.is_a_floor());
                 let weeks = |c: &Candidate| c.behind.as_ref().map_or(0, |b| b.weeks);
@@ -441,6 +593,11 @@ fn day_of(moment: &str) -> String {
 /// How many of the rest are named on the screen; the JSON has them all.
 const SHOWN: usize = 5;
 
+/// What a project left unfinished holds, in a phrase.
+pub fn unfinished_parts(c: &Candidate) -> String {
+    c.unfinished.as_ref().map(|u| u.parts().join(", ")).unwrap_or_default()
+}
+
 /// The reason in a sentence, for the project picked.
 pub fn why(c: &Candidate) -> String {
     let weeks = |n: i64| plural(n.max(0) as usize, "week", "weeks");
@@ -451,17 +608,7 @@ pub fn why(c: &Candidate) -> String {
             weeks(c.weeks_late.unwrap_or_default())
         ),
         Reason::Due => format!("aimed at this week, {}", c.planned.map(|w| w.to_string()).unwrap_or_default()),
-        Reason::Unseen => {
-            let first = c.unseen.first().map(String::as_str).unwrap_or_default();
-            let more = match c.unseen.len() {
-                0 | 1 => String::new(),
-                n => format!(" - and {} more", n - 1),
-            };
-            format!(
-                "{} since the last release that no finished sitting has seen: {first}{more}",
-                plural(c.unseen.len(), "change", "changes")
-            )
-        }
+        Reason::Unfinished => format!("not finished: {}", unfinished_parts(c)),
         Reason::Answered => format!(
             "the owner decided {} outside a sitting since its last one",
             plural(c.answered, "thing", "things")
@@ -495,7 +642,7 @@ pub fn short(c: &Candidate) -> String {
     match c.reason {
         Reason::Late => format!("{} late", plural(c.weeks_late.unwrap_or_default().max(0) as usize, "week", "weeks")),
         Reason::Due => "aimed at this week".to_string(),
-        Reason::Unseen => format!("{} unseen", plural(c.unseen.len(), "change", "changes")),
+        Reason::Unfinished => unfinished_parts(c),
         Reason::Answered => format!("{} from the owner", plural(c.answered, "answer", "answers")),
         Reason::Behind => format!("tier {} asks for more", c.tier.map(|t| t.to_string()).unwrap_or_default()),
         Reason::Turn => match &c.last_turn {
@@ -513,12 +660,6 @@ fn waits(n: usize, one: &str, many: &str) -> String {
 /// What else is true of a project, beside its reason.
 fn also(c: &Candidate) -> Vec<String> {
     let mut out = Vec::new();
-    if c.sitting_open {
-        out.push("a sitting is open".to_string());
-    }
-    if c.reason != Reason::Unseen && c.untagged > 0 {
-        out.push(format!("{} for the next tag", waits(c.untagged, "change", "changes")));
-    }
     if c.waiting > 0 {
         out.push(format!("{} on the owner", waits(c.waiting, "question", "questions")));
     }
@@ -562,7 +703,11 @@ pub fn render(pick: &Pick) -> String {
         let name = pick.left_out.iter().map(|l| l.project.chars().count()).max().unwrap_or(0);
         out.push_str("\nLeft out\n");
         for item in &pick.left_out {
-            out.push_str(&format!("  {:<name$}  {}\n", item.project, item.why.describe()));
+            let why = match &item.blocker {
+                Some(blocker) => format!("blocked since {}: {} [{}]", blocker.since, blocker.head, blocker.id),
+                None => item.why.describe().to_string(),
+            };
+            out.push_str(&format!("  {:<name$}  {why}\n", item.project));
         }
     }
 
@@ -592,7 +737,6 @@ mod tests {
                 title: Some("Second".to_string()),
                 put_down: false,
             }),
-            seen_until: turn.map(String::from),
             last_turn: turn.map(String::from),
             ..Standing::default()
         }
@@ -640,8 +784,8 @@ mod tests {
             week: week("2026-W44"),
             weeks_late: 0,
         });
-        let mut unseen = on_stage("unseen", Some("2026-10-26T10:00:00Z"));
-        unseen.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: a thing".into())];
+        let mut unfinished = on_stage("unfinished", Some("2026-10-26T10:00:00Z"));
+        unfinished.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: a thing".into())];
         let mut answered = on_stage("answered", Some("2026-10-26T10:00:00Z"));
         answered.answered = vec!["2026-10-27T08:00:00Z".into()];
         let mut behind = on_stage("behind", Some("2026-10-26T10:00:00Z"));
@@ -653,51 +797,92 @@ mod tests {
         // Longest without a sitting of them all, and still last.
         let turn = on_stage("turn", None);
 
-        let order = order_of(&[turn, behind, answered, unseen, due, late]);
-        assert_eq!(order, vec!["late", "due", "unseen", "answered", "behind", "turn"]);
+        let order = order_of(&[turn, behind, answered, due, late, unfinished]);
+        assert_eq!(order, vec!["unfinished", "late", "due", "answered", "behind", "turn"]);
     }
 
-    /// The case the reason exists for: a change made after the project's
-    /// last sitting ended - from a neighbour's sitting, say - is work the
-    /// record lost the thread of.
+    /// Each thing a turn can be left holding is enough on its own, and says
+    /// what it is.
     #[test]
-    fn a_change_after_the_last_sitting_is_unseen() {
-        let mut s = on_stage("alpha", Some("2026-10-26T10:00:00Z"));
-        s.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: generate plugins".into())];
-        let pick = choose(&[s], week("2026-W44"));
-        let first = pick.pick.unwrap();
-        assert_eq!(first.reason, Reason::Unseen);
-        assert_eq!(first.unseen, vec!["feat: generate plugins"]);
-        assert!(why(&first).contains("feat: generate plugins"), "{}", why(&first));
-    }
-
-    /// And the case it must not catch: a fix the sitting made a minute
-    /// before it ended and chose not to tag. The sitting knew; picking the
-    /// project for it would pick it again on every run while it waits on
-    /// something outside it.
-    #[test]
-    fn a_change_a_sitting_saw_and_left_untagged_is_not_a_reason() {
-        let mut s = on_stage("alpha", Some("2026-10-22T12:37:25Z"));
-        s.untagged = vec![("2026-10-22T12:36:34Z".into(), "fix: load the rows".into())];
-        let pick = choose(&[s], week("2026-W44"));
-        let first = pick.pick.unwrap();
+    fn whatever_has_not_gone_out_leaves_a_project_unfinished() {
+        type Case = (&'static str, fn(&mut Standing));
+        let cases: [Case; 7] = [
+            ("1 changed file not committed", |s| s.held.changed = 1),
+            ("2 untracked files", |s| s.held.untracked = 2),
+            ("a merge left halfway", |s| s.held.operation = Some("merge".into())),
+            ("3 commits not pushed", |s| s.held.unpushed = 3),
+            ("1 change since the last release", |s| {
+                s.untagged = vec![("2026-10-27T09:00:00Z".into(), "fix: a thing".into())]
+            }),
+            ("v0.1.0: released, publish failed", |s| {
+                s.undelivered = Some("v0.1.0: released, publish failed".into())
+            }),
+            ("a sitting open since 2026-11-05", |s| s.sitting = Some("2026-11-05T10:00:00Z".into())),
+        ];
+        for (said, set) in cases {
+            let mut s = on_stage("alpha", Some("2026-10-26T10:00:00Z"));
+            set(&mut s);
+            let first = choose(&[s], week("2026-W44")).pick.unwrap();
+            assert_eq!(first.reason, Reason::Unfinished, "{said}");
+            assert_eq!(why(&first), format!("not finished: {said}"));
+        }
+        // With nothing held, nothing is said.
+        let first = choose(&[on_stage("alpha", None)], week("2026-W44")).pick.unwrap();
         assert_eq!(first.reason, Reason::Turn);
-        assert!(first.unseen.is_empty());
-        assert_eq!(first.untagged, 1);
-        assert!(also(&first).iter().any(|a| a == "1 change waits for the next tag"), "{:?}", also(&first));
+        assert_eq!(first.unfinished, None);
     }
 
-    /// A project that never had a finished sitting has seen none of its
-    /// changes.
+    /// Work done with nothing planned still has to go out; work left in a
+    /// project set aside on purpose holds nothing up.
     #[test]
-    fn with_no_finished_sitting_every_untagged_change_is_unseen() {
-        let mut s = on_stage("alpha", None);
-        s.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: a".into())];
-        assert_eq!(reasons(&[s]), vec![Reason::Unseen]);
+    fn a_project_set_aside_is_not_unfinished_and_one_without_a_plan_is() {
+        let mut bare = on_stage("bare", None);
+        bare.stage = None;
+        bare.held.changed = 1;
+        let first = choose(&[bare], week("2026-W44")).pick.unwrap();
+        assert_eq!(first.reason, Reason::Unfinished);
+        assert_eq!(first.version, "unplanned");
+
+        let mut out = on_stage("out", None);
+        out.tier = Some(Tier::Out);
+        out.held.changed = 1;
+        let mut asleep = on_stage("asleep", None);
+        asleep.stage.as_mut().unwrap().put_down = true;
+        asleep.held.changed = 1;
+        let pick = choose(&[out, asleep], week("2026-W44"));
+        assert!(pick.pick.is_none(), "{:?}", pick.pick);
+        let aside: Vec<Aside> = pick.left_out.iter().map(|l| l.why).collect();
+        assert_eq!(aside, vec![Aside::PutDown, Aside::Out]);
+    }
+
+    /// A blocker is the way out for a project waiting on the outside world:
+    /// it leaves the order with its reason, unfinished or not, whatever the
+    /// calendar says, and the next project is picked.
+    #[test]
+    fn a_blocked_project_is_left_out_with_what_blocks_it() {
+        let mut blocked = on_stage("blocked", None);
+        blocked.held.unpushed = 2;
+        blocked.aimed = Some(Aimed {
+            version: "v0.3.0".into(),
+            title: None,
+            week: week("2026-W44"),
+            weeks_late: 0,
+        });
+        blocked.blockers = vec![Blocker {
+            id: 7,
+            head: "The signing key has expired".into(),
+            since: "2026-11-01".into(),
+        }];
+        let next = on_stage("next", Some("2026-10-26T10:00:00Z"));
+        let pick = choose(&[blocked, next], week("2026-W44"));
+        assert_eq!(pick.pick.as_ref().unwrap().project, "next");
+        assert_eq!(pick.left_out[0].why, Aside::Blocked);
+        let said = render(&pick);
+        assert!(said.contains("blocked since 2026-11-01: The signing key has expired [7]"), "{said}");
     }
 
     #[test]
-    fn of_two_unseen_the_one_waiting_longer_comes_first() {
+    fn of_two_unfinished_the_one_waiting_longer_comes_first() {
         let mut newer = on_stage("newer", Some("2026-10-20T10:00:00Z"));
         newer.untagged = vec![("2026-10-27T09:00:00Z".into(), "feat: b".into())];
         let mut older = on_stage("older", Some("2026-10-26T10:00:00Z"));

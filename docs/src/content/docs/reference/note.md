@@ -32,6 +32,7 @@ Set the next step for sample; the next session starts from it
 | `state` | one line for the hub's state block: where things stand after this sitting |
 | `plan` | a step of the plan of edits, for a [card](/rigger/reference/task/) |
 | `question` | something only the owner can settle; it waits in the [inbox](/rigger/reference/inbox/) (v0.23.0) |
+| `blocker` | what stops the tag and is out of reach: the [queue goes on without the project](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) until it is cleared (v0.34.0) |
 | `shipped` | a release, as the release engine made it (v0.23.0) |
 
 An event against a [card](/rigger/reference/task/) rather than a project is `rigger task note <CARD> <TEXT> [--kind <KIND>]` - by the card's key, an alias or its id; cards live in the desk, so no project is named. A card's packet reads these back by kind.
@@ -133,7 +134,7 @@ A name the record does not have is refused: a wish recorded from a neighbour tha
 | `event.id` | integer | The id of the event, as `resolve` takes it. |
 | `event.project` | string | The name of the project it was recorded against. |
 | `event.card` | string or null | The key of the card it was written against; null for a project. |
-| `event.kind` | string | The kind of the event, for example `finding`, `decision` or `question`; a wish is `wish`. |
+| `event.kind` | string | The kind of the event, for example `finding`, `decision`, `question` or `blocker`; a wish is `wish`. |
 | `event.body` | string | The text. |
 | `event.created_at` | string | The moment it was recorded, in RFC 3339 UTC. |
 | `event.principle` | string or null | The principle a decision stands on. |

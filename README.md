@@ -96,17 +96,18 @@ the work from the start of the record
 2026-10-07  change    feat: write the report
 ```
 
-With nothing aimed at the week, it says which project to take up next, and why - here, a change landed from a neighbour's sitting that no sitting of its own has seen:
+With a line of products, one command is the whole routine: it works out which project comes next, and starts your assistant on it. A turn left unfinished comes back before anything new begins:
 
 ```console
-$ rigger pick
+$ rigger go
 Work on widget  v0.2.0 · Plugins
-  1 change since the last release that no finished sitting has seen: feat(plugin): load plugins from a folder
-  1 question waits on the owner · 1 order from neighbours
+  not finished: 1 change since the last release
+Starting claude in C:\dev\widget
 
-Then, by the same rule
-  gadget  v1.0.0  last sitting 2026-10-27
-  sample  v0.2.0  last sitting 2026-10-27
+...the session...
+
+widget v0.2.0 went out.
+Next: gadget v1.0.0 - `rigger go`
 ```
 
 The whole first week, command by command: [Your first week](https://lacodda.github.io/rigger/guides/first-week/).
@@ -116,7 +117,8 @@ The whole first week, command by command: [Your first week](https://lacodda.gith
 - **Projects, versions, tasks, sessions.** A version is a stage that ends in a tag; a task is work inside it - or, at work, a ticket across several repositories and branches. A project needs no repository: a folder of texts is worked on like any product, and git is never asked about it. A project taken out of the work is retired: it leaves every screen that looks ahead, and its history stays readable.
 - **Facts from git.** A tag means the version shipped, on that date; the plan cannot claim more than git confirms, and `doctor` names where they part.
 - **An MCP server as the assistant's only pen**, and a context packet held to a token budget.
-- **Your inbox, a weekly brief, a release calendar and a pick** - which project to work on now, and the one reason it comes first - derived from the same record rather than kept by hand.
+- **`rigger go`** - which project to work on now, the one reason it comes first, and your assistant started on it; nothing new starts while a tag is not out.
+- **Your inbox, a weekly brief and a release calendar**, derived from the same record rather than kept by hand.
 - **`--json` on every command**, each field held by a test to its reference page.
 - **Hubs as an export.** Markdown notes are written from the record and kept that way: the end of each sitting writes again what nobody touched, and `doctor --hubs` names what somebody did. A hand-kept hub [moves into the record](https://lacodda.github.io/rigger/guides/from-a-hub/) in one command, every note in it.
 

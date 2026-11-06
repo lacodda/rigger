@@ -17,6 +17,7 @@ mod doc;
 mod export;
 mod gate;
 mod git;
+mod go;
 mod handoff;
 mod hub;
 mod hubfile;
@@ -175,16 +176,13 @@ enum Command {
         #[arg(long = "registry", value_name = "NAME")]
         registries: Vec<String>,
     },
-    /// Start an assistant session in the project, with the packet in hand
-    Open {
-        /// Project name
-        project: String,
-        /// Print the first message instead of starting a session
+    /// Work on what comes next: the project, its stage, your assistant started on it
+    Go {
+        /// Work on this project instead of the one that comes next
+        project: Option<String>,
+        /// Go past the projects left unfinished, to the next one with nothing left over
         #[arg(long)]
-        print: bool,
-        /// Token budget for the packet
-        #[arg(long, default_value_t = context::DEFAULT_BUDGET)]
-        budget: usize,
+        force: bool,
     },
     /// Read tags and commits into facts: what shipped, and what has happened since
     Sync {
@@ -412,6 +410,8 @@ enum NoteKind {
     Plan,
     /// A question only the owner can settle; it waits in the inbox
     Question,
+    /// What stops the tag and is out of reach: the queue goes on without the project until it is cleared
+    Blocker,
     /// A release that went out, as the release engine saw it
     Shipped,
 }
@@ -427,6 +427,7 @@ impl NoteKind {
             NoteKind::State => "state",
             NoteKind::Plan => "plan",
             NoteKind::Question => "question",
+            NoteKind::Blocker => "blocker",
             NoteKind::Shipped => "shipped",
         }
     }
@@ -1321,7 +1322,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Show { project } => show_project(&project, json),
         Command::Context { project, explain, budget } => show_context(&project, json, explain, budget),
-        Command::Open { project, print, budget } => open_session(&project, print, budget, json),
+        Command::Go { project, force } => go_on(project.as_deref(), force, json),
         Command::Note {
             project,
             text,
@@ -1990,33 +1991,102 @@ fn show_context(project: &str, json: bool, explain: bool, budget: usize) -> Resu
     Ok(())
 }
 
-fn open_session(project: &str, print: bool, budget: usize, json: bool) -> Result<()> {
+/// Starts the assistant on what comes next, and says how the turn went.
+///
+/// One turn, and then it stops: the next project is another `go`, so the
+/// owner sees each one end before the next begins.
+fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
-    let project = working_project(&db, project)?;
-    let packet = context::build(&db, &project, budget)?;
-    let message = open::first_message(&context::render(&packet));
+    // A name that is no project is a typo, and must not read as "left out".
+    if let Some(name) = named {
+        working_project(&db, name)?;
+    }
+    // Usually a second or two, but a machine that has just woken has been seen
+    // to take over a minute, and a silent command looks hung.
+    if !json && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        eprintln!("Reading git across the line...");
+    }
+    let chosen = pick_now(&db, calendar::Week::current())?;
+    let choice = go::choose(&chosen, named, force);
 
     // What would be started, and with what - the assistant is not started:
     // a program reading JSON is not a person about to work in a terminal.
     if json {
         let (program, _) = open::assistant();
+        let start = match &choice {
+            go::Choice::Start(target) => Some(target),
+            _ => None,
+        };
         return print_json(&serde_json::json!({
-            "project": project.name,
-            "dir": project.path,
+            "project": start.map(|t| &t.project),
+            "version": start.and_then(|t| t.version.as_ref()),
+            "title": start.and_then(|t| t.title.as_ref()),
+            "reason": start.and_then(|t| t.reason),
+            "unfinished": start.and_then(|t| t.unfinished.as_ref()),
+            "dir": start.map(|t| working_project(&db, &t.project).map(|p| p.path)).transpose()?,
             "program": program,
-            "message": message,
+            "message": start.map(go::first_message),
+            "passed_over": start.filter(|_| force && named.is_none()).map(|t| go::passed_over(&chosen, t)).unwrap_or_default(),
+            "busy": match &choice {
+                go::Choice::Busy { project, since } => Some(serde_json::json!({ "project": project, "since": since })),
+                _ => None,
+            },
+            "nothing": match &choice {
+                go::Choice::Nothing(said) => Some(said),
+                _ => None,
+            },
         }));
     }
 
-    if print {
-        print!("{message}");
-        return Ok(());
+    let target = match choice {
+        go::Choice::Start(target) => target,
+        go::Choice::Busy { project, since } => bail!("{}", go::busy(&project, &since)),
+        go::Choice::Nothing(said) => {
+            println!("{said}");
+            return Ok(());
+        }
+    };
+    if !chosen.unread.is_empty() {
+        eprintln!(
+            "Git did not read for {}: what this knows of them is as of the last time it did.",
+            chosen.unread.join(", ")
+        );
+    }
+
+    let project = working_project(&db, &target.project)?;
+    if !project.kind.has_a_place() {
+        bail!("{} is a place the record keeps for itself: there is nothing to work in", project.name);
     }
     let dir = Path::new(&project.path);
     open::check_dir(dir)?;
     let (program, _) = open::assistant();
-    eprintln!("Starting {program} in {} with the packet for {}", project.path, project.name);
-    let code = open::run(dir, &message)?;
+    let message = go::first_message(&target);
+    if force && named.is_none() {
+        let past = go::passed_over(&chosen, &target);
+        if !past.is_empty() {
+            println!("Going past {}.", past.join(", "));
+        }
+    }
+    print!("{}", go::before(&target, &program, &project.path));
+
+    let shipped_before = db.latest_delivery(project.id)?.map(|d| d.version);
+    // The sitting is opened here rather than left to the assistant, so that a
+    // second `go` in another terminal sees it from the first moment. One this
+    // run joined belongs to whoever opened it, and is theirs to close.
+    let joined = db.open_session(project.id)?.is_some();
+    open_sitting(&db, &project)?;
+    let code = open::run(dir, &message);
+    if !joined {
+        // Whoever was at work has gone, or never came. An assistant's own hook
+        // has usually closed it already, and then this says nothing.
+        session_end(Some(&project.name), None, None, None, true, false)?;
+    }
+    let code = code?;
+
+    let after = pick_now(&db, calendar::Week::current())?;
+    let shipped_now = db.latest_delivery(project.id)?.map(|d| d.version);
+    let shipped = shipped_now.as_deref().filter(|_| shipped_now != shipped_before);
+    print!("{}", go::after(&target, shipped, &after));
     if code != 0 {
         std::process::exit(code);
     }
@@ -2297,6 +2367,7 @@ fn resolve(project: &str, id: i64, answer: Option<&str>, json: bool) -> Result<(
     let first_line = body.lines().next().unwrap_or(&body);
     match kind.as_str() {
         "question" => println!("Answered [{id}]: {first_line}"),
+        "blocker" => println!("Cleared [{id}]: {first_line}"),
         _ => println!("Sorted [{id}]: {first_line}"),
     }
     if answer.is_some() {
@@ -6611,10 +6682,8 @@ fn red_gate_reminder(db: &Db, project: &db::Project, session: i64) -> Result<Opt
 }
 
 /// Opens a sitting. Everything recorded until `end` belongs to it.
-fn session_start(project: Option<&str>, json: bool) -> Result<()> {
-    let db = Db::open(&paths::db_path()?)?;
-    let project = project_here(&db, project)?;
-    project.ensure_working()?;
+/// Opens a sitting, or joins the one open, and tells kasl of a new one.
+fn open_sitting(db: &Db, project: &db::Project) -> Result<(db::Session, db::Change, Option<kasl::Told>)> {
     let (session, change) = db.start_session(project.id, &db::now())?;
     // Told only when the sitting is new: joining one already open is not a
     // second interval, and telling kasl twice would split the time it
@@ -6627,6 +6696,14 @@ fn session_start(project: Option<&str>, json: bool) -> Result<()> {
             Some(kasl::start(&name))
         }
     };
+    Ok((session, change, kasl))
+}
+
+fn session_start(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = project_here(&db, project)?;
+    project.ensure_working()?;
+    let (session, change, kasl) = open_sitting(&db, &project)?;
 
     if json {
         println!(

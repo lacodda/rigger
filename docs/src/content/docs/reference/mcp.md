@@ -47,13 +47,14 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `record_decision` | A decision and the reason behind it |
 | `record_finding` | Something learnt about the code or the domain |
 | `record_pitfall` | A trap worth remembering |
+| `record_blocker` | What stops the tag and is out of reach: the project [leaves the queue](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) with this as its reason until `resolve` clears it or a later release settles it |
 | `record_change` | Something that changed in the product |
 | `record_state` | One line for the top of the hub's state block, when the state shifted |
 | `set_next_step` | The one line the next session starts from; the newest wins |
 | `ask_owner` | A question only the owner can settle; it waits in the packet, with a `due` day when the answer is needed by one |
 | `record_shipped` | A release as the release engine made it: `tag`, `release`, `registries` |
 | `wish` | Something to sort into the plan later |
-| `resolve` | Answers a question or sorts a wish, so it leaves the packet |
+| `resolve` | Answers a question, sorts a wish or clears a blocker, so it leaves the packet |
 | `close_task` | Marks a task of the current stage done |
 | `doc_show` | Reads a handwritten text - the vision, the rituals, a research note; lists them without a slug |
 | `doc_write` | Writes one into the record: a research note made on request, or a correction to the vision |
@@ -120,4 +121,4 @@ Only a malformed request is a JSON-RPC error - an unknown method, a call without
 - [`note`](/rigger/reference/note/) - the same recording, for the owner and for scripts.
 - [`resolve`](/rigger/reference/resolve/) - what the `resolve` tool does on the command line.
 - [`event`](/rigger/reference/event/) - what the `event` tool does on the command line.
-- [`open`](/rigger/reference/open/) - starting a session with the packet already in it.
+- [`go`](/rigger/reference/go/) - starting an assistant on what comes next.

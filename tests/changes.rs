@@ -302,7 +302,7 @@ fn a_wish_can_be_sorted_and_a_question_answered() {
 }
 
 #[test]
-fn only_a_question_or_a_wish_can_be_resolved() {
+fn only_a_question_a_wish_or_a_blocker_can_be_resolved() {
     let data = tempfile::tempdir().unwrap();
     let root = data.path().join("proj");
     std::fs::create_dir_all(&root).unwrap();
@@ -318,7 +318,7 @@ fn only_a_question_or_a_wish_can_be_resolved() {
         .args(["resolve", "proj", "1"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("not a question or a wish"));
+        .stderr(predicate::str::contains("not a question, a wish or a blocker"));
     rigger(data.path())
         .args(["resolve", "proj", "999"])
         .assert()

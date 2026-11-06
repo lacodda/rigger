@@ -259,6 +259,12 @@ fn tools() -> Vec<Value> {
             "Record something learnt about the code or the domain that the next session would otherwise learn again.",
         ),
         record("pitfall", "Record a trap worth remembering: what looked right, what actually happened."),
+        tool(
+            "record_blocker",
+            "Record what stops this project's tag and is out of your reach: a missing key or access, a pipeline red for reasons outside the project, someone else's broken service. Not for what is hard, long or unclear. The project leaves the queue with this as its reason, so the line goes on, until `resolve` clears it or a later release settles it.",
+            json!({ "project": project_arg(), "text": text_arg("What stops the tag, and what is already checked") }),
+            &["project", "text"],
+        ),
         record("change", "Record something that changed in the product."),
         tool(
             "task_find",
@@ -790,6 +796,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 "record_decision" => "decision",
                 "record_finding" => "finding",
                 "record_pitfall" => "pitfall",
+                "record_blocker" => "blocker",
                 "record_change" => "change",
                 "set_next_step" => "next",
                 "ask_owner" => "question",
@@ -1038,6 +1045,7 @@ mod tests {
             "record_decision",
             "record_finding",
             "record_pitfall",
+            "record_blocker",
             "record_change",
             "record_state",
             "record_plan",

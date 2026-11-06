@@ -11,6 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use furca_core::{Commit, Repository, Tips};
+use serde::Serialize;
 
 /// Opens the repository whose root is `path`, and only that one.
 ///
@@ -39,6 +40,68 @@ fn same_dir(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+/// What a repository holds that has gone nowhere yet.
+///
+/// A stash is left out, where furca-core's `settled` counts it: nobody means
+/// to finish a stash by the next tag, and one forgotten in a corner would
+/// hold the whole line up for good.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Held {
+    pub changed: usize,
+    pub untracked: usize,
+    pub unpushed: usize,
+    pub operation: Option<String>,
+}
+
+/// Reads what a repository holds. A repository with no remote has nowhere to
+/// push to, so nothing in it counts as unpushed.
+pub fn held(repo: &Repository) -> Result<Held, String> {
+    let standing = repo.standing().map_err(|e| e.to_string())?;
+    let remotes = repo.remotes().map_err(|e| e.to_string())?;
+    Ok(Held {
+        changed: standing.changed,
+        untracked: standing.untracked,
+        unpushed: if remotes.is_empty() { 0 } else { standing.unpushed },
+        operation: standing
+            .operation
+            .and_then(|op| serde_json::to_value(op).ok())
+            .and_then(|op| op.as_str().map(str::to_string)),
+    })
+}
+
+/// Whether a version's tag is on the remote; `None` when that cannot be said:
+/// no such tag here, no remote, no answer. Not being able to ask is not a
+/// reason to stop the line.
+///
+/// Asked over the network, so only for a version nothing else speaks for. A
+/// scratch record reaches no remote that is not a path on this machine: its
+/// projects' remotes are made up or borrowed.
+pub fn tag_on_remote(repo: &Repository, version: &str) -> Option<bool> {
+    let wanted = crate::db::version_order(version);
+    let tag = repo.refs().ok()?.tags.into_iter().find(|t| crate::db::version_order(&t.name) == wanted)?;
+    let upstream = repo.upstream().ok().flatten().map(|u| u.remote);
+    let remote = match upstream {
+        Some(name) => name,
+        None => repo.remotes().ok()?.into_iter().next()?.name,
+    };
+    let url = repo.remote_url(&remote).ok().flatten()?;
+    if crate::paths::scratch() && reaches_the_network(&url) {
+        return None;
+    }
+    let found = repo.git().remote_ref(&remote, &format!("refs/tags/{}", tag.name)).ok()?;
+    Some(found.is_some())
+}
+
+/// Whether a remote's address leaves this machine: a URL with a scheme other
+/// than `file`, or the `host:path` form ssh takes. A drive letter is one
+/// character before its colon, so `C:/repos/x` is a path.
+fn reaches_the_network(url: &str) -> bool {
+    if let Some((scheme, _)) = url.split_once("://") {
+        return scheme != "file";
+    }
+    url.split_once(':').is_some_and(|(host, _)| host.len() > 1 && !host.contains(['/', '\\']))
 }
 
 /// How many commits the first look at the history reads. A release tag or
@@ -107,6 +170,16 @@ mod tests {
         // silently shift the answer by a day.
         assert_eq!(day(1788479999), "2026-09-03"); // 23:59:59 UTC
         assert_eq!(day(1788480000), "2026-09-04"); // 00:00:00 UTC
+    }
+
+    #[test]
+    fn only_an_address_that_leaves_the_machine_reaches_the_network() {
+        for far in ["https://github.com/a/b.git", "ssh://git@host/a/b", "git@github.com:a/b.git"] {
+            assert!(reaches_the_network(far), "{far}");
+        }
+        for near in ["C:/repos/b.git", "C:\\repos\\b.git", "/srv/b.git", "../b.git", "file:///srv/b.git"] {
+            assert!(!reaches_the_network(near), "{near}");
+        }
     }
 
     #[test]

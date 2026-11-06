@@ -25,6 +25,7 @@ When the request names no project - "what is next", "get on with the line" - `ri
 
 - Record as it happens, never afterwards: `record_decision`, `record_finding`, `record_pitfall`, `record_change` over MCP, or `rigger note <project> --kind <kind> "<text>"`.
 - A question only the owner can settle goes to `ask_owner`; something wanted later, to `wish`.
+- Something out of reach that stops the tag - a missing key, a pipeline red for reasons outside the project, someone else's broken service - goes to `record_blocker`, and the queue goes on without the project. Hard, long or unclear is not a blocker.
 - A task of the stage is closed with `close_task`, not by editing the plan: a hub is written from the record by `rigger export`, and an edit there is overwritten.
 - `rigger gate <project>` before a commit; it exits non-zero when the gate is red.
 - `rigger show <project>` - the project's screen: what it is, where it stands, what it has written down.
