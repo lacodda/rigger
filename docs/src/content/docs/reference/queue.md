@@ -127,7 +127,7 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `order[].unfinished.untagged[]` | string | One change's subject line. |
 | `order[].unfinished.undelivered` | string or null | How the last release fell short of getting out, in a few words. |
 | `order[].unfinished.sitting` | string or null | When the sitting left open began. |
-| `order[].moved` | object or null | The request that put it first, while it stands; otherwise `null`. |
+| `order[].moved` | object or null | The request that put it first, while it stands, whatever `reason` says; otherwise `null`. |
 | `order[].moved.id` | integer | The id [`resolve`](/rigger/reference/resolve/) closes it by. |
 | `order[].moved.head` | string | The line it is known by: the reason given. |
 | `order[].moved.since` | string | The day it was recorded, as `YYYY-MM-DD`. |
@@ -201,6 +201,8 @@ A project can come before its turn, and the turn it takes is the one it had comi
 | A neighbour's order it holds, placed with [`wish --waits`](/rigger/reference/note/): that stage cannot go on without it | resolving the order |
 
 An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0 or put down; the others leave it where it is.
+
+Being unfinished comes before being moved up, and does not hide it. [`rigger go`](/rigger/reference/go/) opens a sitting before it starts your assistant, so a project moved up reads as `unfinished` from the moment its turn begins; the screen then says both, and `order[].moved` still names what asked for it.
 
 ## Related
 

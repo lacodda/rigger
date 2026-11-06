@@ -586,7 +586,7 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         version: s.stage.as_ref().map_or_else(|| "unplanned".to_string(), |stage| stage.version.clone()),
         title: s.stage.as_ref().and_then(|stage| stage.title.clone()),
         unfinished: (reason == Reason::Unfinished).then_some(unfinished),
-        moved: if reason == Reason::Moved { moved.cloned() } else { None },
+        moved: moved.cloned(),
         waited: s.waited,
         last_turn: s.last_turn.as_deref().map(day_of),
         waiting: s.waiting,
@@ -766,7 +766,7 @@ pub fn render_ahead(turns: &[Turn]) -> String {
 /// The reason in a sentence.
 pub fn why(c: &Candidate) -> String {
     match c.reason {
-        Reason::Unfinished => format!("not finished: {}", unfinished_parts(c)),
+        Reason::Unfinished => format!("not finished: {}{}", unfinished_parts(c), moved_too(c)),
         Reason::Moved => match &c.moved {
             Some(moved) => format!("moved up: {}", moved.head),
             None => "moved up".to_string(),
@@ -778,10 +778,19 @@ pub fn why(c: &Candidate) -> String {
     }
 }
 
+/// What moved a project that is also unfinished, said after the first reason.
+///
+/// `rigger go` opens a sitting and only then starts the assistant, so a project
+/// moved up reads as unfinished from the moment its turn begins. Its first
+/// message sends the assistant here for what moved it, and this is that answer.
+fn moved_too(c: &Candidate) -> String {
+    c.moved.as_ref().map_or_else(String::new, |moved| format!("; moved up: {}", moved.head))
+}
+
 /// The reason in a few words, for a line among others.
 fn short(c: &Candidate) -> String {
     match c.reason {
-        Reason::Unfinished => unfinished_parts(c),
+        Reason::Unfinished => format!("{}{}", unfinished_parts(c), moved_too(c)),
         Reason::Moved => c
             .moved
             .as_ref()

@@ -32,6 +32,9 @@ pub struct Target {
     /// leaves out.
     pub reason: Option<Reason>,
     pub unfinished: Option<Unfinished>,
+    /// Something asked for it to come before its turn, whatever else holds.
+    #[serde(skip)]
+    pub moved: bool,
     /// The sentence that says why, for the screen.
     #[serde(skip)]
     pub why: Option<String>,
@@ -46,6 +49,7 @@ impl Target {
             title: c.title.clone(),
             reason: Some(c.reason),
             unfinished: c.unfinished.clone(),
+            moved: c.moved.is_some(),
             why: Some(crate::queue::why(c)),
         }
     }
@@ -86,6 +90,7 @@ pub fn choose(queue: &Queue, named: Option<&str>, force: bool) -> Choice {
             title: None,
             reason: None,
             unfinished: None,
+            moved: false,
             why: queue.left_out.iter().find(|l| l.project == name).map(|l| match (&l.blocker, l.why) {
                 (Some(blocker), _) => format!("blocked since {}: {}", blocker.since, blocker.head),
                 (None, _) => "left out of the order".to_string(),
@@ -142,14 +147,17 @@ pub fn first_message(target: &Target, tail: Option<&str>) -> String {
     };
     let unfinished = match target.unfinished.as_ref().map(Unfinished::parts) {
         Some(parts) if !parts.is_empty() => format!(" It was left unfinished ({}): finish that first.", parts.join(", ")),
-        // What moved it is in the owner's or a neighbour's words, which stay out
-        // of this line, and `rigger queue` says them.
-        _ if target.reason == Some(Reason::Moved) => " It comes before its turn: `rigger queue` says why, and that comes first in this stage.".to_string(),
         _ => String::new(),
+    };
+    // What moved it is in the owner's or a neighbour's words, which stay out of
+    // this line, and `rigger queue` says them.
+    let moved = match target.moved {
+        true => " It comes before its turn: `rigger queue` says why, and that comes first in this stage.",
+        false => "",
     };
     let tail = tail.unwrap_or_default();
     format!(
-        "{order}{unfinished}{tail} Read `rigger context {project}` and `rigger rules {project}` first: they give the stage, the gate and how the work is done here. \
+        "{order}{unfinished}{moved}{tail} Read `rigger context {project}` and `rigger rules {project}` first: they give the stage, the gate and how the work is done here. \
          If something out of your reach stops the tag, record it with `rigger note {project} --kind blocker` and stop; the queue goes on without it."
     )
 }
@@ -323,6 +331,33 @@ mod tests {
 
     /// The whole of why this is one line: a line break cannot reach a batch
     /// file, and a quote or a percent sign is read by `cmd` on the way.
+    /// What moved a project is told whatever else holds: a project both moved up
+    /// and unfinished has to hear both, or what moved it is never done. The words
+    /// stay out of the line itself, which passes through `cmd`.
+    #[test]
+    fn the_first_message_says_a_project_was_moved_up_whatever_else_holds() {
+        let asked = Note {
+            id: 1,
+            head: "needed for Monday".to_string(),
+            since: "2026-11-05".to_string(),
+        };
+        let mut moved = candidate("urgent", None);
+        moved.reason = Reason::Moved;
+        moved.moved = Some(asked.clone());
+        let said = first_message(&Target::of(&moved), None);
+        assert!(said.contains("It comes before its turn"), "{said}");
+        assert!(!said.contains("needed for Monday"), "{said}");
+
+        let mut both = candidate("urgent", Some(dirty()));
+        both.moved = Some(asked);
+        let said = first_message(&Target::of(&both), None);
+        assert!(said.contains("It was left unfinished (2 changed files not committed)"), "{said}");
+        assert!(said.contains("It comes before its turn"), "{said}");
+
+        let said = first_message(&Target::of(&candidate("plain", None)), None);
+        assert!(!said.contains("It comes before its turn"), "{said}");
+    }
+
     #[test]
     fn the_first_message_can_pass_through_a_batch_file() {
         let target = started(choose(&pick_of(vec![candidate("left", Some(dirty()))], vec![]), None, false));

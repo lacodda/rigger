@@ -315,6 +315,17 @@ fn a_project_put_first_stays_first_until_it_ships() {
     assert_eq!(found["order"][0]["moved"]["head"], "needed for Monday");
     assert!(text(data.path(), &["queue"]).contains("moved up: needed for Monday"));
 
+    // `rigger go` opens a sitting before the assistant starts, and sends it here
+    // for what moved the project: the sitting must not hide the answer.
+    rigger(data.path()).args(["session", "start", "urgent"]).assert().success();
+    let found = queue(data.path());
+    assert_eq!(found["order"][0]["reason"], "unfinished", "{found:#}");
+    assert_eq!(found["order"][0]["moved"]["head"], "needed for Monday", "{found:#}");
+    let said = text(data.path(), &["queue"]);
+    assert!(said.contains("a sitting open since"), "{said}");
+    assert!(said.contains("moved up: needed for Monday"), "{said}");
+    rigger(data.path()).args(["session", "end", "urgent"]).assert().success();
+
     // Back in its turn.
     assert!(text(data.path(), &["queue", "back", "urgent"]).contains("urgent is back in its turn."));
     assert_eq!(order(&queue(data.path())), vec!["older", "urgent"]);
