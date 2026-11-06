@@ -474,3 +474,24 @@ fn the_queue_plays_forward() {
     let found: Value = serde_json::from_str(&text(data.path(), &["queue", "--ahead", "--json"])).unwrap();
     assert_eq!(found["ahead"].as_array().unwrap().len(), 40);
 }
+
+/// "Due today" means the day where the owner is. Two zones more than a day apart
+/// always disagree on the date, whatever the time of the run.
+#[test]
+fn today_is_the_day_where_the_owner_is() {
+    let data = tempfile::tempdir().unwrap();
+    init(data.path());
+    project(data.path(), "alpha", &["v0.2.0 · Second"]);
+    let due = |zone: &str, question: &str| {
+        let out = rigger(data.path())
+            .env("TZ", zone)
+            .args(["note", "alpha", question, "--kind", "question", "--due", "today", "--json"])
+            .assert()
+            .success();
+        let said: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+        said["event"]["due"].as_str().unwrap().to_string()
+    };
+    let west = due("Etc/GMT+12", "From the far west?");
+    let east = due("Etc/GMT-14", "From the far east?");
+    assert!(west < east, "{west} and {east}: today did not follow the zone");
+}

@@ -374,9 +374,9 @@ pub fn build(db: &Db, project: &Project, budget: usize) -> Result<Packet> {
         .map(|recent| {
             let event = Event {
                 id: recent.id,
+                body: summarise(&without_gate(&recent.kind, &recent.body, project.gate.as_deref())),
                 kind: recent.kind,
                 date: recent.date,
-                body: summarise(&recent.body),
             };
             let cost = estimate_tokens(&render_event(&event));
             (event, recent.from_git, cost)
@@ -518,6 +518,16 @@ fn fill_queue(packet: &mut Packet, queue: Vec<crate::db::Queued>, share: usize) 
         }
     }
     share - left
+}
+
+/// A gate run in a few words. The command it ran is in the packet's head already,
+/// and said again on each line it cost forty tokens to say nothing: only a run of
+/// something else keeps its command.
+fn without_gate<'a>(kind: &str, body: &'a str, gate: Option<&str>) -> std::borrow::Cow<'a, str> {
+    match gate.filter(|_| kind == "gate").and_then(|gate| body.strip_suffix(gate)) {
+        Some(rest) => rest.trim_end().trim_end_matches(':').into(),
+        None => body.into(),
+    }
 }
 
 /// The line a question or a wish is known by: its bold heading when it

@@ -5319,8 +5319,12 @@ fn stamp(at: jiff::Timestamp) -> String {
 }
 
 /// Today, as a hub dates its lines: `2026-09-08`.
+///
+/// The owner's today, by the machine's clock, where the moments in the record
+/// stay in UTC. A person says "due tomorrow" in the evening of their own day:
+/// counted from UTC, three hours west of it, that was the day after.
 pub fn today() -> String {
-    now().split('T').next().unwrap_or_default().to_string()
+    jiff::Zoned::now().date().to_string()
 }
 
 /// Whether a day has gone by. The day itself is not past: a question due

@@ -251,3 +251,28 @@ fn a_red_gate_from_an_earlier_session_is_not_this_sessions_reminder() {
         .success()
         .stdout(predicate::str::contains("the gate was last red").not());
 }
+
+/// The packet names the gate once, at its head, and a run of it on its own line
+/// says how it went and no more: the command said on every line cost forty tokens
+/// to say nothing.
+#[test]
+fn a_gate_run_in_the_packet_does_not_repeat_the_gate() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("sample");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    rigger(data.path())
+        .args(["project", "set", "sample", "--gate", "git --version"])
+        .assert()
+        .success();
+    rigger(data.path()).args(["gate", "sample"]).assert().success();
+
+    let out = rigger(data.path()).args(["context", "sample"]).assert().success();
+    let packet = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert_eq!(packet.matches("git --version").count(), 1, "{packet}");
+    assert!(packet.contains("Gate: git --version"), "{packet}");
+    let run = packet.lines().find(|l| l.contains("· gate ·")).unwrap_or_else(|| panic!("no run in {packet}"));
+    assert!(run.contains("green in"), "{run}");
+    assert!(!run.trim_end().ends_with(':'), "{run}");
+}
