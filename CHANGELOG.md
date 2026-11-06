@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.36.0] - 2026-11-05
+
+### Features
+- Move a project up for what its neighbours need
+
 ## [0.35.0] - 2026-11-05
 
 ### Breaking Changes
