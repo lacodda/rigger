@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.38.0] - 2026-11-06
+
+### Features
+- Take a refactoring in turn, one at a time across the line
+
 ## [0.37.0] - 2026-11-06
 
 ### Features
