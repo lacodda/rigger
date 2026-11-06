@@ -147,19 +147,27 @@ if (-not $env:RIGGER_NO_REGISTER) {
     $claude = Get-Command claude -ErrorAction SilentlyContinue
     if ($claude) {
         try {
-            # The output is kept back; only a failure is worth a line.
-            $out = & claude mcp add rigger -- (Join-Path $dir "rigger.exe") mcp 2>&1
+            # For every project, not only the directory this ran in, which is what
+            # `mcp add` means by default. Taken away first: `add` refuses a name
+            # already there, and a registration should follow the install. The
+            # output is kept back; only a failure is worth a line.
+            & claude mcp remove --scope user rigger *> $null
+            $out = & claude mcp add --scope user rigger -- (Join-Path $dir "rigger.exe") mcp 2>&1
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "Registered the rigger MCP server with claude."
+                Write-Host "Registered the rigger MCP server with claude, for every project."
             } else {
-                Write-Host "Note: could not register the MCP server ($out); run: claude mcp add rigger -- rigger mcp"
+                Write-Host "Note: could not register the MCP server ($out); run: claude mcp add --scope user rigger -- rigger mcp"
             }
         } catch {
-            Write-Host "Note: could not register the MCP server ($($_.Exception.Message)); run: claude mcp add rigger -- rigger mcp"
+            Write-Host "Note: could not register the MCP server ($($_.Exception.Message)); run: claude mcp add --scope user rigger -- rigger mcp"
         }
+
+        # The line's skill, in step with this release. Only where there is a
+        # record to read: a first install has nothing to say yet.
+        try { & (Join-Path $dir "rigger.exe") skill --line --install --if-record *> $null } catch {}
     } else {
         Write-Host "Note: claude was not found in PATH, so the MCP server was not registered."
-        Write-Host "  Register it later with: claude mcp add rigger -- rigger mcp"
+        Write-Host "  Register it later with: claude mcp add --scope user rigger -- rigger mcp"
     }
 
     # The Stop hook, written into the user's settings. `--remind` is the

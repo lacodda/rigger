@@ -133,6 +133,9 @@ enum Command {
         /// Write one skill for the whole line instead of one per project
         #[arg(long, conflicts_with = "project")]
         line: bool,
+        /// Do nothing where there is no record yet, as an installer needs
+        #[arg(long, requires = "line")]
+        if_record: bool,
     },
     /// The project's screen: what it is, where it stands, what it has written
     Show {
@@ -1326,7 +1329,11 @@ fn run(cli: Cli) -> Result<()> {
             template,
             print_template,
             line,
+            if_record,
         } => {
+            if if_record && !paths::db_path()?.is_file() {
+                return Ok(());
+            }
             let install = install || dir.is_some();
             if line {
                 write_line_skill(install, dir.as_deref(), replace, template.as_deref(), print_template, json)

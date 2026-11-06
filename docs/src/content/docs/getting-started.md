@@ -114,7 +114,7 @@ A project's facts come from git, and `doctor` says which projects it has not rea
 The record is worth keeping only if it is written as the work happens. Connect the [MCP server](/rigger/reference/mcp/), and an assistant reads the packet and records what it decides through tools, instead of leaving it in a transcript:
 
 ```console
-$ claude mcp add rigger -- rigger mcp
+$ claude mcp add --scope user rigger -- rigger mcp
 Added stdio MCP server rigger with command: rigger mcp to local config
 ```
 

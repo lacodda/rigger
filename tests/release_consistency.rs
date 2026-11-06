@@ -219,6 +219,25 @@ mod tests {
         }
     }
 
+    /// `claude mcp add` means this directory unless told otherwise: registered
+    /// that way the record is at hand in whichever project the installer ran in,
+    /// and nowhere else.
+    #[test]
+    fn the_installers_register_for_every_project_and_keep_the_skill() {
+        for file in ["tools/install.ps1", "tools/install.sh"] {
+            let installer = read(file);
+            assert!(installer.contains("claude mcp add --scope user rigger"), "{file} registers for one directory");
+            assert!(
+                installer.contains("claude mcp remove --scope user rigger"),
+                "{file} is refused when one is registered"
+            );
+            assert!(
+                installer.contains("skill --line --install --if-record"),
+                "{file} leaves the line's skill behind"
+            );
+        }
+    }
+
     #[test]
     fn readme_only_shows_commands_that_exist() {
         // Every `$ rigger <word>` in a console block must name a real
@@ -389,11 +408,23 @@ mod tests {
         for (file, wanted) in [
             (
                 "tools/install.ps1",
-                vec!["claude mcp add rigger", "rigger session end --remind", "hooks", "Stop", "RIGGER_NO_REGISTER"],
+                vec![
+                    "claude mcp add --scope user rigger",
+                    "rigger session end --remind",
+                    "hooks",
+                    "Stop",
+                    "RIGGER_NO_REGISTER",
+                ],
             ),
             (
                 "tools/install.sh",
-                vec!["claude mcp add rigger", "rigger session end --remind", "hooks", "Stop", "RIGGER_NO_REGISTER"],
+                vec![
+                    "claude mcp add --scope user rigger",
+                    "rigger session end --remind",
+                    "hooks",
+                    "Stop",
+                    "RIGGER_NO_REGISTER",
+                ],
             ),
         ] {
             let script = read(file);

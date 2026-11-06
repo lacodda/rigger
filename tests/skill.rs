@@ -151,3 +151,27 @@ fn the_built_in_template_can_be_printed_to_start_from() {
     let out = output(data.path(), &["skill", "--print-template"]);
     assert!(out.starts_with("---\nname: {{name}}\n"), "{out}");
 }
+
+/// An installer keeps the line's skill in step, and a first install has no record
+/// to read yet: it must not make one by asking.
+#[test]
+fn an_installer_writes_the_lines_skill_only_where_there_is_a_record() {
+    let data = tempfile::tempdir().unwrap();
+    let skills = data.path().join("skills");
+    let run = |data: &Path| {
+        Command::cargo_bin("rigger")
+            .unwrap()
+            .env("RIGGER_DATA_DIR", data)
+            .env("RIGGER_SKILLS_DIR", data.join("skills"))
+            .args(["skill", "--line", "--install", "--if-record"])
+            .assert()
+            .success();
+    };
+    run(data.path());
+    assert!(!skills.exists(), "a skill was written with no record");
+    assert!(!data.path().join("profiles").exists(), "asking made a record");
+
+    rigger(data.path()).arg("init").assert().success();
+    run(data.path());
+    assert!(skills.join("line").join("SKILL.md").is_file(), "the skill was not written");
+}

@@ -14,11 +14,11 @@ This command is not meant to be typed. A client starts it, talks JSON-RPC to it,
 ## Connecting
 
 ```console
-$ claude mcp add rigger -- rigger mcp
-Added stdio MCP server rigger with command: rigger mcp to local config
+$ claude mcp add --scope user rigger -- rigger mcp
+Added stdio MCP server rigger with command: rigger mcp to user config
 ```
 
-The installer runs this for you, along with adding the [`Stop` hook](/rigger/reference/session/) that closes a sitting. It is skipped when the assistant is not on the PATH, and never fails the install - registration that is tidy is worth less than an install that works. `RIGGER_NO_REGISTER=1` opts out.
+`--scope user` makes it available in every project; without it, only in the directory you ran it in. The installer runs this for you, along with writing the line's [skill](/rigger/reference/skill/) when there is a record and adding the [`Stop` hook](/rigger/reference/session/) that closes a sitting. It is skipped when the assistant is not on the PATH, and never fails the install - registration that is tidy is worth less than an install that works. `RIGGER_NO_REGISTER=1` opts out.
 
 In Git Bash the command needs `MSYS_NO_PATHCONV=1` in front of it: otherwise the shell rewrites the bare `--` separator into a Windows path and the server ends up registered under the name of a directory. The installer does this already.
 

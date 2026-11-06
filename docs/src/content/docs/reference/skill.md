@@ -5,7 +5,7 @@ description: Write a thin project skill from a template and the record.
 
 ```
 rigger skill <PROJECT> [--install] [--dir <DIR>] [--replace] [--template <FILE>]
-rigger skill --line [--install] [--dir <DIR>] [--replace] [--template <FILE>]
+rigger skill --line [--install] [--dir <DIR>] [--replace] [--template <FILE>] [--if-record]
 rigger skill --print-template [<PROJECT>]
 rigger skill --line --print-template
 ```
@@ -104,6 +104,8 @@ Move what it says that only this project can say into the hub, then run again wi
 The marker after the front matter is how the next run knows the file is rigger's. It carries no timestamp: a stamp would make an unchanged skill a diff on every run.
 
 ## `--line`: one skill instead of one per project
+
+`--if-record` does nothing where there is no record yet: the [installer](/rigger/getting-started/) runs it on every install to keep the skill in step with the release, and a first install has nothing to say.
 
 A skill per project is still a file per project, and a line with seventeen of them has seventeen descriptions in the assistant's catalogue saying nearly the same thing. `--line` writes one:
 

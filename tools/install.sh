@@ -94,11 +94,20 @@ if [ -z "${RIGGER_NO_REGISTER:-}" ] && command -v claude >/dev/null 2>&1; then
     # anything that looks like a path into a Windows one, which turns the
     # registration into a server named after a directory. Harmless where
     # the variable means nothing.
-    if MSYS_NO_PATHCONV=1 claude mcp add rigger -- "$BIN_DIR/rigger" mcp >/dev/null 2>&1; then
-        echo "Registered the rigger MCP server with claude."
+    #
+    # For every project, not only the directory this ran in, which is what
+    # `mcp add` means by default. Taken away first: `add` refuses a name already
+    # there, and a registration should follow the install.
+    MSYS_NO_PATHCONV=1 claude mcp remove --scope user rigger >/dev/null 2>&1 || true
+    if MSYS_NO_PATHCONV=1 claude mcp add --scope user rigger -- "$BIN_DIR/rigger" mcp >/dev/null 2>&1; then
+        echo "Registered the rigger MCP server with claude, for every project."
     else
-        echo "Note: could not register the MCP server; run: claude mcp add rigger -- rigger mcp"
+        echo "Note: could not register the MCP server; run: claude mcp add --scope user rigger -- rigger mcp"
     fi
+
+    # The line's skill, in step with this release. Only where there is a record
+    # to read: a first install has nothing to say yet.
+    "$BIN_DIR/rigger" skill --line --install --if-record >/dev/null 2>&1 || true
 
     # The Stop hook. `--remind` is the form for a hook: it says nothing
     # unless a sitting was open and something is missing from it, so an
