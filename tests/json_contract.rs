@@ -973,6 +973,9 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("ideas take", &["ideas", "take", "alpha", &idea(0)]);
     r.json("ideas drop", &["ideas", "drop", "alpha", &idea(1), "--note", "Not this year"]);
     r.json("ideas asked", &["ideas", "asked"]);
+    // The queue played forward.
+    r.json("queue", &["queue", "--ahead", "12"]);
+    r.json("queue", &["queue", "--ahead"]);
     // Whose turn it is to be refactored.
     r.json("refactor", &["refactor"]);
     r.json("refactor ritual", &["refactor", "ritual"]);

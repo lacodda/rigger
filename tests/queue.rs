@@ -427,3 +427,50 @@ fn the_help_lists_what_a_person_types() {
     // Hidden is not gone.
     assert!(text(data.path(), &["note", "--help"]).contains("--kind"));
 }
+
+/// The forecast, from a real record: a project moves on through its own plan,
+/// and the screen and the JSON say the same.
+#[test]
+fn the_queue_plays_forward() {
+    let data = tempfile::tempdir().unwrap();
+    init(data.path());
+    project_released(
+        data.path(),
+        "heavy",
+        &["v0.2.0 · Second", "v0.3.0 · Third", "v0.4.0 · Fourth", "v0.5.0 · Fifth", "v0.6.0 · Sixth"],
+        "2026-08-01T12:00:00Z",
+    );
+    project_released(
+        data.path(),
+        "light",
+        &["v0.2.0 · Other", "v0.3.0 · More", "v0.4.0 · Again", "v0.5.0 · Yet", "v0.6.0 · Last"],
+        "2026-08-02T12:00:00Z",
+    );
+    rigger(data.path()).args(["priority", "heavy", "3"]).assert().success();
+    rigger(data.path()).args(["priority", "light", "1"]).assert().success();
+
+    let found: Value = serde_json::from_str(&text(data.path(), &["queue", "--ahead", "5", "--json"])).unwrap();
+    let turns: Vec<(String, String)> = found["ahead"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["project"].as_str().unwrap().to_string(), t["version"].as_str().unwrap().to_string()))
+        .collect();
+    let want = [
+        ("heavy", "v0.2.0"),
+        ("heavy", "v0.3.0"),
+        ("heavy", "v0.4.0"),
+        ("light", "v0.2.0"),
+        ("heavy", "v0.5.0"),
+    ];
+    assert_eq!(turns, want.map(|(p, v)| (p.to_string(), v.to_string())), "{found:#}");
+    assert_eq!(found["ahead"][0]["title"], "Second");
+    assert_eq!(found["ahead"][0]["turn"], 1);
+
+    let said = text(data.path(), &["queue", "--ahead", "5"]);
+    assert!(said.lines().next().unwrap().contains("heavy"), "{said}");
+    assert!(said.contains("Other"), "{said}");
+    // Alone, the flag means the default.
+    let found: Value = serde_json::from_str(&text(data.path(), &["queue", "--ahead", "--json"])).unwrap();
+    assert_eq!(found["ahead"].as_array().unwrap().len(), 40);
+}

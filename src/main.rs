@@ -241,6 +241,9 @@ enum Command {
     Queue {
         #[command(subcommand)]
         command: Option<QueueCommand>,
+        /// Play it forward this many turns: who comes when, and on which stage
+        #[arg(long, value_name = "TURNS", num_args = 0..=1, default_missing_value = "40")]
+        ahead: Option<usize>,
     },
     /// How often each project comes round: `rigger priority sample up`, `rigger priority sample 6`
     Priority {
@@ -1375,8 +1378,11 @@ fn run(cli: Cli) -> Result<()> {
                 tasks,
             } => version_add(&project, &version, title.as_deref(), &tasks, json),
         },
-        Command::Queue { command } => match command {
-            None => show_queue(json),
+        Command::Queue { command, ahead } => match command {
+            None => match ahead {
+                Some(turns) => show_ahead(turns, json),
+                None => show_queue(json),
+            },
             Some(QueueCommand::First { project, why }) => queue_first(&project, why.as_deref(), json),
             Some(QueueCommand::Back { project }) => queue_back(&project, json),
         },
@@ -5523,6 +5529,32 @@ fn show_queue(json: bool) -> Result<()> {
             plural(open, "big idea", "big ideas"),
             if open == 1 { "s" } else { "" }
         );
+    }
+    Ok(())
+}
+
+/// The queue played forward.
+fn show_ahead(turns: usize, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let found = queue::now(&db)?;
+    let mut plans = std::collections::HashMap::new();
+    for project in db.projects()? {
+        plans.insert(
+            project.name.clone(),
+            queue::Ahead {
+                stages: db.planned_versions(project.id)?,
+                floor: config::value(&db, Some(&project), config::TAIL_FLOOR)?,
+            },
+        );
+    }
+    let rota = refactor::rota(&db)?;
+    let ahead = queue::ahead(&found, &plans, rota.next.as_deref(), turns);
+    if json {
+        return print_json(&serde_json::json!({ "ahead": ahead }));
+    }
+    print!("{}", queue::render_ahead(&ahead));
+    if ahead.is_empty() {
+        println!("Nothing in the queue.");
     }
     Ok(())
 }

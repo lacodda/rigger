@@ -629,6 +629,137 @@ pub fn unfinished_parts(c: &Candidate) -> String {
     c.unfinished.as_ref().map(|u| u.parts().join(", ")).unwrap_or_default()
 }
 
+/// One turn ahead: who takes it, and on what.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Turn {
+    pub turn: usize,
+    pub project: String,
+    /// The stage it would be on by then; `unplanned` when the plan has run out.
+    pub version: String,
+    pub title: Option<String>,
+    /// What this turn is besides a stage: `unfinished`, `moved`, `refactor`, or
+    /// `grow` where the plan is short enough that the turn would start by growing it.
+    pub note: Option<&'static str>,
+}
+
+/// What a project has ahead of it, for playing the queue forward.
+#[derive(Debug, Clone, Default)]
+pub struct Ahead {
+    /// Its planned stages, in order.
+    pub stages: Vec<(String, Option<String>)>,
+    /// With this many stages left or fewer, a turn starts by growing the plan.
+    pub floor: i64,
+}
+
+/// Plays the queue forward: the same rule, assuming each turn ends in a release
+/// and nothing else changes. It is a forecast and says only that: a release out
+/// of turn, a changed weight or a neighbour's breaking change redraws it, which
+/// is the point of working it out rather than keeping it.
+pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&str>, turns: usize) -> Vec<Turn> {
+    struct Walk<'a> {
+        candidate: &'a Candidate,
+        stages: std::collections::VecDeque<(String, Option<String>)>,
+        floor: i64,
+        waited: usize,
+        /// Which simulated turn it last had: none yet is the longest ago.
+        played: usize,
+        pressing: Option<&'static str>,
+        refactor: bool,
+    }
+    let mut walks: Vec<Walk> = queue
+        .order
+        .iter()
+        .map(|candidate| {
+            let plan = plans.get(&candidate.project).cloned().unwrap_or_default();
+            Walk {
+                candidate,
+                stages: plan.stages.into(),
+                floor: plan.floor,
+                waited: candidate.waited,
+                played: 0,
+                pressing: match candidate.reason {
+                    Reason::Unfinished => Some("unfinished"),
+                    Reason::Moved => Some("moved"),
+                    Reason::Turn => None,
+                },
+                refactor: refactor == Some(candidate.project.as_str()),
+            }
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for turn in 1..=turns {
+        // What presses goes first, in the order the queue already put it in; then
+        // the rule. A project at weight 0 is here only for what pressed.
+        let next = walks.iter().position(|w| w.pressing.is_some()).or_else(|| {
+            walks
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| w.candidate.weight > 0)
+                .min_by(|(_, a), (_, b)| {
+                    let due = |w: &Walk| (w.waited + 1) * w.candidate.weight as usize;
+                    due(b)
+                        .cmp(&due(a))
+                        .then_with(|| b.candidate.weight.cmp(&a.candidate.weight))
+                        .then_with(|| a.played.cmp(&b.played))
+                        .then_with(|| a.candidate.turn_at.cmp(&b.candidate.turn_at))
+                        .then_with(|| a.candidate.project.cmp(&b.candidate.project))
+                })
+                .map(|(index, _)| index)
+        });
+        let Some(next) = next else {
+            break;
+        };
+        for walk in &mut walks {
+            walk.waited += 1;
+        }
+        let walk = &mut walks[next];
+        walk.waited = 0;
+        walk.played = turn;
+
+        let pressing = walk.pressing.take();
+        let refactoring = std::mem::take(&mut walk.refactor);
+        let folder = walk.candidate.kind == Kind::Folder;
+        // A refactoring ships no stage, and a folder's turn takes none off a plan.
+        let short = !folder && walk.stages.len() as i64 <= walk.floor;
+        let (version, title) = if refactoring {
+            ("refactoring".to_string(), None)
+        } else if folder {
+            ("unplanned".to_string(), None)
+        } else {
+            walk.stages.pop_front().unwrap_or_else(|| ("unplanned".to_string(), None))
+        };
+        let note = pressing
+            .or(if refactoring { Some("refactor") } else { None })
+            .or(if short { Some("grow") } else { None });
+        out.push(Turn {
+            turn,
+            project: walk.candidate.project.clone(),
+            version,
+            title,
+            note,
+        });
+    }
+    out
+}
+
+/// The forecast on a screen.
+pub fn render_ahead(turns: &[Turn]) -> String {
+    let name = turns.iter().map(|t| t.project.chars().count()).max().unwrap_or(0);
+    let version = turns.iter().map(|t| t.version.chars().count()).max().unwrap_or(0);
+    let number = turns.len().to_string().len();
+    let mut out = String::new();
+    for turn in turns {
+        let title = turn.title.as_deref().map(|t| format!("  {t}")).unwrap_or_default();
+        let note = turn.note.map(|n| format!("  ({n})")).unwrap_or_default();
+        out.push_str(&format!(
+            "{:>number$}  {:<name$}  {:<version$}{title}{note}\n",
+            turn.turn, turn.project, turn.version
+        ));
+    }
+    out
+}
+
 /// The reason in a sentence.
 pub fn why(c: &Candidate) -> String {
     match c.reason {
@@ -966,6 +1097,84 @@ mod tests {
             assert!(named.contains(format!("p{n}").as_str()), "{said}");
         }
         assert!(said.contains("waited 12 releases"), "{said}");
+    }
+
+    /// The forecast is the same rule, so it comes out in the weights' shares, each
+    /// project moving on through its own plan.
+    #[test]
+    fn the_forecast_plays_the_rule_forward() {
+        let queue = choose(&[on_stage("heavy", 3, 0), on_stage("light", 1, 0)]);
+        let plan = |versions: &[&str]| Ahead {
+            stages: versions.iter().map(|v| (v.to_string(), None)).collect(),
+            floor: 0,
+        };
+        let plans = HashMap::from([
+            ("heavy".to_string(), plan(&["v1", "v2", "v3", "v4", "v5", "v6"])),
+            ("light".to_string(), plan(&["v7", "v8"])),
+        ]);
+        let turns = ahead(&queue, &plans, None, 8);
+        let said: Vec<(&str, &str)> = turns.iter().map(|t| (t.project.as_str(), t.version.as_str())).collect();
+        assert_eq!(
+            said,
+            vec![
+                ("heavy", "v1"),
+                ("heavy", "v2"),
+                ("heavy", "v3"),
+                ("light", "v7"),
+                ("heavy", "v4"),
+                ("heavy", "v5"),
+                ("heavy", "v6"),
+                ("light", "v8"),
+            ]
+        );
+        assert_eq!(turns[0].turn, 1);
+        assert_eq!(turns[7].turn, 8);
+    }
+
+    /// What presses goes first, once; a refactoring takes a turn and no stage; a
+    /// plan that runs short and then out says so.
+    #[test]
+    fn the_forecast_says_what_each_turn_is() {
+        let mut left = on_stage("left", 1, 0);
+        left.held.changed = 1;
+        let mut moved = on_stage("moved", 1, 0);
+        moved.moves = vec![note(1, "asked for", "2026-11-01")];
+        let plain = on_stage("plain", 1, 9);
+        let queue = choose(&[plain, moved, left]);
+        let plan = |versions: &[&str], floor: i64| Ahead {
+            stages: versions.iter().map(|v| (v.to_string(), None)).collect(),
+            floor,
+        };
+        let plans = HashMap::from([
+            ("left".to_string(), plan(&["l1", "l2", "l3"], 0)),
+            ("moved".to_string(), plan(&["m1", "m2", "m3"], 0)),
+            ("plain".to_string(), plan(&["p1"], 1)),
+        ]);
+        let turns = ahead(&queue, &plans, Some("plain"), 6);
+        let said: Vec<(&str, &str, Option<&str>)> = turns.iter().map(|t| (t.project.as_str(), t.version.as_str(), t.note)).collect();
+        assert_eq!(said[0], ("left", "l1", Some("unfinished")));
+        assert_eq!(said[1], ("moved", "m1", Some("moved")));
+        assert_eq!(said[2], ("plain", "refactoring", Some("refactor")));
+        let plain: Vec<_> = said.iter().filter(|t| t.0 == "plain").collect();
+        assert_eq!(*plain[1], ("plain", "p1", Some("grow")), "{said:?}");
+        assert!(said[3..].iter().all(|t| t.2 != Some("unfinished") && t.2 != Some("moved")), "{said:?}");
+        assert!(render_ahead(&turns).contains("(refactor)"));
+    }
+
+    #[test]
+    fn a_plan_that_has_run_out_is_said_and_nothing_loops_on_nothing() {
+        let queue = choose(&[on_stage("only", 1, 0)]);
+        let plans = HashMap::from([("only".to_string(), Ahead::default())]);
+        let turns = ahead(&queue, &plans, None, 2);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].version, "unplanned");
+        assert_eq!(turns[1].note, Some("grow"));
+
+        let mut out = on_stage("out", 0, 0);
+        out.moves = vec![note(1, "asked for", "2026-11-01")];
+        let queue = choose(&[out]);
+        assert_eq!(ahead(&queue, &HashMap::new(), None, 5).len(), 1, "weight 0 has only what pressed");
+        assert!(ahead(&choose(&[]), &HashMap::new(), None, 5).is_empty());
     }
 
     #[test]

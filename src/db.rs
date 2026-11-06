@@ -4262,6 +4262,17 @@ impl Db {
         Ok(())
     }
 
+    /// The versions planned and not shipped, in order: number and title.
+    pub fn planned_versions(&self, project_id: i64) -> Result<Vec<(String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, title FROM versions WHERE project_id = ?1 AND status = 'planned'")?;
+        let rows = stmt.query_map([project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+        let mut all: Vec<(String, Option<String>)> = rows.collect::<rusqlite::Result<_>>()?;
+        all.sort_by_key(|a| version_order(&a.0));
+        Ok(all)
+    }
+
     /// How many versions are planned and not shipped.
     pub fn planned_count(&self, project_id: i64) -> Result<usize> {
         let n: i64 = self.conn.query_row(

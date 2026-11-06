@@ -5,6 +5,7 @@ description: What comes next - every project in the order it gets a turn, the re
 
 ```
 rigger queue [--json]
+rigger queue --ahead [TURNS]
 rigger queue first <PROJECT> [--why <TEXT>]
 rigger queue back <PROJECT>
 ```
@@ -160,6 +161,33 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `parted[].note` | string or null | The note the link was recorded with. |
 
 Fields may be added; none is renamed or removed without a major version.
+
+## `--ahead`
+
+The same rule played forward, 40 turns unless you say: who comes when, and on which stage. This is the schedule, in places in a queue rather than in dates.
+
+```console
+$ rigger queue --ahead 6
+1  widget  v0.3.0       Plugins  (unfinished)
+2  gadget  v1.2.0       Search
+3  sample  refactoring           (refactor)
+4  widget  v0.4.0       Themes
+5  gadget  v1.3.0       Export   (grow)
+6  widget  v0.5.0       Sharing
+```
+
+Each turn is assumed to end in a release, and nothing else to change. So it is a forecast and says no more than that: a release out of turn, a changed weight or a neighbour's breaking change redraws it, which is the point of working it out rather than keeping it. The notes say what a turn is besides a stage: `unfinished` and `moved` go first, once; `refactor` takes the turn instead of a stage; `grow` is where the [plan](/rigger/reference/tail/) would be short enough that the turn starts by growing it. A plan that has run out shows `unplanned`.
+
+<!-- json: queue -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ahead` | array | The turns ahead, in order. |
+| `ahead[]` | object | One turn. |
+| `ahead[].turn` | integer | Its number, from 1. |
+| `ahead[].project` | string | Who takes it. |
+| `ahead[].version` | string | The stage it would be on by then; `refactoring`, or `unplanned` when the plan has run out. |
+| `ahead[].title` | string or null | That stage's title. |
+| `ahead[].note` | string or null | `unfinished`, `moved`, `refactor`, `grow`, or `null`. |
 
 ## Moved up
 
