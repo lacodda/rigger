@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.37.0] - 2026-11-06
+
+### Features
+- Grow a plan before it runs out, and ask about big ideas together
+
 ## [0.36.0] - 2026-11-05
 
 ### Features

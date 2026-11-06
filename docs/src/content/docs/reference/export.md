@@ -181,7 +181,7 @@ Wrote ..\line\line.json - 18 products
 ```json
 {
   "generator": "rigger",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "products": [
     {
       "name": "sample",
