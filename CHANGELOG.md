@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.41.0] - 2026-11-06
+
+### Features
+- Count today from where the owner is, and keep gate lines short
+
 ## [0.40.0] - 2026-11-06
 
 ### Features
