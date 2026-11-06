@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.40.0] - 2026-11-06
+
+### Features
+- Show the whole plan of a project
+
 ## [0.39.0] - 2026-11-06
 
 ### Features
