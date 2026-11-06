@@ -43,6 +43,8 @@ $ rigger resolve sample 6 --built
 Built [6]: A date picker.
 ```
 
+An order sorted into the plan earlier can still be built: that is the usual way, sorted when it finds a stage and built when that stage is done.
+
 A [blocker](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) is cleared the same way, and the project is back in the queue:
 
 ```console
@@ -73,7 +75,7 @@ The MCP server offers the same as a `resolve` tool. An assistant should use it f
 | `resolved` | object | The question, wish or blocker that was closed. |
 | `resolved.id` | integer | Its id. |
 | `resolved.project` | string | The name of its project. |
-| `resolved.was` | string | What it was before: `question`, `wish` or `blocker`. |
+| `resolved.was` | string | What it was before: `question`, `wish`, `blocker`, or `sorted` for an order built after it was sorted. |
 | `resolved.body` | string | Its text. |
 | `resolved.answer` | string or null | The answer recorded as a decision; null for a wish. |
 

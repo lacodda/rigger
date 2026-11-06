@@ -243,6 +243,48 @@ fn an_order_built_moves_up_who_asked() {
         .stderr(predicates::str::contains("only a wish is built"));
 }
 
+/// An order usually goes through the plan on its way: sorted when it finds a
+/// stage, built when that stage is done. Without the second step, an order that
+/// waited its turn in a plan could never move up who asked for it.
+#[test]
+fn an_order_sorted_into_the_plan_is_built_when_its_stage_is_done() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let library = project(data.path(), "library", LIBRARY);
+    project(data.path(), "app", APP);
+    let out = rigger(data.path())
+        .args(["wish", "library", "A date picker", "--from", "app", "--json"])
+        .assert()
+        .success();
+    let said: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let id = said["event"]["id"].as_i64().unwrap().to_string();
+
+    assert!(text(data.path(), &["resolve", "library", &id]).contains(&format!("Sorted [{id}]")));
+    assert_eq!(entry(&queue(data.path()), "app")["reason"], "turn");
+
+    // Sorted once is sorted: only the word that it was built changes it again.
+    rigger(data.path())
+        .args(["resolve", "library", &id])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("only those are resolved"));
+
+    commit(&library, "b.txt", "feat: a date picker");
+    assert!(text(data.path(), &["resolve", "library", &id, "--built"]).contains(&format!("Built [{id}]")));
+    git(&library, &["tag", "v0.2.0"]);
+    tick();
+    let found = queue(data.path());
+    assert_eq!(entry(&found, "app")["reason"], "moved", "{found:#}");
+    assert_eq!(entry(&found, "app")["moved"]["head"], "library built what it asked for: A date picker");
+
+    // Built once is built.
+    rigger(data.path())
+        .args(["resolve", "library", &id, "--built"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("only those are resolved"));
+}
+
 /// A stage waiting on a neighbour moves the neighbour up, and says so in its
 /// packet; resolving the order settles it, whichever way.
 #[test]

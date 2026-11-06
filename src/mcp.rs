@@ -674,7 +674,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 ("question", Some(_)) => format!("Answered [{id}]: {first_line}\nThe answer is recorded as a decision."),
                 ("question", None) => format!("Closed question [{id}]: {first_line}"),
                 ("blocker", _) => format!("Cleared [{id}]: {first_line}"),
-                ("wish", _) if built => format!("Built [{id}]: {first_line}"),
+                _ if built => format!("Built [{id}]: {first_line}"),
                 _ => format!("Sorted [{id}]: {first_line}"),
             })
         }

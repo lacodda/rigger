@@ -2879,19 +2879,24 @@ impl Db {
         let Some((kind, body)) = found else {
             bail!("no open question or wish [{id}] in this project; the packet lists the ids");
         };
-        if !matches!(kind.as_str(), "question" | "wish" | "blocker" | "moved") {
+        // A neighbour's order usually goes through the plan: sorted when it
+        // finds a stage, built when that stage is done. Sorting is not the end of
+        // it, or an order that waited its turn in a plan could never move up who
+        // asked for it.
+        let built_after_sorting = built && kind == "sorted";
+        if !built_after_sorting && !matches!(kind.as_str(), "question" | "wish" | "blocker" | "moved") {
             bail!("[{id}] is a {kind}, not a question, a wish or a blocker; only those are resolved");
         }
 
         // `answered`, `sorted` and `cleared` keep the kind readable in the
         // record: the owner replied, a wish found its place in the plan, what
         // stopped the tag stopped stopping it.
-        if built && kind != "wish" {
+        if built && !matches!(kind.as_str(), "wish" | "sorted") {
             bail!("[{id}] is a {kind}; only a wish is built");
         }
         let resolved = match kind.as_str() {
             "question" => "answered",
-            "wish" if built => "built",
+            "wish" | "sorted" if built => "built",
             "wish" => "sorted",
             "moved" => "returned",
             _ => "cleared",

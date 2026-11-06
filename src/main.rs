@@ -2488,7 +2488,7 @@ fn resolve(project: &str, id: i64, answer: Option<&str>, built: bool, json: bool
     match kind.as_str() {
         "question" => println!("Answered [{id}]: {first_line}"),
         "blocker" => println!("Cleared [{id}]: {first_line}"),
-        "wish" if built => println!("Built [{id}]: {first_line}"),
+        _ if built => println!("Built [{id}]: {first_line}"),
         _ => println!("Sorted [{id}]: {first_line}"),
     }
     if answer.is_some() {
