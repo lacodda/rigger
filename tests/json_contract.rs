@@ -947,6 +947,14 @@ fn fill(r: &mut Record, data: &Path) {
         let id = note["event"]["id"].as_i64().unwrap().to_string();
         r.json("resolve", &["resolve", project, &id]);
     }
+    // A neighbour's stage waiting, and what it was waiting for built.
+    let waited = r.json("wish", &["wish", "beta", "A reader block", "--from", "alpha", "--waits"]);
+    r.json("context", &["context", "beta"]);
+    r.json("queue", &["queue"]);
+    let id = waited["event"]["id"].as_i64().unwrap().to_string();
+    r.json("resolve", &["resolve", "beta", &id, "--built"]);
+    r.json("link uses", &["link", "uses"]);
+    r.json("link uses", &["link", "uses", "beta"]);
     // Moved up, and put back.
     r.json("queue first", &["queue", "first", "beta", "--why", "It cannot wait"]);
     r.json("queue back", &["queue", "back", "beta"]);

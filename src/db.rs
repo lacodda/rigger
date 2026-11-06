@@ -636,6 +636,13 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE versions DROP COLUMN planned_week;
     DELETE FROM settings WHERE key = 'week_toast';
     ",
+    // v33: what moves the queue. A wish a neighbour placed can be built, which
+    // says more than `sorted` does and has a moment the neighbour can be held
+    // to; and it can say that the neighbour's stage is waiting for it.
+    "
+    ALTER TABLE events ADD COLUMN resolved_at TEXT;
+    ALTER TABLE events ADD COLUMN waits INTEGER NOT NULL DEFAULT 0;
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -1147,6 +1154,8 @@ pub struct Queued {
     pub due: Option<String>,
     /// The neighbour who placed a wish.
     pub asked_by: Option<String>,
+    /// That neighbour's stage is waiting for it.
+    pub waits: bool,
 }
 
 /// An event as the packet reads it back.
@@ -2653,7 +2662,7 @@ impl Db {
     /// packet's "waiting for the owner" list, and an answer becomes a
     /// decision in its own right - which is what an answer to a question
     /// about a project actually is.
-    pub fn resolve_event(&self, project_id: i64, id: i64, answer: Option<&str>) -> Result<(String, String)> {
+    pub fn resolve_event(&self, project_id: i64, id: i64, answer: Option<&str>, built: bool) -> Result<(String, String)> {
         let found: Option<(String, String)> = self
             .conn
             .query_row(
@@ -2672,13 +2681,18 @@ impl Db {
         // `answered`, `sorted` and `cleared` keep the kind readable in the
         // record: the owner replied, a wish found its place in the plan, what
         // stopped the tag stopped stopping it.
+        if built && kind != "wish" {
+            bail!("[{id}] is a {kind}; only a wish is built");
+        }
         let resolved = match kind.as_str() {
             "question" => "answered",
+            "wish" if built => "built",
             "wish" => "sorted",
             "moved" => "returned",
             _ => "cleared",
         };
-        self.conn.execute("UPDATE events SET kind = ?1 WHERE id = ?2", params![resolved, id])?;
+        self.conn
+            .execute("UPDATE events SET kind = ?1, resolved_at = ?2 WHERE id = ?3", params![resolved, now(), id])?;
 
         if let Some(answer) = answer {
             let text = format!("{body}\n\n{answer}");
@@ -4099,7 +4113,7 @@ impl Db {
     /// due and the neighbour who placed a wish.
     pub fn queue(&self, project_id: i64) -> Result<Vec<Queued>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.kind, e.body, substr(e.created_at, 1, 10), e.due, a.name
+            "SELECT e.id, e.kind, e.body, substr(e.created_at, 1, 10), e.due, a.name, e.waits
                FROM events e LEFT JOIN projects a ON a.id = e.asked_by
               WHERE e.project_id = ?1 AND e.kind IN ('question', 'wish')
               ORDER BY e.created_at, e.id",
@@ -4112,6 +4126,7 @@ impl Db {
                 date: r.get(3)?,
                 due: r.get(4)?,
                 asked_by: r.get(5)?,
+                waits: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -4144,9 +4159,60 @@ impl Db {
                 date: r.get(3)?,
                 due: r.get(4)?,
                 asked_by: None,
+                waits: false,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The breaking changes a project released after a moment: its own moment
+    /// is not enough, since what is not released has reached nobody.
+    pub fn breaking_released(&self, project_id: i64, after: &str) -> Result<Vec<Queued>> {
+        let Some(released) = self.last_release_moment(project_id)? else {
+            return Ok(Vec::new());
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
+              WHERE project_id = ?1 AND commit_hash IS NOT NULL AND body LIKE 'breaking:%'
+                AND created_at > ?2 AND created_at <= ?3
+              ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, after, released], row_to_note)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What this project built that `asker` ordered, since a moment.
+    pub fn built_orders(&self, project_id: i64, asker: i64, after: &str) -> Result<Vec<Queued>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, body, substr(resolved_at, 1, 10), due FROM events
+              WHERE project_id = ?1 AND kind = 'built' AND asked_by = ?2 AND resolved_at > ?3
+              ORDER BY resolved_at, id",
+        )?;
+        let rows = stmt.query_map(params![project_id, asker, after], row_to_note)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The open orders of this project that a neighbour's stage is waiting for.
+    pub fn waited_on(&self, project_id: i64) -> Result<Vec<Asked>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.body, p.name FROM events e JOIN projects p ON p.id = e.asked_by
+              WHERE e.project_id = ?1 AND e.kind = 'wish' AND e.waits = 1
+              ORDER BY e.created_at, e.id",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(Asked {
+                id: r.get(0)?,
+                body: r.get(1)?,
+                asked_by: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Says that the neighbour who placed a wish has a stage waiting for it.
+    pub fn mark_waiting(&self, event_id: i64) -> Result<()> {
+        self.conn.execute("UPDATE events SET waits = 1 WHERE id = ?1", [event_id])?;
+        Ok(())
     }
 
     /// What stops this project's tag and is out of reach, oldest first.
@@ -4169,6 +4235,7 @@ impl Db {
                 date: r.get(3)?,
                 due: r.get(4)?,
                 asked_by: None,
+                waits: false,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -4922,6 +4989,18 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
 /// One constant rather than the same list spelt at each query: the column
 /// added in migration 21 had to reach four places, and a list spelt four
 /// times is a list that reaches three.
+fn row_to_note(r: &rusqlite::Row) -> rusqlite::Result<Queued> {
+    Ok(Queued {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        body: r.get(2)?,
+        date: r.get(3)?,
+        due: r.get(4)?,
+        asked_by: None,
+        waits: false,
+    })
+}
+
 const PROJECT_COLUMNS: &str = "id, name, path, remote, created_at, weight, kind, hub_path, gate, mark_code, accent, accent2, form, docs_url, on_session_end, retired_at, retired_by, about";
 
 fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {

@@ -143,6 +143,9 @@ pub fn first_message(target: &Target) -> String {
     };
     let unfinished = match target.unfinished.as_ref().map(Unfinished::parts) {
         Some(parts) if !parts.is_empty() => format!(" It was left unfinished ({}): finish that first.", parts.join(", ")),
+        // What moved it is in the owner's or a neighbour's words, which stay out
+        // of this line, and `rigger queue` says them.
+        _ if target.reason == Some(Reason::Moved) => " It comes before its turn: `rigger queue` says why, and that comes first in this stage.".to_string(),
         _ => String::new(),
     };
     format!(

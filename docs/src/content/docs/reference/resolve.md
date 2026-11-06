@@ -36,6 +36,13 @@ Answered [1]: Pick the release day.
 
 The decision keeps the question above it, so the reasoning reads as a whole later.
 
+A wish a neighbour placed can be more than sorted. `--built` says it is done, not only given a place in the plan, and once that is released the neighbour [moves up](/rigger/reference/queue/#moved-up) to take it:
+
+```console
+$ rigger resolve sample 6 --built
+Built [6]: A date picker.
+```
+
 A [blocker](/rigger/reference/go/#when-something-out-of-reach-stops-the-tag) is cleared the same way, and the project is back in the queue:
 
 ```console
@@ -45,7 +52,7 @@ Cleared [9]: The signing key has expired.
 
 ## Nothing is deleted
 
-The record is a history: a question that was asked stays asked. Resolving changes its kind - to `answered`, `sorted` or `cleared` - so it leaves the packet's waiting lists while remaining in the record.
+The record is a history: a question that was asked stays asked. Resolving changes its kind - to `answered`, `sorted`, `built` or `cleared` - so it leaves the packet's waiting lists while remaining in the record.
 
 Only questions, wishes and blockers can be resolved. A decision, finding or pitfall is refused: closing one would quietly rewrite what happened.
 

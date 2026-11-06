@@ -249,6 +249,10 @@ pub struct Item {
     /// What changes is only that somebody is waiting for the answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asked_by: Option<String>,
+    /// That neighbour's stage is waiting for it, and this project moved up
+    /// because of it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub waits: bool,
     /// The day a question needs its answer by, when it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due: Option<String>,
@@ -434,6 +438,7 @@ impl Item {
             head,
             more,
             asked_by: queued.asked_by.clone(),
+            waits: queued.waits,
             due: queued.due.clone(),
         }
     }
@@ -825,7 +830,11 @@ fn render_item(item: &Item) -> String {
         Some(day) => format!("(due {day}) "),
         None => String::new(),
     };
-    let who = item.asked_by.as_deref().map(|who| format!("({who} asks) ")).unwrap_or_default();
+    let who = match (&item.asked_by, item.waits) {
+        (Some(who), true) => format!("({who} asks, and its stage waits on this) "),
+        (Some(who), false) => format!("({who} asks) "),
+        (None, _) => String::new(),
+    };
     let more = match item.more > POINTER_AT {
         true => format!(" (+{} chars)", item.more),
         false => String::new(),
@@ -1040,6 +1049,7 @@ mod tests {
             head: "Read ODS too".to_string(),
             more,
             asked_by: None,
+            waits: false,
             due: None,
         };
         assert_eq!(render_item(&item(12)), "- [7] Read ODS too\n");

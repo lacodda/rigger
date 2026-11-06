@@ -161,7 +161,21 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 
 Fields may be added; none is renamed or removed without a major version.
 
+## Moved up
+
+A project can come before its turn, and the turn it takes is the one it had coming, taken earlier: it gets no more of them for being moved. Four things move one, each settled without anyone having to remember it:
+
+| What | Settled by |
+| --- | --- |
+| `rigger queue first` - the owner's word | its next release, or `queue back` |
+| A release of something it [builds against](/rigger/reference/link/#what-a-project-builds-against) with a breaking change, since its own last release | its next release |
+| An order of its own, [built](/rigger/reference/resolve/) and released, since its own last release | its next release |
+| A neighbour's order it holds, placed with [`wish --waits`](/rigger/reference/note/): that stage cannot go on without it | resolving the order |
+
+An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0, put down or with no stage; the others leave it where it is.
+
 ## Related
+
 
 - [`priority`](/rigger/reference/priority/) - the weight that sets how often a project comes round.
 - [`go`](/rigger/reference/go/) - the same answer, with your assistant started on it.

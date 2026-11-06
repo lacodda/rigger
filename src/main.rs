@@ -11,6 +11,7 @@ mod commit;
 mod context;
 mod db;
 mod delivery;
+mod deps;
 #[allow(dead_code)]
 mod doc;
 mod export;
@@ -294,6 +295,9 @@ enum Command {
         id: i64,
         /// The answer; a question answered this way becomes a decision
         answer: Option<String>,
+        /// A neighbour's order is built, not only sorted into the plan: the neighbour moves up
+        #[arg(long, conflicts_with = "answer")]
+        built: bool,
     },
     /// Record a wish: something to sort into the plan later
     Wish {
@@ -304,6 +308,9 @@ enum Command {
         /// The neighbour asking for it, when a wish comes from one
         #[arg(long = "from", value_name = "PROJECT")]
         from_project: Option<String>,
+        /// The neighbour's stage is waiting for this: the project asked moves up until it is resolved
+        #[arg(long, requires = "from_project")]
+        waits: bool,
     },
     /// Tie two projects together: a pair, what one draws on, what draws on it
     Link {
@@ -451,6 +458,11 @@ enum LinkCommand {
     },
     /// The pairs whose halves have parted company
     Drift {},
+    /// What the projects build against, read from their manifests
+    Uses {
+        /// Only what touches this project; every project when omitted
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1310,13 +1322,19 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Mcp => mcp::serve(),
         Command::Event { project, id } => show_event(&project, id, json),
-        Command::Resolve { project, id, answer } => resolve(&project, id, answer.as_deref(), json),
-        Command::Wish { project, text, from_project } => note(&project, "wish", &text, None, from_project.as_deref(), None, json),
+        Command::Resolve { project, id, answer, built } => resolve(&project, id, answer.as_deref(), built, json),
+        Command::Wish {
+            project,
+            text,
+            from_project,
+            waits,
+        } => wish(&project, &text, from_project.as_deref(), waits, json),
         Command::Link { command } => match command {
             LinkCommand::Add { from, to, kind, note } => link_add(&from, &to, kind, note.as_deref(), json),
             LinkCommand::List { project } => link_list(project.as_deref(), json),
             LinkCommand::Remove { id } => link_remove(id, json),
             LinkCommand::Drift {} => link_drift(json),
+            LinkCommand::Uses { project } => link_uses(project.as_deref(), json),
         },
         Command::Doc { command } => match command {
             DocCommand::List { project, kind } => doc_list(&project, kind.as_deref(), json),
@@ -2243,7 +2261,20 @@ fn show_event(project: &str, id: i64, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn resolve(project: &str, id: i64, answer: Option<&str>, json: bool) -> Result<()> {
+/// Records a wish, and says when the neighbour's stage is waiting for it.
+fn wish(project: &str, text: &str, from: Option<&str>, waits: bool, json: bool) -> Result<()> {
+    note(project, "wish", text, None, from, None, json)?;
+    if waits {
+        let db = Db::open(&paths::db_path()?)?;
+        let project = working_project(&db, project)?;
+        if let Some(id) = db.latest_event_id(project.id, "wish")? {
+            db.mark_waiting(id)?;
+        }
+    }
+    Ok(())
+}
+
+fn resolve(project: &str, id: i64, answer: Option<&str>, built: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = open_project(&db, project)?;
     // A retired project's wishes and questions can still be put away - that
@@ -2251,7 +2282,7 @@ fn resolve(project: &str, id: i64, answer: Option<&str>, json: bool) -> Result<(
     if answer.is_some() {
         project.ensure_working()?;
     }
-    let (kind, body) = db.resolve_event(project.id, id, answer)?;
+    let (kind, body) = db.resolve_event(project.id, id, answer, built)?;
     if json {
         return print_json(&serde_json::json!({
             "resolved": { "id": id, "project": project.name, "was": kind, "body": body, "answer": answer }
@@ -2261,6 +2292,7 @@ fn resolve(project: &str, id: i64, answer: Option<&str>, json: bool) -> Result<(
     match kind.as_str() {
         "question" => println!("Answered [{id}]: {first_line}"),
         "blocker" => println!("Cleared [{id}]: {first_line}"),
+        "wish" if built => println!("Built [{id}]: {first_line}"),
         _ => println!("Sorted [{id}]: {first_line}"),
     }
     if answer.is_some() {
@@ -2565,6 +2597,29 @@ fn link_remove(id: i64, json: bool) -> Result<()> {
         true if json => print_json(&serde_json::json!({ "removed": id }))?,
         true => println!("Forgot link [{id}]"),
         false => bail!("the record has no link [{id}]; `rigger link list` prints the ids"),
+    }
+    Ok(())
+}
+
+/// What the projects build against, from their manifests and the record's ties.
+fn link_uses(project: Option<&str>, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    if let Some(name) = project {
+        open_project(&db, name)?;
+    }
+    let found: Vec<queue::Use> = queue::uses(&db)?
+        .into_iter()
+        .filter(|u| project.is_none_or(|name| u.consumer == name || u.supplier == name))
+        .collect();
+    if json {
+        return print_json(&serde_json::json!({ "uses": found }));
+    }
+    if found.is_empty() {
+        println!("Nothing is drawn on: no manifest names a neighbour's package, and no tie says so.");
+        return Ok(());
+    }
+    for item in &found {
+        println!("{}", queue::use_line(item));
     }
     Ok(())
 }
@@ -5368,14 +5423,19 @@ fn queue_back(project: &str, json: bool) -> Result<()> {
     let last = queue::last_turn(&db, &project)?;
     let open = db.moves(project.id, last.as_deref())?;
     for moved in &open {
-        db.resolve_event(project.id, moved.id, None)?;
+        db.resolve_event(project.id, moved.id, None, false)?;
     }
     if json {
         return show_queue(true);
     }
-    match open.is_empty() {
-        true => println!("{} was not moved up: it is in its turn already.", project.name),
-        false => println!("{} is back in its turn.", project.name),
+    let pulled = queue::gather(&db)?
+        .into_iter()
+        .find(|s| s.project == project.name)
+        .map_or(Vec::new(), |s| s.pulled);
+    match (open.is_empty(), pulled.first()) {
+        (_, Some(pull)) => println!("{} stays moved up: {}. Its next release settles that.", project.name, pull.head),
+        (true, None) => println!("{} was not moved up: it is in its turn already.", project.name),
+        (false, None) => println!("{} is back in its turn.", project.name),
     }
     Ok(())
 }

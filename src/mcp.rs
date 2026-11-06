@@ -346,6 +346,7 @@ fn tools() -> Vec<Value> {
                 "project": project_arg(),
                 "text": text_arg("What you want, and why it would help"),
                 "from": { "type": "string", "description": "The project asking, when a neighbour is placing the order" },
+                "waits": { "type": "boolean", "description": "With `from`: that project's stage cannot go on without this, so this project moves up in the queue" },
             }),
             &["project", "text"],
         ),
@@ -385,6 +386,7 @@ fn tools() -> Vec<Value> {
                 "project": project_arg(),
                 "id": { "type": "integer", "description": "Id of the question or wish, as the packet lists it" },
                 "answer": text_arg("What the owner decided; recorded as a decision. Omit for a wish."),
+                "built": { "type": "boolean", "description": "A neighbour's order is built, not only sorted into the plan: the neighbour moves up once this is released" },
             }),
             &["project", "id"],
         ),
@@ -618,11 +620,14 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             if answer.is_some() {
                 project.ensure_working()?;
             }
-            let (kind, body) = db.resolve_event(project.id, id, answer)?;
+            let built = args.get("built").and_then(Value::as_bool).unwrap_or(false);
+            let (kind, body) = db.resolve_event(project.id, id, answer, built)?;
             let first_line = body.lines().next().unwrap_or(&body);
             Ok(match (kind.as_str(), answer) {
                 ("question", Some(_)) => format!("Answered [{id}]: {first_line}\nThe answer is recorded as a decision."),
                 ("question", None) => format!("Closed question [{id}]: {first_line}"),
+                ("blocker", _) => format!("Cleared [{id}]: {first_line}"),
+                ("wish", _) if built => format!("Built [{id}]: {first_line}"),
                 _ => format!("Sorted [{id}]: {first_line}"),
             })
         }
@@ -815,12 +820,20 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
             let project = project(db)?;
             let links = db.links_of(project.id)?;
             let asked = db.asked_wishes(project.id)?;
-            if links.is_empty() && asked.is_empty() {
+            let uses: Vec<crate::queue::Use> = crate::queue::uses(db)?
+                .into_iter()
+                .filter(|u| u.consumer == project.name || u.supplier == project.name)
+                .collect();
+            if links.is_empty() && asked.is_empty() && uses.is_empty() {
                 return Ok(format!("{} is tied to nothing in the record.", project.name));
             }
             let mut out = String::new();
             for found in &links {
                 out.push_str(&crate::render_link(found));
+                out.push('\n');
+            }
+            for item in &uses {
+                out.push_str(&crate::queue::use_line(item));
                 out.push('\n');
             }
             for wish in &asked {
@@ -899,6 +912,9 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 }
                 if let Some(asker) = &asker {
                     db.name_asker(id, asker.id)?;
+                    if args.get("waits").and_then(Value::as_bool).unwrap_or(false) {
+                        db.mark_waiting(id)?;
+                    }
                 }
             }
             Ok(match (kind, &asker) {

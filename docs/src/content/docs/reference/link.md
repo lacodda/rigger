@@ -7,6 +7,7 @@ description: Tie two projects together, and see when a pair has parted company.
 rigger link add <FROM> <TO> [--kind <KIND>] [--note <TEXT>]
 rigger link list [PROJECT] [--json]
 rigger link drift [--json]
+rigger link uses [PROJECT] [--json]
 rigger link remove <ID>
 ```
 
@@ -146,6 +147,31 @@ Recording the same link twice changes nothing rather than adding a second row. A
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `removed` | integer | The id of the link that was removed. |
+
+## What a project builds against
+
+A tie says why two projects belong together, and somebody has to write it. What one project builds against is already written down in its manifests, and the build keeps that true. `link uses` reads them - `Cargo.toml` and `package.json`, at the root, in a workspace's members, and in the usual second half of an app - and adds the ties that say what no manifest can, such as one project reading another's JSON:
+
+```console
+$ rigger link uses
+gadget uses widget - widget-ui ^0.4.0
+sample uses widget - reads its JSON
+```
+
+A project uses a neighbour when a manifest of its own asks for a package the neighbour's manifests publish. A package marked private or `publish = false` publishes nothing, a path or workspace dependency is the project's own, and a package two projects both publish is left out rather than guessed at.
+
+This is the list the [queue](/rigger/reference/queue/) goes by when a release [moves a project up](/rigger/reference/queue/#moved-up).
+
+<!-- json: link uses -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `uses` | array | Who draws on whom, by consumer. |
+| `uses[]` | object | One of them. |
+| `uses[].consumer` | string | The project that draws on the other. |
+| `uses[].supplier` | string | The project drawn on. |
+| `uses[].package` | string or null | The package, from a manifest; `null` for a tie in the record. |
+| `uses[].requirement` | string or null | The version the manifest asks for, as it spells it. |
+| `uses[].note` | string or null | What the record says about the tie. |
 
 ## Related
 

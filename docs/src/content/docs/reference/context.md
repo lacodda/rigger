@@ -189,6 +189,7 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `questions_omitted` | integer | How many questions the budget left out - the newest. |
 | `wishes` | array | Wishes not yet sorted into the plan, the ones the budget kept. |
 | `wishes[]` | object | One wish. |
+| `wishes[].waits` | boolean | Present and true when the neighbour's stage is waiting for it. |
 | `wishes[].id` | integer | The wish's id; `rigger event` reads it whole. |
 | `wishes[].head` | string | The line it is known by: its bold heading, or its first sentence. |
 | `wishes[].more` | integer | How many characters longer the whole is than `head`. |

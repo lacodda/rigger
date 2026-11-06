@@ -14,7 +14,10 @@
 //!    feature or a fix since the last release, a release that did not get out,
 //!    a sitting left open. The line does not move on past it.
 //! 2. `moved` - something asked for it to come first, and it has not shipped
-//!    since.
+//!    since: the owner's word, a release of what it builds against that broke
+//!    it, or an order of its own that was built; or, the other way round, a
+//!    neighbour's stage that waits on it. The turn it takes is the one it had
+//!    coming, taken earlier: it gets no more of them for being moved.
 //! 3. `turn` - nothing presses, so it goes by waiting and weight: the highest
 //!    `(waited + 1) * weight` is next, where `waited` is how many releases the
 //!    line has made since this project's last one.
@@ -141,8 +144,11 @@ pub struct Standing {
     pub waited: usize,
     /// What stops its tag and is out of reach, oldest first.
     pub blockers: Vec<Note>,
-    /// What asked for it to come first, oldest first.
+    /// What the owner asked to come first, oldest first.
     pub moves: Vec<Note>,
+    /// What its neighbours need of it, oldest first. Unlike the owner's word this
+    /// does not bring back a project set aside on purpose.
+    pub pulled: Vec<Note>,
     pub waiting: usize,
     pub asked: usize,
 }
@@ -298,6 +304,127 @@ pub fn changed_weight(current: u32, change: &str) -> Result<u32> {
     }
 }
 
+/// One project drawing on another: what `deps` reads from the manifests, and the
+/// ties the record keeps for what no manifest says, such as a command's output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Use {
+    pub consumer: String,
+    pub supplier: String,
+    /// The package, or `None` for a tie the record keeps.
+    pub package: Option<String>,
+    /// The version the manifest asks for.
+    pub requirement: Option<String>,
+    /// What the record says about the tie.
+    pub note: Option<String>,
+}
+
+/// Who draws on whom across the work, each pair once, a manifest over a tie.
+pub fn uses(db: &Db) -> Result<Vec<Use>> {
+    let projects = db.projects()?;
+    let repos: Vec<(String, std::path::PathBuf)> = projects
+        .iter()
+        .filter(|p| p.kind.reads_git())
+        .map(|p| (p.name.clone(), std::path::PathBuf::from(&p.path)))
+        .collect();
+    let mut out: Vec<Use> = crate::deps::uses(&repos)
+        .into_iter()
+        .map(|u| Use {
+            consumer: u.consumer,
+            supplier: u.supplier,
+            package: Some(u.package),
+            requirement: Some(u.requirement),
+            note: None,
+        })
+        .collect();
+    let working = |name: &str| projects.iter().any(|p| p.name == name);
+    for project in &projects {
+        for link in db.links_of(project.id)? {
+            // Seen from both ends, each saying which it is: the consumer's end
+            // is the one to read. A manifest says more about the same two.
+            if link.kind != crate::link::Kind::Consumer || !working(&link.far.project) {
+                continue;
+            }
+            if !out.iter().any(|u| u.consumer == link.near.project && u.supplier == link.far.project) {
+                out.push(Use {
+                    consumer: link.near.project.clone(),
+                    supplier: link.far.project.clone(),
+                    package: None,
+                    requirement: None,
+                    note: link.note.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.consumer
+            .cmp(&b.consumer)
+            .then_with(|| a.supplier.cmp(&b.supplier))
+            .then_with(|| a.package.cmp(&b.package))
+    });
+    Ok(out)
+}
+
+/// One use, in a line.
+pub fn use_line(item: &Use) -> String {
+    let through = match (&item.package, &item.requirement, &item.note) {
+        (Some(package), Some(requirement), _) => format!("{package} {requirement}"),
+        (Some(package), None, _) => package.clone(),
+        (None, _, Some(note)) => note.clone(),
+        (None, _, None) => "a tie in the record".to_string(),
+    };
+    format!("{} uses {} - {through}", item.consumer, item.supplier)
+}
+
+/// What a project's neighbours need of it, and it of them: see the head of this
+/// module. Worked out each time, so it needs nobody to remember to undo it: the
+/// project's next release is what settles the first two.
+///
+/// A project that has never released has nothing to catch up with yet. An order
+/// built and not yet released waits for the release, like the work it is.
+fn pulls(db: &Db, project: &crate::db::Project, last_turn: Option<&str>, all: &[crate::db::Project], uses: &[Use]) -> Result<Vec<Note>> {
+    let mut out = Vec::new();
+    for order in db.waited_on(project.id)? {
+        let head = crate::context::headline(&order.body);
+        out.push(Note {
+            id: order.id,
+            head: format!("{} waits on it: {head}", order.asked_by),
+            since: String::new(),
+        });
+    }
+    let Some(last_turn) = last_turn else {
+        return Ok(out);
+    };
+    let mut seen = std::collections::HashSet::new();
+    for item in uses.iter().filter(|u| u.consumer == project.name) {
+        let Some(supplier) = all.iter().find(|p| p.name == item.supplier) else {
+            continue;
+        };
+        if !seen.insert(supplier.id) {
+            continue;
+        }
+        for change in db.breaking_released(supplier.id, last_turn)? {
+            let subject = change.body.lines().next().unwrap_or_default().trim_start_matches("breaking: ");
+            out.push(Note {
+                id: change.id,
+                head: format!("{} broke what it uses: {subject}", supplier.name),
+                since: change.date,
+            });
+        }
+        let released = db.last_release_moment(supplier.id)?;
+        if db.changes_after(supplier.id, released.as_deref())?.is_empty() {
+            for built in db.built_orders(supplier.id, project.id, last_turn)? {
+                out.push(Note {
+                    id: built.id,
+                    head: format!("{} built what it asked for: {}", supplier.name, crate::context::headline(&built.body)),
+                    since: built.date,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.since.cmp(&b.since).then_with(|| a.id.cmp(&b.id)));
+    Ok(out)
+}
+
 /// What every repository holds, read side by side. Walking a working tree is
 /// nearly all waiting on the disk, and the only slow part of this that a
 /// person is sitting in front of, so nothing is gained by taking turns.
@@ -336,11 +463,14 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
     let projects = db.projects()?;
     let mut held = read_held(db, &projects)?;
     let releases = db.release_moments()?;
-    for project in projects {
+    let uses = uses(db)?;
+    for project in &projects {
         // A place the record keeps for itself is not work anyone does.
         if !project.kind.has_a_place() {
             continue;
         }
+        let last_turn = last_turn(db, project)?;
+        let pulled = pulls(db, project, last_turn.as_deref(), &projects, &uses)?;
         let stage = db.current_stage(project.id)?.map(|stage| {
             let open: Vec<&crate::db::Task> = stage.tasks.iter().chain(&stage.asleep).collect();
             Stage {
@@ -352,7 +482,6 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
 
         let released = db.last_release_moment(project.id)?;
         let open = db.open_session(project.id)?;
-        let last_turn = last_turn(db, &project)?;
         let waited = last_turn
             .as_deref()
             .map_or(releases.len(), |at| releases.iter().filter(|moment| moment.as_str() > at).count());
@@ -368,11 +497,12 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
             sitting: open.map(|s| s.started_at),
             blockers: notes(db.blockers(project.id)?),
             moves: notes(db.moves(project.id, last_turn.as_deref())?),
+            pulled,
             last_turn,
             waited,
             waiting: db.count_open_events(project.id, "question")? as usize,
             asked: db.asked_wishes(project.id)?.len(),
-            project: project.name,
+            project: project.name.clone(),
         });
     }
     Ok(out)
@@ -418,13 +548,15 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         undelivered: s.undelivered.clone(),
         sitting: s.sitting.clone(),
     };
-    let moved = s.moves.first();
+    let asked = s.moves.first();
 
     // Set aside on purpose, a project is not holding the line up, whatever it
-    // was left holding - unless it was moved up, which is asking for it.
+    // was left holding - unless the owner moved it up, which is asking for it.
     let out = s.weight == 0;
     let put_down = s.stage.as_ref().is_some_and(|stage| stage.put_down);
     let is_unfinished = !unfinished.is_empty() && !out && !put_down;
+    let aside = out || put_down || (s.stage.is_none() && s.kind != Kind::Folder);
+    let moved = asked.or(s.pulled.first().filter(|_| !aside));
     if !is_unfinished && moved.is_none() {
         if out {
             return Err(Aside::Out);
@@ -625,6 +757,7 @@ mod tests {
             waited,
             blockers: Vec::new(),
             moves: Vec::new(),
+            pulled: Vec::new(),
             waiting: 0,
             asked: 0,
         }

@@ -100,7 +100,7 @@ A `change` can also arrive on its own: [`rigger sync`](/rigger/reference/sync/) 
 
 ## `rigger wish`
 
-A wish is something to sort into the plan later, so it needs no kind:
+A wish is something to sort into the plan later, so it needs no kind. Placed by a neighbour with `--from`, it shows as that neighbour's order; with `--waits` as well, that neighbour's stage cannot go on without it, and the project asked [moves up](/rigger/reference/queue/#moved-up) until it is resolved:
 
 ```console
 $ rigger wish sample "Show how many days the project has gone without a commit."
