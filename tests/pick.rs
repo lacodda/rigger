@@ -212,7 +212,10 @@ fn what_has_not_reached_the_remote_is_unfinished() {
 
     // A release the record knows fell short holds it up as well, and one it
     // knows got out is not asked about again.
-    rigger(data.path()).args(["note", "alpha", "--kind", "shipped", "--tag", "v0.2.0"]).assert().success();
+    rigger(data.path())
+        .args(["note", "alpha", "--kind", "shipped", "--tag", "v0.2.0"])
+        .assert()
+        .success();
     assert_eq!(unfinished()["undelivered"], "v0.2.0: tag exists, no release");
     rigger(data.path())
         .args(["note", "alpha", "--kind", "shipped", "--tag", "v0.2.0", "--release", "--registry", "npm"])

@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.34.0] - 2026-11-05
+
+### Breaking Changes
+
+- **Start the assistant on what comes next, and hold the line**
+`rigger open` is gone, `rigger go <project>` takes its
+place. It could not start Claude Code on Windows at all. In `pick
+--json` the reason `unseen` and the fields `unseen`, `untagged` and
+`sitting_open` give way to the reason `unfinished` and the object
+`unfinished`.
+
+### Build
+- Take furca-core 0.10 and bring the docs to the line's standard
+
+### Features
+- Start the assistant on what comes next, and hold the line
+
+### Testing
+- Hold a release the record knows fell short
+
 ## [0.33.0] - 2026-11-02
 
 ### Features

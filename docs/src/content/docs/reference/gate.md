@@ -63,8 +63,8 @@ Only this sitting's runs count: a gate that went red a week ago and was never ru
 Prints what would run, and runs nothing:
 
 ```console
-$ rigger gate rigger --check
-rigger would run, in C:\Projects\rigger:
+$ rigger gate sample --check
+sample would run, in C:\dev\sample:
   cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
