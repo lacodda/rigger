@@ -88,7 +88,9 @@ pub fn of(db: &Db, project: &Project) -> Result<Tail> {
     let last_pass = db.last_tail_pass(project.id)?;
     let released = db.last_release_moment(project.id)?;
     let passed_this_turn = match (&last_pass, &released) {
-        (Some(pass), Some(release)) => pass > release,
+        // The record keeps seconds, and one second holding both says nothing
+        // about which came first: this errs towards not asking twice.
+        (Some(pass), Some(release)) => pass >= release,
         (Some(_), None) => true,
         (None, _) => false,
     };
