@@ -3,14 +3,16 @@
 //! The hub is the history of a project written by hand; this reads it once so
 //! that everything after it can be a query. Importing the same hub again must
 //! be safe and quiet: a stage is identified by its version, a task by its
-//! text within a stage, a decision by its date and body. Nothing is deleted -
-//! a line dropped from the plan stays in the record as the task it was.
+//! text, a decision by its date and body. Nothing is deleted - a line dropped
+//! from the plan stays in the record as the task it was.
 
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::db::{Change, Db};
-use crate::hub::Hub;
+use std::collections::HashSet;
+
+use crate::db::{Change, Claims, Db, LineRule, Upserted};
+use crate::hub::{Hub, Stage};
 
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
@@ -18,6 +20,8 @@ pub struct Report {
     pub versions_updated: u32,
     pub tasks_added: u32,
     pub tasks_updated: u32,
+    /// Carried with their history to the stage that now lists them.
+    pub tasks_moved: u32,
     /// Struck from the hub since it was last read.
     pub tasks_dropped: u32,
     pub versions_dropped: u32,
@@ -57,6 +61,7 @@ impl Report {
             + self.versions_updated
             + self.tasks_added
             + self.tasks_updated
+            + self.tasks_moved
             + self.tasks_dropped
             + self.versions_dropped
             + self.questions_withdrawn
@@ -90,6 +95,20 @@ fn tally(change: Change, added: &mut u32, updated: &mut u32) {
         Change::Updated => *updated += 1,
         Change::Unchanged => {}
     }
+}
+
+/// One stage as one file reads it, on its way to the record.
+struct Reading<'a> {
+    stage: &'a Stage,
+    version: Upserted,
+    /// The plan's boxes speak for this stage's tasks.
+    may_reopen: bool,
+    /// A stage still to come that came back under another title. What stands
+    /// on the number now is not what stood there: a plan renumbered reads this
+    /// way, and the tasks the record holds under the number are somebody else's.
+    another_stage: bool,
+    /// The tasks its lines name by their text in this stage.
+    named: HashSet<i64>,
 }
 
 pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
@@ -134,6 +153,7 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
     let closed = hub.closed_stages.iter().map(|stage| (stage, true));
     let open = hub.open_stages.iter().map(|stage| (stage, false));
     let mut named = Vec::new();
+    let mut readings = Vec::new();
     for (stage, from_changelog) in closed.chain(open) {
         // Named whether or not its file speaks: a stage the file holds is
         // not one the hub struck, even when the file is not read back.
@@ -150,16 +170,87 @@ pub fn import(db: &Db, project_id: i64, hub: &Hub) -> Result<Report> {
         // before, on a version that had not shipped yet so the guard for
         // shipped ones did not cover them.
         let may_reopen = (from_changelog || !version.shipped) && !hub.plan_is_generated;
-        let mut kept = Vec::new();
-        for (position, task) in stage.tasks.iter().enumerate() {
-            let (id, change) = db.upsert_task(project_id, version.id, position, task, may_reopen)?;
-            tally(change, &mut report.tasks_added, &mut report.tasks_updated);
-            kept.push(id);
+        let another_stage = !version.shipped && version.was_titled.is_some();
+        let mut own = HashSet::new();
+        for task in &stage.tasks {
+            own.extend(db.task_with_text(version.id, &task.title)?);
         }
-        // What the reading no longer lists is struck, when the reading is
-        // the one that speaks for the stage. A plan behind a tag does not.
-        if may_reopen {
-            report.tasks_dropped += db.drop_tasks_not_in(version.id, &kept)?;
+        readings.push(Reading {
+            stage,
+            version,
+            may_reopen,
+            another_stage,
+            named: own,
+        });
+    }
+
+    // Every line that names a task of its own stage holds it before any line
+    // is matched by anything weaker, wherever in the hub that line stands.
+    let mut claims = Claims {
+        taken: readings.iter().flat_map(|reading| reading.named.iter().copied()).collect(),
+        ..Claims::default()
+    };
+    // Nothing is struck until every line has been placed: a line is carried
+    // to a later stage out of the one that lists it no more, and striking
+    // that stage as it was read would strike what was about to leave it. Kept
+    // by version, not by reading: a stage read from two files keeps what
+    // either of them lists.
+    let mut striking: Vec<(i64, Vec<i64>, bool)> = Vec::new();
+    let mut emptied: Vec<i64> = Vec::new();
+    for reading in &readings {
+        claims.here.clone_from(&reading.named);
+        let rule = LineRule {
+            may_reopen: reading.may_reopen,
+            may_move: !reading.version.shipped,
+            by_position: !reading.another_stage,
+        };
+        let mut kept = Vec::new();
+        for (position, task) in reading.stage.tasks.iter().enumerate() {
+            let line = db.upsert_task(project_id, reading.version.id, position, task, rule, &mut claims)?;
+            match line.moved_from {
+                Some(from) => {
+                    report.tasks_moved += 1;
+                    emptied.push(from);
+                }
+                None => tally(line.change, &mut report.tasks_added, &mut report.tasks_updated),
+            }
+            kept.push(line.id);
+        }
+        // What the reading no longer lists is struck, when the reading is the
+        // one that speaks for the stage. A plan behind a tag does not. A stage
+        // that took over a number does, generated plan or not: what is left
+        // under the number belonged to the stage that stood there.
+        let strike = reading.may_reopen || reading.another_stage;
+        match striking.iter_mut().find(|(id, ..)| *id == reading.version.id) {
+            Some((_, held, speaks)) => {
+                held.extend(kept);
+                *speaks |= strike;
+            }
+            None => striking.push((reading.version.id, kept, strike)),
+        }
+    }
+    for (id, kept, strike) in &striking {
+        if !strike {
+            continue;
+        }
+        let struck = db.drop_tasks_not_in(*id, kept)?;
+        report.tasks_dropped += struck;
+        let renamed = readings.iter().find(|reading| reading.version.id == *id && reading.another_stage);
+        if let (Some(reading), 1..) = (renamed, struck) {
+            report.warnings.push(format!(
+                "{} is now \"{}\", not \"{}\": {struck} of the tasks it held, in no stage of the plan any more, struck",
+                reading.stage.version,
+                reading.stage.title.as_deref().unwrap_or_default(),
+                reading.version.was_titled.as_deref().unwrap_or_default(),
+            ));
+        }
+    }
+    // A stage no line lists that has given all its tasks to the ones that do.
+    emptied.sort_unstable();
+    emptied.dedup();
+    for id in emptied {
+        if !readings.iter().any(|reading| reading.version.id == id) {
+            report.versions_dropped += db.drop_version_if_emptied(id)?;
         }
     }
     // A stage neither file names any more was renumbered or struck by

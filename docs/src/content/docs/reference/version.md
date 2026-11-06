@@ -3,7 +3,7 @@ title: version
 description: Plan a version, and read one whole.
 ---
 
-A version is a stage of a project's plan. `version add` plans one, `import` reads them from a hub and `sync` from the tags; this command plans one and reads one whole.
+A version is a stage of a project's plan. `version add` plans one, `import` reads them from a hub and `sync` from the tags; this command plans one, renumbers one and reads one whole.
 
 ## `version add`
 
@@ -25,7 +25,61 @@ $ rigger version add sample v0.1 --task "read the sheet" --task "draw the chart"
 v0.1.0 was in the plan already; 1 task added
 ```
 
-A stage that shipped takes no new tasks - a task for it is a task for the next one - and text that is not a version (`next`, `0.3`) is refused: a version is written the way a tag would be. A new stage goes last in the plan, and an [export](/rigger/reference/export/) to a hub writes it there; read back, the hub changes nothing. Under `--json` it answers with the version as `version show` prints it.
+A stage that shipped takes no new tasks - a task for it is a task for the next one - and a number the plan struck is free to plan again. Text that is not a version (`next`, `0.3`) is refused: a version is written the way a tag would be. A new stage goes last in the plan, and an [export](/rigger/reference/export/) to a hub writes it there; read back, the hub changes nothing. Under `--json` it answers with the version as `version show` prints it.
+
+## `version move`
+
+```
+rigger version move <PROJECT> <FROM> <TO> [--shift] [--json]
+```
+
+Gives a stage still to come another number, in the record. It is the same stage afterwards: its tasks, their history and the links anchored on it follow without anything being matched, and its heading says the new number.
+
+```console
+$ rigger version move sample v0.5.0 v0.7.0
+v0.5.0 is now v0.7.0
+```
+
+A number another stage holds is refused. `--shift` opens a place instead: the stage standing there moves up one, and the one behind it if it is in the way, as far as the first free number and no further. That is how a stage is inserted into the middle of a plan.
+
+```console
+$ rigger version move sample v0.7.0 v0.3.0 --shift
+v0.7.0 is now v0.3.0
+v0.3.0 is now v0.4.0
+v0.4.0 is now v0.5.0
+```
+
+A stage crossing a heading of the plan changes block with its number, and the prose between the blocks stays where it stands. A shift keeps how the plan spells its numbers: `v1.9` is followed by `v1.10`, `v1.10.1` by `v1.10.2`.
+
+What it will not do:
+
+- Move a stage that shipped: its number belongs to its tag.
+- Put a stage at or behind the last release: a stage still to come goes after it.
+- Shift a stage that opens a major, like `v1.0.0`, which has no next number; move it by name if that is what is meant.
+
+A number the plan struck is free. The struck stage keeps its history under the spelling `v0.4.0+struck-12`, which reads as the same number and is never preferred over a stage standing there.
+
+Under `--json` it answers with the plan as `version list` prints it, and what moved. Moving a stage to the number it has moves nothing.
+
+<!-- json: version move -->
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | The project. |
+| `moved` | array | What changed number, the stage asked for first. |
+| `moved[]` | object | One stage. |
+| `moved[].from` | string | The number it had. |
+| `moved[].to` | string | The number it has now. |
+| `versions` | array | The plan as it now stands, as `version list` prints it. |
+| `versions[]` | object | One version. |
+| `versions[].version` | string | The version. |
+| `versions[].title` | string or null | What the stage is about. |
+| `versions[].status` | string | `planned`. |
+| `versions[].shipped_at` | string or null | The day it shipped; `null` for a stage still to come. |
+| `versions[].tasks` | integer | Its tasks, the dropped ones aside. |
+| `versions[].open` | integer | How many of them are open. |
+| `versions[].current` | boolean | It is the stage the project is on. |
+| `skipped` | array | Numbers skipped between one version and the next, as `v0.4`. |
+| `skipped[]` | string | One of them. |
 
 ## `version show`
 

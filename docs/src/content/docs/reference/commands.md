@@ -45,6 +45,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger go`](/rigger/reference/go/) | v0.34.0 | Work on what comes next: the project, its stage, your assistant started on it; a turn left unfinished comes back |
 | [`rigger link uses`](/rigger/reference/link/#what-a-project-builds-against) | v0.36.0 | What the projects build against, from their manifests; a release that breaks its users moves them up the queue |
 | [`rigger version list`](/rigger/reference/version/#version-list) | v0.40.0 | The whole plan of a project, in order |
+| [`rigger version move`](/rigger/reference/version/#version-move) | v0.44.0 | Give a stage another number in the record, shifting what stands in its way |
 | [`rigger queue --ahead`](/rigger/reference/queue/#--ahead) | v0.39.0 | The queue played forward: who comes when, and on which stage |
 | [`rigger refactor`](/rigger/reference/refactor/) | v0.38.0 | Whose turn it is to be refactored, one at a time across the line, and how |
 | [`rigger tail`](/rigger/reference/tail/) | v0.37.0 | How much of each plan is left; a turn starts by growing or sorting it when due |
@@ -70,7 +71,7 @@ The command surface arrives one release at a time. Each release adds its command
 What a command prints is the contract a program reading it relies on:
 
 - **A command that shows prints what it shows.** Each page has a table under the marker of its command - every field, as a path (`card.key`, `links[].project`, `[].version` for the items of a list printed whole), its type, and what it means.
-- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event as [`event`](/rigger/reference/event/) reads it, and whether this write is what put it there; `version add` with the version as `version show` prints it; `project add` and the rest with the project as `project show` prints it.
+- **A command that writes prints what it wrote, as it now stands, in the shape of the command that reads it.** `task new` and every other write to a card answer with the card as `task show` lists it; `note` and `wish` with the event as [`event`](/rigger/reference/event/) reads it, and whether this write is what put it there; `version add` with the version as `version show` prints it; `version move` with the plan as `version list` prints it, and what moved; `project add` and the rest with the project as `project show` prints it.
 - **One type per field.** A field is a string or a number or an object - plus `null` where it can be absent - and never one of two shapes depending on the case.
 - **Held by a test.** Every command is run with `--json` against one synthetic record; a field printed without its row in the table, a row nothing prints, or a type the table does not allow fails the build. A field is not renamed or removed without the table - and the reader - finding out.
 

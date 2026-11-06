@@ -1259,6 +1259,77 @@ pub struct Upserted {
     pub id: i64,
     pub change: Change,
     pub shipped: bool,
+    /// What this number was called until this reading, when it was called
+    /// something else: another stage may have come to stand on the number.
+    pub was_titled: Option<String>,
+}
+
+/// How a reading of a stage may match its lines to tasks the record holds.
+#[derive(Debug, Clone, Copy)]
+pub struct LineRule {
+    /// An empty box may reopen a task that is done.
+    pub may_reopen: bool,
+    /// A line may take a task from another stage still to come. Only a line
+    /// of a stage still to come: what shipped says what went out under its
+    /// number, and takes nothing.
+    pub may_move: bool,
+    /// A line may take the task at its position, as a line reworded in
+    /// place. Only while the stage is the stage it was.
+    pub by_position: bool,
+}
+
+/// The tasks a reading of a hub has already given to a line.
+///
+/// Matching one line at a time let an early line take what a later line
+/// was going to name: a task inserted at the top of a stage reworded the
+/// task below it, and a stage added further down the plan stole a line its
+/// neighbour still listed. So every line that names a task of its own stage
+/// claims it before any line is matched by anything weaker.
+#[derive(Debug, Default)]
+pub struct Claims {
+    /// Across the whole reading: no line takes these from another stage.
+    pub taken: std::collections::HashSet<i64>,
+    /// In the stage being read: no line takes these by position. Held apart
+    /// because a stage is read from two files, and what the changelog's copy
+    /// of it claimed is not out of reach of the plan's copy.
+    pub here: std::collections::HashSet<i64>,
+}
+
+/// What became of one line of a plan.
+#[derive(Debug)]
+pub struct WrittenLine {
+    pub id: i64,
+    pub change: Change,
+    /// The stage the task stood in, when this line took it from another.
+    pub moved_from: Option<i64>,
+}
+
+/// A number a stage gave up for another, as `version move` left it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Renumbered {
+    pub from: String,
+    pub to: String,
+}
+
+/// The heading of a stage the record composes itself.
+fn stage_heading(name: &str, title: Option<&str>) -> String {
+    match title {
+        Some(title) => format!("{name} · {title}"),
+        None => name.to_string(),
+    }
+}
+
+/// The number after this one, in the same spelling: a patch counts patches,
+/// and anything else counts minors. Never a major: a major is a place on the
+/// owner's map, not the next free number.
+fn next_number(name: &str) -> String {
+    let (major, minor, patch) = version_order(name);
+    let parts = name.trim_start_matches(['v', 'V']).split('.').count();
+    match (patch, parts) {
+        (1.., _) => format!("v{major}.{minor}.{}", patch + 1),
+        (0, 3..) => format!("v{major}.{}.0", minor + 1),
+        (0, _) => format!("v{major}.{}", minor + 1),
+    }
 }
 
 /// A stage as the record already holds it: its id, title, status, the
@@ -2441,6 +2512,12 @@ impl Db {
             (false, Some((_, _, _, _, was_notes, was_after, _))) => (was_notes.clone(), was_after.clone()),
             _ => (notes, notes_after),
         };
+        // Only between two titles: a stage a tag left untitled that a plan
+        // now names is being named, and nothing says it was anything else.
+        let was_titled = existing
+            .as_ref()
+            .and_then(|(_, title, ..)| title.clone())
+            .filter(|was| stage.title.as_deref().is_some_and(|now| now != was));
         match existing {
             Some((id, title, was_status, shipped_at, was_notes, was_after, was_shape)) => {
                 // The prose and the shape join the comparison, or a hub whose
@@ -2459,6 +2536,7 @@ impl Db {
                         id,
                         change: Change::Unchanged,
                         shipped: status == "shipped",
+                        was_titled,
                     });
                 }
                 self.conn.execute(
@@ -2483,6 +2561,7 @@ impl Db {
                     id,
                     change: Change::Updated,
                     shipped: status == "shipped",
+                    was_titled,
                 })
             }
             None => {
@@ -2508,6 +2587,7 @@ impl Db {
                     id: self.conn.last_insert_rowid(),
                     change: Change::Added,
                     shipped: status == "shipped",
+                    was_titled,
                 })
             }
         }
@@ -2528,38 +2608,79 @@ impl Db {
         Ok(candidate.filter(|(_, name)| version_order(name) == version_order(&stage.version)))
     }
 
-    /// Records a task of a version. The pair (version, title) identifies it:
-    /// the hub has no ids, and the text of a line is what the owner edits
-    /// least once a stage is written.
-    pub fn upsert_task(&self, project_id: i64, version_id: i64, position: usize, task: &crate::hub::Task, may_reopen: bool) -> Result<(i64, Change)> {
-        let status = if task.done { "done" } else { "new" };
-        let position = position as i64;
-
-        // The text first: a line that moved within its stage is the same
-        // line, and matching it by text keeps its history when a task is
-        // inserted above it.
-        let existing: Option<(i64, String, String, Option<i64>)> = self
+    /// The task of a stage with this text: the line of a plan that names it.
+    pub fn task_with_text(&self, version_id: i64, title: &str) -> Result<Option<i64>> {
+        Ok(self
             .conn
             .query_row(
-                "SELECT id, status, title, position FROM tasks WHERE version_id = ?1 AND title = ?2",
-                params![version_id, task.title],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                "SELECT id FROM tasks WHERE version_id = ?1 AND title = ?2 ORDER BY id LIMIT 1",
+                params![version_id, title],
+                |r| r.get(0),
             )
-            .optional()?
-            // Then the position: a line that was reworded in place is also
-            // the same line. Without this, editing a plan added a second
-            // task and left the first open for ever - and a packet went on
-            // showing the old wording of work already under way.
-            .or(self
-                .conn
-                .query_row(
-                    "SELECT id, status, title, position FROM tasks WHERE version_id = ?1 AND position = ?2",
-                    params![version_id, position],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                )
-                .optional()?);
+            .optional()?)
+    }
 
-        match existing {
+    /// Records a line of a plan as a task, or finds the task it already is.
+    ///
+    /// The hub has no ids, so a line is matched by what it says, most certain
+    /// first. Its text in its own stage: a line that moved within its stage is
+    /// the same line. Its text in another stage still to come, unless a line
+    /// there still names it: a stage renumbered carries its tasks with it,
+    /// with their history. Last its position, while the stage is the one it
+    /// was: a line reworded in place is the same line, and without this an
+    /// edit added a second task and left the first open for ever.
+    ///
+    /// Position used to come before any of this could say otherwise, and on a
+    /// number that had changed hands it gave a stage's closed tasks the words
+    /// of whatever stood there now. No match is better than that one: a line
+    /// no rule can place is a new task, and what it left behind is struck.
+    pub fn upsert_task(
+        &self,
+        project_id: i64,
+        version_id: i64,
+        position: usize,
+        task: &crate::hub::Task,
+        rule: LineRule,
+        claims: &mut Claims,
+    ) -> Result<WrittenLine> {
+        type Held = (i64, String, String, Option<i64>);
+        let status = if task.done { "done" } else { "new" };
+        let position = position as i64;
+        let row = |r: &rusqlite::Row| -> rusqlite::Result<Held> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)) };
+
+        let mut moved_from = None;
+        let mut existing: Option<Held> = match self.task_with_text(version_id, &task.title)? {
+            Some(id) => Some(self.conn.query_row("SELECT id, status, title, position FROM tasks WHERE id = ?1", [id], row)?),
+            None => None,
+        };
+        if existing.is_none() && rule.may_move {
+            let mut stmt = self.conn.prepare(
+                "SELECT t.id, t.status, t.title, t.position, t.version_id FROM tasks t JOIN versions v ON v.id = t.version_id \
+                 WHERE t.project_id = ?1 AND t.title = ?2 AND t.version_id <> ?3 AND v.status = 'planned' AND t.status <> 'dropped' \
+                 ORDER BY t.id",
+            )?;
+            let found = stmt
+                .query_map(params![project_id, task.title, version_id], |r| Ok((row(r)?, r.get::<_, i64>(4)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .find(|(held, _)| !claims.taken.contains(&held.0));
+            if let Some((held, from)) = found {
+                existing = Some(held);
+                moved_from = Some(from);
+            }
+        }
+        if existing.is_none() && rule.by_position {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, status, title, position FROM tasks WHERE version_id = ?1 AND position = ?2 AND status <> 'dropped' ORDER BY id")?;
+            existing = stmt
+                .query_map(params![version_id, position], row)?
+                .collect::<rusqlite::Result<Vec<Held>>>()?
+                .into_iter()
+                .find(|held| !claims.here.contains(&held.0));
+        }
+
+        let (id, change) = match existing {
             Some((id, was, title, at)) => {
                 // A task the record closed is not reopened by a plan that
                 // has not been told. The stage shipped, the task was closed
@@ -2567,23 +2688,24 @@ impl Db {
                 // rather than a decision - found when adopting this
                 // project's own hub reopened the three tasks of a version
                 // tagged two days before.
-                let status = if !may_reopen && was == "done" { "done" } else { status };
+                let status = if !rule.may_reopen && was == "done" { "done" } else { status };
                 // An empty box says "not done", not "new": a task that is
                 // active or frozen in the record keeps that through a
                 // reading of its hub, or every export and import would
                 // reset the desk to the start.
                 let status = if !task.done && is_open_status(&was) { was.as_str() } else { status };
-                if was == status && title == task.title && at == Some(position) {
-                    return Ok((id, Change::Unchanged));
+                if was == status && title == task.title && at == Some(position) && moved_from.is_none() {
+                    (id, Change::Unchanged)
+                } else {
+                    let closed_at = (status == "done").then(now);
+                    self.conn.execute(
+                        "UPDATE tasks SET status = ?1, \
+                         closed_at = CASE WHEN ?1 = 'done' AND status = 'done' THEN closed_at ELSE ?2 END, \
+                         title = ?3, position = ?4, version_id = ?5 WHERE id = ?6",
+                        params![status, closed_at, task.title, position, version_id, id],
+                    )?;
+                    (id, Change::Updated)
                 }
-                let closed_at = (status == "done").then(now);
-                self.conn.execute(
-                    "UPDATE tasks SET status = ?1, \
-                     closed_at = CASE WHEN ?1 = 'done' AND status = 'done' THEN closed_at ELSE ?2 END, \
-                     title = ?3, position = ?4 WHERE id = ?5",
-                    params![status, closed_at, task.title, position, id],
-                )?;
-                Ok((id, Change::Updated))
             }
             None => {
                 self.conn.execute(
@@ -2591,9 +2713,12 @@ impl Db {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![project_id, version_id, task.title, status, now(), task.done.then(now), position],
                 )?;
-                Ok((self.conn.last_insert_rowid(), Change::Added))
+                (self.conn.last_insert_rowid(), Change::Added)
             }
-        }
+        };
+        claims.taken.insert(id);
+        claims.here.insert(id);
+        Ok(WrittenLine { id, change, moved_from })
     }
 
     /// Marks the open tasks of a stage that its reading no longer lists.
@@ -2607,6 +2732,20 @@ impl Db {
         let ids = keep.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
         let dropped = self.conn.execute(
             &format!("UPDATE tasks SET status = 'dropped' WHERE version_id = ?1 AND status NOT IN ('done', 'dropped') AND id NOT IN ({ids})"),
+            [version_id],
+        )?;
+        Ok(dropped as u32)
+    }
+
+    /// Strikes a stage to come that has nothing left in it, the last of its
+    /// tasks having gone to whichever stage now lists them. A generated plan
+    /// cannot strike a stage for not naming it, since a stage added after the
+    /// export is not named either, but this one is empty because the plan
+    /// said so, line by line.
+    pub fn drop_version_if_emptied(&self, version_id: i64) -> Result<u32> {
+        let dropped = self.conn.execute(
+            "UPDATE versions SET status = 'dropped' WHERE id = ?1 AND status = 'planned' \
+             AND NOT EXISTS (SELECT 1 FROM tasks WHERE version_id = ?1 AND status <> 'dropped')",
             [version_id],
         )?;
         Ok(dropped as u32)
@@ -3499,7 +3638,11 @@ impl Db {
     /// is what a tag leaves behind, and `doctor` tells the two apart.
     pub fn add_version(&self, project_id: i64, name: &str, title: Option<&str>) -> Result<(i64, String, Change)> {
         let wanted = version_order(name);
-        let mut stmt = self.conn.prepare("SELECT id, name, title FROM versions WHERE project_id = ?1")?;
+        // A number the plan struck is free: finding its row said the stage was
+        // in the plan already, and put new tasks under a stage nothing shows.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, title FROM versions WHERE project_id = ?1 AND status <> 'dropped'")?;
         let found = stmt
             .query_map([project_id], |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
@@ -3507,16 +3650,12 @@ impl Db {
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .find(|(_, n, _)| version_order(n) == wanted);
-        let heading = |name: &str, title: Option<&str>| match title {
-            Some(title) => format!("{name} · {title}"),
-            None => name.to_string(),
-        };
         match found {
             Some((id, name, had)) => match title {
                 Some(title) if had.as_deref() != Some(title) => {
                     self.conn.execute(
                         "UPDATE versions SET title = ?1, heading = ?2 WHERE id = ?3",
-                        params![title, heading(&name, Some(title)), id],
+                        params![title, stage_heading(&name, Some(title)), id],
                     )?;
                     Ok((id, name, Change::Updated))
                 }
@@ -3526,6 +3665,7 @@ impl Db {
                 // Last in the plan, in the block the plan's last stage is in,
                 // laid out as an import of the exported plan would lay it out
                 // - so that the trip through a hub and back changes nothing.
+                self.vacate_struck(project_id, name)?;
                 let (rank, after_prose): (i64, i64) = self.conn.query_row(
                     "SELECT COALESCE(MAX(rank) + 1, 0), COALESCE((SELECT after_prose FROM versions WHERE project_id = ?1 AND status <> 'shipped' ORDER BY rank DESC LIMIT 1), 0)
                      FROM versions WHERE project_id = ?1 AND status <> 'shipped'",
@@ -3535,11 +3675,128 @@ impl Db {
                 self.conn.execute(
                     "INSERT INTO versions (project_id, name, title, status, heading, heading_depth, rank, after_prose, gap_after)
                      VALUES (?1, ?2, ?3, 'planned', ?4, 2, ?5, ?6, 1)",
-                    params![project_id, name, title, heading(name, title), rank, after_prose],
+                    params![project_id, name, title, stage_heading(name, title), rank, after_prose],
                 )?;
                 Ok((self.conn.last_insert_rowid(), name.to_string(), Change::Added))
             }
         }
+    }
+
+    /// Lets go of a number a struck stage still spells. The number is free,
+    /// and the row stays for its history, under a spelling that reads as the
+    /// same number and can no longer be asked for by accident.
+    fn vacate_struck(&self, project_id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE versions SET name = name || '+struck-' || id WHERE project_id = ?1 AND status = 'dropped' AND name = ?2",
+            params![project_id, name],
+        )?;
+        Ok(())
+    }
+
+    /// Gives a stage still to come another number, in the record.
+    ///
+    /// The row keeps its id, so its tasks, their history and the links anchored
+    /// on it follow without being matched by anything. A number another stage
+    /// holds is refused unless `shift` says to move that stage up as well, and
+    /// the one behind it if it is in the way too; the shift stops at the first
+    /// free number, the one this stage just gave up among them.
+    pub fn move_version(&self, project_id: i64, from: &str, to: &str, shift: bool) -> Result<Vec<Renumbered>> {
+        struct Row {
+            id: i64,
+            name: String,
+            title: Option<String>,
+            heading: Option<String>,
+            status: String,
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, title, heading, status FROM versions WHERE project_id = ?1")?;
+        let rows = stmt
+            .query_map([project_id], |r| {
+                Ok(Row {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    title: r.get(2)?,
+                    heading: r.get(3)?,
+                    status: r.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let planned = || rows.iter().filter(|row| row.status == "planned");
+
+        let wanted = version_order(from);
+        let Some(moving) = planned().find(|row| version_order(&row.name) == wanted) else {
+            match rows.iter().find(|row| row.status == "shipped" && version_order(&row.name) == wanted) {
+                Some(row) => bail!("{} has shipped, and its number belongs to its tag", row.name),
+                None => bail!("{from} is not a stage of the plan; `rigger version list` shows what is"),
+            }
+        };
+        let target = version_order(to);
+        if target == wanted {
+            return Ok(Vec::new());
+        }
+        let newest = rows.iter().filter(|row| row.status == "shipped").max_by_key(|row| version_order(&row.name));
+        if let Some(newest) = newest.filter(|newest| target <= version_order(&newest.name)) {
+            bail!("{to} is not ahead of {}, the last release; a stage still to come goes after it", newest.name);
+        }
+
+        let mut moves: Vec<(&Row, String)> = vec![(moving, to.to_string())];
+        let mut at = target;
+        while let Some(held) = planned().find(|row| row.id != moving.id && version_order(&row.name) == at) {
+            let called = held.title.as_deref().map(|t| format!(" ({t})")).unwrap_or_default();
+            if !shift {
+                bail!(
+                    "{} is taken by the stage{called} there; --shift moves it and what stands behind it up a number",
+                    held.name
+                );
+            }
+            if at.1 == 0 && at.2 == 0 {
+                bail!(
+                    "{}{called} opens a major, and has no next number to shift to; move it by name if that is what is meant",
+                    held.name
+                );
+            }
+            let next = next_number(&held.name);
+            at = version_order(&next);
+            moves.push((held, next));
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        for (_, to) in &moves {
+            self.vacate_struck(project_id, to)?;
+        }
+        // The far end first, so that no row is ever given a number the next
+        // one has not yet left. The stage that started this leaves first of
+        // all: moved down the plan, it holds the number the shift ends on.
+        tx.execute("UPDATE versions SET name = name || '+moving' WHERE id = ?1", [moving.id])?;
+        for (row, to) in moves.iter().rev() {
+            let heading = row.heading.as_deref().filter(|h| !h.trim().is_empty()).map(|h| match h.contains(&row.name) {
+                true => h.replacen(&row.name, to, 1),
+                false => stage_heading(to, row.title.as_deref()),
+            });
+            tx.execute("UPDATE versions SET name = ?1, heading = ?2 WHERE id = ?3", params![to, heading, row.id])?;
+        }
+        // The places in the plan stay where they are and the stages take them
+        // in their new order, so a stage changes block with the number that
+        // puts it there and the prose between the blocks does not move.
+        type Place = (i64, Option<i64>, Option<i64>, Option<i64>);
+        let mut placed: Vec<(i64, String, Place)> = tx
+            .prepare(
+                "SELECT id, name, rank, after_prose, gap_after, heading_depth FROM versions \
+                 WHERE project_id = ?1 AND status = 'planned' AND rank IS NOT NULL ORDER BY rank, id",
+            )?
+            .query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))))?
+            .collect::<rusqlite::Result<_>>()?;
+        let places: Vec<Place> = placed.iter().map(|(_, _, place)| *place).collect();
+        placed.sort_by_key(|(_, name, _)| version_order(name));
+        for ((id, ..), place) in placed.iter().zip(places) {
+            tx.execute(
+                "UPDATE versions SET rank = ?1, after_prose = ?2, gap_after = ?3, heading_depth = ?4 WHERE id = ?5",
+                params![place.0, place.1, place.2, place.3, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(moves.into_iter().map(|(row, to)| Renumbered { from: row.name.clone(), to }).collect())
     }
 
     /// Adds a task to a stage of the plan, last in its list, unless the
@@ -4762,7 +5019,11 @@ impl Db {
         // that insisted on the text would make anchoring a pair a matter of
         // remembering which of two products spells it which way.
         let wanted = version_order(name);
-        let mut stmt = self.conn.prepare("SELECT id, name FROM versions WHERE project_id = ?1")?;
+        // A struck stage only when nothing else has the number: `+struck` and
+        // the `+` of a hub read as the same value as the stage standing there.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name FROM versions WHERE project_id = ?1 ORDER BY status = 'dropped', id")?;
         let rows = stmt.query_map([project_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         let mut found = None;
         for row in rows {

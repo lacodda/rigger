@@ -188,11 +188,31 @@ $ rigger import sample --hub C:\dev\sample\hub
 sample: nothing changed
 ```
 
-A stage is identified by its version, a task by its text within its stage, a decision by its date and body, and a question by its text. So a stage that moves from the plan to the changelog when it ships is updated, not duplicated.
+A stage is identified by its version, a task by its text, a decision by its date and body, and a question by its text. So a stage that moves from the plan to the changelog when it ships is updated, not duplicated.
+
+## A plan renumbered
+
+A stage's number is not the stage. One is inserted and every stage behind it moves up, and a reading that walked the numbers gave the tasks of whoever stood on a number the words of whoever stands there now: closed tasks became closed strangers, and what did not fit stayed behind as a duplicate. So a line of a plan is matched by what it says, most certain first:
+
+1. **Its text in its own stage.** A line that moved within its stage is the same line.
+2. **Its text in another stage still to come**, unless a line there still names it. The task moves with its id, status and history. The same words listed in two stages stay two tasks, and a task that shipped, or was struck, stays where it is.
+3. **Its position, while the stage is the one it was.** A line reworded in place is the same line. Under another title the number has changed hands, and position says nothing about whose task that is.
+
+A line none of these place is a new task. Taking no match over a wrong one is the point: a duplicate is seen and struck, and a status given to a stranger is not seen at all.
+
+```console
+$ rigger import sample --hub C:\dev\sample\hub
+sample:
+  versions   1 added, 2 updated
+  tasks      1 added, 0 updated
+  moved      4 tasks to the stage that now lists them
+```
+
+Better still, renumber in the record, where nothing has to be matched: [`version move`](/rigger/reference/version/#version-move).
 
 ## What the hub struck
 
-A hub **kept by hand** is the owner's pen, and a line struck from it is struck. A hub rigger wrote is not: it carries a mark saying so, it lists the open stages and nothing else, and reading it back describes the record rather than editing it. Neither its tasks nor its versions are struck by what it no longer lists. A task the plan no longer lists is marked `dropped`: the export does not write it, the packet does not count it, and it comes back as open the moment the plan lists it again. A planned stage that neither file names any more - renumbered when the queue moved, or given up - is dropped the same way, with its open tasks. Done tasks and shipped stages stay: they are history, and a tag outranks a plan that has not been told.
+A hub **kept by hand** is the owner's pen, and a line struck from it is struck. A hub rigger wrote is not: it carries a mark saying so, it lists the open stages and nothing else, and reading it back describes the record rather than editing it. Neither its tasks nor its versions are struck by what it no longer lists, since a stage or a task added after the export is not listed either. Two things are struck all the same, because the plan says so line by line: what is left under a number whose stage now has another title, named in a warning, and a stage whose every task went to the stages that list them now. A task the plan no longer lists is marked `dropped`: the export does not write it, the packet does not count it, and it comes back as open the moment the plan lists it again. A planned stage that neither file names any more - renumbered when the queue moved, or given up - is dropped the same way, with its open tasks. Done tasks and shipped stages stay: they are history, and a tag outranks a plan that has not been told.
 
 ```console
 $ rigger import sample --hub C:\dev\sample\hub
@@ -264,6 +284,7 @@ Reading a hub prints its report.
 | `versions_dropped` | integer | Planned versions struck because the hub no longer names them. |
 | `tasks_added` | integer | Tasks recorded for the first time. |
 | `tasks_updated` | integer | Tasks that changed. |
+| `tasks_moved` | integer | Tasks carried with their history to the stage that now lists them. |
 | `tasks_dropped` | integer | Tasks struck because the plan no longer lists them. |
 | `decisions_added` | integer | Decisions recorded. |
 | `questions_added` | integer | Questions for the owner recorded. |

@@ -991,6 +991,18 @@ enum VersionCommand {
         #[arg(long = "task", value_name = "TEXT")]
         tasks: Vec<String>,
     },
+    /// Give a stage still to come another number, keeping its tasks and history
+    Move {
+        /// Project name
+        project: String,
+        /// The stage's number now
+        from: String,
+        /// The number it should have
+        to: String,
+        /// When another stage holds that number, move it up too, and whatever stands in its way
+        #[arg(long)]
+        shift: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1403,6 +1415,7 @@ fn run(cli: Cli) -> Result<()> {
                 title,
                 tasks,
             } => version_add(&project, &version, title.as_deref(), &tasks, json),
+            VersionCommand::Move { project, from, to, shift } => version_move(&project, &from, &to, shift, json),
         },
         Command::Queue { command, ahead } => match command {
             None => match ahead {
@@ -1667,6 +1680,13 @@ fn import_hub(project: &str, hub_dir: Option<&Path>, check: bool, json: bool) ->
     };
     line("versions", report.versions_added, report.versions_updated);
     line("tasks", report.tasks_added, report.tasks_updated);
+    if report.tasks_moved > 0 {
+        println!(
+            "  {:<10} {} to the stage that now lists them",
+            "moved",
+            plural(report.tasks_moved as usize, "task", "tasks")
+        );
+    }
     if report.versions_dropped + report.tasks_dropped > 0 {
         println!(
             "  {:<10} {} and {} struck from the hub",
@@ -5542,11 +5562,10 @@ fn skipped_versions(lines: &[db::VersionLine]) -> Vec<String> {
 }
 
 /// The whole plan of a project.
-fn version_list(project: &str, all: bool, json: bool) -> Result<()> {
-    let db = Db::open(&paths::db_path()?)?;
-    let project = open_project(&db, project)?;
-    let current = db.current_stage(project.id)?.map(|stage| stage.version);
-    let mut lines = db.version_lines(project.id)?;
+/// A project's plan as `version list` reads it, and what its numbering skips.
+fn plan_lines(db: &Db, project_id: i64, all: bool) -> Result<(Vec<db::VersionLine>, Vec<String>)> {
+    let current = db.current_stage(project_id)?.map(|stage| stage.version);
+    let mut lines = db.version_lines(project_id)?;
     for line in &mut lines {
         line.current = current.as_deref() == Some(line.version.as_str());
     }
@@ -5554,6 +5573,13 @@ fn version_list(project: &str, all: bool, json: bool) -> Result<()> {
         lines.retain(|line| line.status != "shipped");
     }
     let skipped = skipped_versions(&lines);
+    Ok((lines, skipped))
+}
+
+fn version_list(project: &str, all: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = open_project(&db, project)?;
+    let (lines, skipped) = plan_lines(&db, project.id, all)?;
     if json {
         return print_json(&serde_json::json!({ "project": project.name, "versions": lines, "skipped": skipped }));
     }
@@ -5600,6 +5626,26 @@ fn version_add(project: &str, version: &str, title: Option<&str>, tasks: &[Strin
         db::Change::Added => println!("Added {name} to {}, with {tasks}", project.name),
         db::Change::Updated => println!("{name} is now called {}; {tasks} added", title.unwrap_or_default()),
         db::Change::Unchanged => println!("{name} was in the plan already; {tasks} added"),
+    }
+    Ok(())
+}
+
+fn version_move(project: &str, from: &str, to: &str, shift: bool, json: bool) -> Result<()> {
+    let db = Db::open(&paths::db_path()?)?;
+    let project = working_project(&db, project)?;
+    if !names_a_version(to) {
+        bail!("'{to}' is not a version; write it as a tag would be, such as v0.3.0");
+    }
+    let moved = db.move_version(project.id, from, to, shift)?;
+    if json {
+        let (versions, skipped) = plan_lines(&db, project.id, false)?;
+        return print_json(&serde_json::json!({ "project": project.name, "moved": moved, "versions": versions, "skipped": skipped }));
+    }
+    if moved.is_empty() {
+        println!("{from} is {to} already; nothing moved");
+    }
+    for step in &moved {
+        println!("{} is now {}", step.from, step.to);
     }
     Ok(())
 }

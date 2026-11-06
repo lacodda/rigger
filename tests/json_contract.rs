@@ -976,6 +976,8 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("queue", &["queue", "--ahead"]);
     r.json("version list", &["version", "list", "alpha"]);
     r.json("version list", &["version", "list", "alpha", "--all"]);
+    r.json("version move", &["version", "move", "alpha", "v0.9.0", "v0.10.0"]);
+    r.json("version move", &["version", "move", "alpha", "v0.10.0", "v0.10.0"]);
     // Whose turn it is to be refactored.
     r.json("refactor", &["refactor"]);
     r.json("refactor ritual", &["refactor", "ritual"]);
