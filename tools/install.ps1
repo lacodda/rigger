@@ -22,7 +22,7 @@ if (-not $tag) {
     }
 }
 if (-not $tag -or $tag -notmatch '^v\d') {
-    throw "Cannot resolve the latest release of $repo - set `$env:RIGGER_VERSION to a tag like v0.1.0"
+    throw "Cannot resolve the latest release of $repo - set `$env:RIGGER_VERSION to a tag like vX.Y.Z"
 }
 
 $name = "rigger-$tag-x86_64-pc-windows-msvc"
@@ -98,10 +98,18 @@ if (-not $env:RIGGER_NO_ALIAS) {
     }
 }
 
+# $env:RIGGER_NO_PATH leaves everything outside the install directory alone: an
+# install into a scratch directory, such as `furca release verify --install`,
+# must not add itself to the PATH or register itself with an assistant.
+if ($env:RIGGER_NO_PATH) {
+    Write-Host "Installed rigger $tag to $dir\rigger.exe"
+    return
+}
+
 # Add the directory to the user PATH in the registry, keeping the value's
 # type. PATH is almost always REG_EXPAND_SZ, with entries like %JAVA_HOME%\bin
 # stored unexpanded; the .NET environment API rewrites it as a plain string
-# and silently breaks every such entry (found on this very installer, v0.1.0). So: read the raw value, compare case-insensitively
+# and silently breaks every such entry (found on this very installer). So: read the raw value, compare case-insensitively
 # without a trailing slash, write it back as an expandable string, and tell
 # running shells about it. A PATH failure must not fail the install.
 try {

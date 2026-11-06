@@ -1139,13 +1139,23 @@ fn is_a_closed_pipe(message: &str) -> bool {
 const OWNER_COMMANDS: [&str; 10] = ["go", "queue", "priority", "inbox", "ideas", "config", "init", "project", "doctor", "help"];
 
 /// The command line, with the help showing what a person needs of it.
-fn command_line() -> clap::Command {
+fn short_command_line() -> clap::Command {
     Cli::command()
         .mut_subcommands(|command| {
             let hide = !OWNER_COMMANDS.contains(&command.get_name());
             command.hide(hide)
         })
         .after_help("`rigger --help --all` lists the commands an assistant uses.")
+}
+
+/// The short help for a person at a terminal, the whole list for a program
+/// reading it: the line's own checks hold what the docs show to what `--help`
+/// lists, and a list cut for a person's sake would fail them.
+fn command_line() -> clap::Command {
+    match std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        true => short_command_line(),
+        false => Cli::command(),
+    }
 }
 
 fn work() -> ExitCode {
@@ -5646,7 +5656,7 @@ fn bare(json: bool) -> Result<()> {
     if paths::db_path()?.is_file() {
         return show_queue(json);
     }
-    command_line().print_help()?;
+    short_command_line().print_help()?;
     Ok(())
 }
 
@@ -7145,6 +7155,28 @@ the plan and the tags look one step apart ({}):",
 
 #[cfg(test)]
 mod tests {
+    /// A person at a terminal sees what they type; the rest stay callable.
+    #[test]
+    fn the_short_help_lists_what_a_person_types() {
+        let help = super::short_command_line().render_help().to_string();
+        let listed = |name: &str| help.lines().any(|line| line.trim_start().starts_with(&format!("{name} ")));
+        for owner in super::OWNER_COMMANDS {
+            assert!(
+                listed(owner),
+                "{owner} missing:
+{help}"
+            );
+        }
+        for hidden in ["note", "context", "session", "export"] {
+            assert!(
+                !listed(hidden),
+                "{hidden} listed:
+{help}"
+            );
+        }
+        assert!(help.contains("--help --all"), "{help}");
+    }
+
     #[test]
     fn a_closed_pipe_is_told_by_its_number_in_any_language() {
         assert!(super::is_a_closed_pipe("failed printing to stdout: Канал был закрыт. (os error 109)"));

@@ -67,9 +67,7 @@ fn commands_in(help: &str) -> Vec<String> {
 /// about, without anybody remembering to list it.
 fn leaves() -> Vec<String> {
     let mut out = Vec::new();
-    // The whole list: the plain help shows only what a person types.
-    let everything = String::from_utf8(rigger_bin().args(["--help", "--all"]).output().unwrap().stdout).unwrap();
-    for top in commands_in(&everything) {
+    for top in commands_in(&help_of(&[])) {
         let help = help_of(&[&top]);
         let subs = commands_in(&help);
         if subs.is_empty() {

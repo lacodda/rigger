@@ -36,7 +36,7 @@ fi
 case "$TAG" in
     v[0-9]*) ;;
     *)
-        echo "Cannot resolve the latest release of $REPO - set RIGGER_VERSION to a tag like v0.1.0" >&2
+        echo "Cannot resolve the latest release of $REPO - set RIGGER_VERSION to a tag like vX.Y.Z" >&2
         exit 1
         ;;
 esac
@@ -70,6 +70,12 @@ if [ -z "${RIGGER_NO_ALIAS:-}" ]; then
     else
         echo "Note: 'rgr' already resolves to $EXISTING - alias skipped."
     fi
+fi
+
+# RIGGER_NO_PATH: an install into a scratch directory, such as `furca release
+# verify --install`, has no PATH to talk about and registers with nothing.
+if [ -n "${RIGGER_NO_PATH:-}" ]; then
+    exit 0
 fi
 
 case ":$PATH:" in

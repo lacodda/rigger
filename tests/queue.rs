@@ -405,26 +405,20 @@ fn rigger_alone_is_the_queue() {
     assert_eq!(found["order"][0]["project"], "alpha");
 }
 
-/// The help shows what a person types; the rest stay callable, and are listed
-/// when asked for.
+/// A program reading the help gets the whole list, and `--help --all` is that list
+/// for a person. What a person sees at a terminal is a unit test of the short one.
 #[test]
-fn the_help_lists_what_a_person_types() {
+fn the_help_lists_everything_for_a_program() {
     let data = tempfile::tempdir().unwrap();
-    let short = text(data.path(), &["--help"]);
-    for owner in ["go", "queue", "priority", "inbox", "init", "project", "doctor"] {
-        assert!(short.lines().any(|l| l.trim_start().starts_with(owner)), "{owner} missing:\n{short}");
+    for help in [text(data.path(), &["--help"]), text(data.path(), &["--help", "--all"])] {
+        for command in ["go", "queue", "note", "context", "session", "export"] {
+            assert!(
+                help.lines().any(|l| l.trim_start().starts_with(command)),
+                "{command} missing:
+{help}"
+            );
+        }
     }
-    for hidden in ["note", "context", "session", "export"] {
-        assert!(!short.lines().any(|l| l.trim_start().starts_with(hidden)), "{hidden} listed:\n{short}");
-    }
-    assert!(short.contains("--help --all"), "{short}");
-
-    let all = text(data.path(), &["--help", "--all"]);
-    for command in ["go", "queue", "note", "context", "session", "export"] {
-        assert!(all.lines().any(|l| l.trim_start().starts_with(command)), "{command} missing:\n{all}");
-    }
-
-    // Hidden is not gone.
     assert!(text(data.path(), &["note", "--help"]).contains("--kind"));
 }
 

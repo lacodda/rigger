@@ -246,7 +246,7 @@ mod tests {
         let readme = read("README.md");
         let help = String::from_utf8(
             std::process::Command::new(env!("CARGO_BIN_EXE_rigger"))
-                .args(["--help", "--all"])
+                .arg("--help")
                 .output()
                 .expect("cannot run rigger --help")
                 .stdout,
