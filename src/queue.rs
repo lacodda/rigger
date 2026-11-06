@@ -671,9 +671,12 @@ pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&st
         .iter()
         .map(|candidate| {
             let plan = plans.get(&candidate.project).cloned().unwrap_or_default();
+            // The stage it is on, not the lowest number planned: a version left
+            // behind with nothing open in it is not what comes next.
+            let from = plan.stages.iter().position(|(version, _)| *version == candidate.version).unwrap_or(0);
             Walk {
                 candidate,
-                stages: plan.stages.into(),
+                stages: plan.stages.into_iter().skip(from).collect(),
                 floor: plan.floor,
                 waited: candidate.waited,
                 played: 0,
@@ -1159,6 +1162,21 @@ mod tests {
         assert_eq!(*plain[1], ("plain", "p1", Some("grow")), "{said:?}");
         assert!(said[3..].iter().all(|t| t.2 != Some("unfinished") && t.2 != Some("moved")), "{said:?}");
         assert!(render_ahead(&turns).contains("(refactor)"));
+    }
+
+    /// A version left behind in the plan is not what comes next: the stage the
+    /// project is on is where the forecast starts.
+    #[test]
+    fn the_forecast_starts_from_the_stage_it_is_on() {
+        let queue = choose(&[on_stage("alpha", 1, 0)]);
+        let plan = Ahead {
+            stages: ["v0.1.5", "v0.2.0", "v0.3.0"].iter().map(|v| (v.to_string(), None)).collect(),
+            floor: 0,
+        };
+        let plans = HashMap::from([("alpha".to_string(), plan)]);
+        let turns = ahead(&queue, &plans, None, 2);
+        assert_eq!(turns[0].version, "v0.2.0");
+        assert_eq!(turns[1].version, "v0.3.0");
     }
 
     #[test]
