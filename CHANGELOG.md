@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.35.0] - 2026-11-05
+
+### Breaking Changes
+
+- **Go round by weight, and drop the calendar**
+`rigger pick` becomes `rigger queue`, and its JSON has
+`order` where it had `pick` and `then`. `rigger calendar`, `next`, `week`,
+`release-day`, `retro`, `version plan`, `version add --week` and
+`project tier` are gone, with tiers, rhythms and the week's toast. A
+project's `tier` and `rhythm_weeks` become `weight`: A is 3, B and no tier
+are 2, C is 1, out is 0.
+
+### Features
+- Go round by weight, and drop the calendar
+
 ## [0.34.0] - 2026-11-05
 
 ### Breaking Changes
