@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.43.0] - 2026-11-06
+
+### CI
+- Release through the line's engine and standard
+
 ## [0.42.0] - 2026-11-06
 
 ### Bug Fixes
