@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.47.0] - 2026-11-08
+
+### Bug Fixes
+- Keep a sitting open while the assistant waits on its work
+
+### Features
+- Give a commit to the sitting that reads it
+- Put a state line in the diary of the sitting that wrote it
+- Hold the sitting while the assistant runs
+
 ## [0.46.0] - 2026-11-08
 
 ### Build
