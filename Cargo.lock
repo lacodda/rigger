@@ -450,9 +450,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "furca-core"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18eaf66436d0c5a2ed03959717b37fd2024b11161d9b01504041c6629a9982d0"
+checksum = "ce93e1991af9681c3485e81dde482e7880660a15b65fe6ef98918fdea7c6830b"
 dependencies = [
  "gix",
  "serde",
