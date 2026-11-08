@@ -6,11 +6,10 @@
 //! edge of a shallow clone - lives in one crate rather than in each product
 //! that happens to look at a repository.
 
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use furca_core::{Commit, Repository, Tips};
+use anyhow::Result;
+use furca_core::{Commit, Repository};
 use serde::Serialize;
 
 /// Opens the repository whose root is `path`, and only that one.
@@ -104,36 +103,19 @@ fn reaches_the_network(url: &str) -> bool {
     url.split_once(':').is_some_and(|(host, _)| host.len() > 1 && !host.contains(['/', '\\']))
 }
 
-/// How many commits the first look at the history reads. A release tag or
-/// the tip of a branch in work is almost always among the newest commits,
-/// so the first look usually finds everything.
-const FIRST_LOOK: usize = 512;
-
-/// The commits `ids` name, found by walking every branch and tag.
+/// The commit a ref's target names, read by its id: the commit a release
+/// tag points at, the tip of a card's branch.
 ///
-/// furca-core 0.3 reads a commit only on the way through a walk, so a commit
-/// wanted by its id is looked for: the newest few hundred first, and the
-/// look widens eightfold until every id is found or the history runs out.
-/// An id that names no commit - a tag on a tree - is simply not in the
-/// answer. Every id given here is the tip of a ref, so the walk from all of
-/// them reaches each one that is a commit.
-pub fn commits(repo: &Repository, ids: &HashSet<String>) -> Result<HashMap<String, Commit>> {
-    let mut found = HashMap::new();
-    if ids.is_empty() {
-        return Ok(found);
-    }
-    let mut limit = FIRST_LOOK;
-    loop {
-        let log = repo.log(Tips::All, limit).context("cannot walk the history")?;
-        for commit in log.commits {
-            if ids.contains(&commit.id) {
-                found.insert(commit.id.clone(), commit);
-            }
-        }
-        if found.len() == ids.len() || !log.truncated {
-            return Ok(found);
-        }
-        limit = limit.saturating_mul(8);
+/// A lookup, not a walk: how deep the commit lies in the history does not
+/// change what reading it costs. `None` when the id names no commit - a tag
+/// on a tree, or a commit a shallow clone does not hold - since that is a
+/// release or a branch of nothing. Any other failure to read is an error:
+/// a damaged commit must not pass for a missing one.
+pub fn commit(repo: &Repository, id: &str) -> Result<Option<Commit>> {
+    match repo.commit(id) {
+        Ok(commit) => Ok(Some(commit)),
+        Err(furca_core::Error::Revision { .. }) => Ok(None),
+        Err(e) => Err(anyhow::Error::new(e).context(format!("cannot read the commit {id}"))),
     }
 }
 

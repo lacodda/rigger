@@ -226,6 +226,24 @@ fn an_annotated_tag_is_read_through_to_its_commit() {
 }
 
 #[test]
+fn a_tag_on_a_tree_is_a_release_of_nothing() {
+    let data = tempfile::tempdir().unwrap();
+    let root = data.path().join("proj");
+    repo_with_history(&root, &[("first", "v0.1.0")]);
+    // A tag may point at a tree; there is no commit to date it by, and it
+    // releases nothing. Leaving it out must not cost the tags beside it.
+    git(&root, &["tag", "v0.2.0", "HEAD^{tree}"]);
+
+    rigger(data.path()).arg("init").assert().success();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+
+    let out = rigger(data.path()).args(["sync", "proj"]).assert().success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("shipped    v0.1.0"), "{stdout}");
+    assert!(!stdout.contains("v0.2.0"), "{stdout}");
+}
+
+#[test]
 fn syncing_twice_changes_nothing_the_second_time() {
     let data = tempfile::tempdir().unwrap();
     let root = data.path().join("proj");
@@ -398,9 +416,9 @@ fn long_history(root: &Path, commits: usize, tags: &[(usize, &str)]) {
 fn a_tag_far_down_a_long_history_still_dates_its_release() {
     let data = tempfile::tempdir().unwrap();
     let root = data.path().join("proj");
-    // The first release sits under 700 later commits - past the first look
-    // at the newest few hundred, which is where a reader that gave up early
-    // would lose it.
+    // The first release sits under 700 later commits - past the newest few
+    // hundred, which is where a reader that looked for its commit in a walk
+    // and gave up early would lose it.
     long_history(&root, 701, &[(1, "v0.1.0"), (701, "v0.2.0")]);
 
     rigger(data.path()).arg("init").assert().success();

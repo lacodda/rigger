@@ -16,8 +16,6 @@
 //! process per project, depend on git being installed and on its output
 //! format, and inherit whatever the caller's environment did to it.
 
-use std::collections::HashSet;
-
 use anyhow::{Context, Result};
 use furca_core::{Repository, Tips};
 use serde::Serialize;
@@ -252,12 +250,9 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
 /// release of anything and is left out.
 fn read_tags(repo: &Repository) -> Result<Vec<Tag>> {
     let refs = repo.refs().context("cannot read the repository's references")?;
-    let named: Vec<_> = refs.tags.into_iter().filter(|t| names_a_version(&t.name)).collect();
-    let ids: HashSet<String> = named.iter().map(|t| t.target.clone()).collect();
-    let commits = crate::git::commits(repo, &ids)?;
     let mut tags = Vec::new();
-    for tag in named {
-        let Some(commit) = commits.get(&tag.target) else { continue };
+    for tag in refs.tags.into_iter().filter(|t| names_a_version(&t.name)) {
+        let Some(commit) = crate::git::commit(repo, &tag.target)? else { continue };
         let seconds = commit.committer.seconds;
         tags.push(Tag {
             version: tag.name,

@@ -1,7 +1,7 @@
 # ADR 0009: Git is read through furca-core
 
 - Status: accepted
-- Date: 2026-10-07
+- Date: 2026-10-07, amended 2026-11-07 (commits read by id)
 - Amends: [0001](0001-rust.md) (the gix dependency), [0005](0005-facts-from-git.md) (how git is read)
 
 ## Context
@@ -10,13 +10,13 @@
 
 ## Decision
 
-rigger reads git only through `furca-core` and has no gix dependency of its own. One module, `src/git.rs`, is the door: it opens a repository at exactly the recorded path (furca-core discovers upwards as git does; a directory inside another repository must not borrow its tags), and it finds commits by id.
+rigger reads git only through `furca-core` and has no gix dependency of its own. One module, `src/git.rs`, is the door: it opens a repository at exactly the recorded path (furca-core discovers upwards as git does; a directory inside another repository must not borrow its tags), and it reads a commit by its id.
 
-furca-core 0.3 reads a commit only on the way through a walk. Until a release of it reads one by revision, a commit wanted by id - the commit a release tag points at, the tip of a card's branch - is looked for in a walk over every branch and tag: the newest 512 commits first, widening eightfold until every id is found or the history ends.
+A commit wanted by id - the commit a release tag points at, the tip of a card's branch - is read with furca-core's `Repository::commit`, a lookup rather than a walk. An id that names no commit (a tag on a tree, a commit a shallow clone does not hold) is left out; any other failure to read it is an error, so a damaged commit does not pass for a missing one.
 
 ## Consequences
 
 - gix majors are absorbed once, in furca-core, for every product that reads git.
 - `commits since the release` is what the newest tag cannot reach (`git log <tag>..HEAD`), so a branch begun before a release and merged after it counts as new work.
-- Dating an old tag costs a walk to it. On the line's repositories that is milliseconds; on a repository of a hundred thousand commits it is one full walk per `sync`, which ends when furca-core's `Repository::commit` is released and the walk is replaced by a lookup.
+- Dating a tag costs the same however deep in the history its commit lies.
 - A reference that cannot be read fails the listing of all references in furca-core; `sync` reports it as a warning instead of failing.

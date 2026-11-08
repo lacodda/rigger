@@ -15,8 +15,6 @@
 //! no card is somebody else's ticket, or one never handed to this desk, and
 //! making a card for it would fill the desk with work nobody took.
 
-use std::collections::HashSet;
-
 use anyhow::{Context, Result};
 use furca_core::{Repository, Tips};
 
@@ -146,18 +144,12 @@ pub fn read(repo: &Repository, cards: &[Card]) -> Result<Seen> {
         branches.push((name, Some(remote), branch.target));
     }
 
-    let named_tips: HashSet<String> = branches
-        .iter()
-        .filter(|(name, _, _)| !named(name, &wanted).is_empty())
-        .map(|(_, _, tip)| tip.clone())
-        .collect();
-    let tips = crate::git::commits(repo, &named_tips)?;
     for (name, remote, tip) in &branches {
         let ids = named(name, &wanted);
         if ids.is_empty() {
             continue;
         }
-        let Some(commit) = tips.get(tip) else { continue };
+        let Some(commit) = crate::git::commit(repo, tip)? else { continue };
         let Some(subject) = crate::git::subject(repo, tip) else { continue };
         let at = moment(commit.committer.seconds);
         for task_id in ids {
