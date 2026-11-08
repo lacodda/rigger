@@ -254,9 +254,16 @@ Session on sample closed - 1 event:
 
 A reminder that fires on every stop is a reminder nobody reads.
 
+Not every stop is the end of a sitting, and `--remind` leaves two kinds open, saying nothing:
+
+- **A turn handed back to wait.** An assistant that starts a long run in the background - a test suite, a mutation run, a release - hands the turn back and is woken when the run finishes. Claude Code tells its hook so on standard input: the `background_tasks` still in flight, and the `session_crons` it scheduled. A turn that ends with either is a pause. Until v0.47.0 the hook closed the sitting there, and everything written after the wait - the release included - belonged to no sitting, while the [queue](/rigger/reference/queue/) saw the project free.
+- **A sitting [`go`](/rigger/reference/go/#who-is-at-a-sitting) holds.** The assistant `go` started is at work in it until it exits, and `go` closes the sitting then.
+
+Standard input is read only when it is not a terminal, and for two seconds at most: a person who typed the command is not a hook.
+
 ## As a hook
 
-Claude Code fires a `Stop` hook when a session ends. Pointing it at `session end --remind` is what makes the ritual stop depending on the assistant remembering it:
+Claude Code fires a `Stop` hook at the end of every turn. Pointing it at `session end --remind` is what makes the ritual stop depending on the assistant remembering it:
 
 ```json
 {
@@ -268,7 +275,7 @@ Claude Code fires a `Stop` hook when a session ends. Pointing it at `session end
 }
 ```
 
-in `~/.claude/settings.json`. `Stop` takes no `matcher` - it fires every time.
+in `~/.claude/settings.json`. `Stop` takes no `matcher` - it fires every time, and `--remind` tells a pause from an end (see [above](#--remind)).
 
 The installer writes this entry itself, along with registering the [MCP server](/rigger/reference/mcp/), so a fresh install has a record that closes its own sittings. It is skipped when the assistant is not installed, never fails the install, and adds nothing when an entry naming `rigger session end` is already there. `RIGGER_NO_REGISTER=1` opts out.
 

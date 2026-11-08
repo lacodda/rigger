@@ -237,6 +237,57 @@ fn a_reminder_speaks_only_when_there_is_something_to_say() {
     assert!(out.contains("nothing says why"), "{out}");
 }
 
+/// What Claude Code hands its `Stop` hook on standard input: the work still
+/// in flight in the background, and the wakeups it scheduled.
+fn stop_input(status: &str) -> String {
+    format!(
+        r#"{{"session_id":"abc","hook_event_name":"Stop","stop_hook_active":false,
+            "background_tasks":[{{"id":"t1","type":"shell","status":"{status}","command":"cargo mutants"}}],
+            "session_crons":[]}}"#
+    )
+}
+
+/// A turn handed back to wait for the assistant's own background work is a
+/// pause, not the end of the sitting: on v0.45.0 the hook closed the sitting
+/// there, and everything written afterwards - the release included - belonged
+/// to no sitting while the queue saw the project free.
+#[test]
+fn a_hook_leaves_a_sitting_open_while_the_assistants_own_work_runs() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    project(data.path(), "alpha", &[]);
+
+    rigger(data.path()).args(["session", "start", "alpha"]).assert().success();
+    note(data.path(), "alpha", "change", "started the mutation run");
+    let out = rigger(data.path())
+        .args(["session", "end", "alpha", "--remind"])
+        .write_stdin(stop_input("running"))
+        .assert()
+        .success();
+    assert!(String::from_utf8(out.get_output().stdout.clone()).unwrap().trim().is_empty());
+    // Still open: what is written after the wait is the sitting's.
+    note(data.path(), "alpha", "decision", "written after the wait");
+    rigger(data.path()).args(["session", "draft", "alpha"]).assert().success();
+
+    // The turn that ends with nothing left running ends the sitting.
+    rigger(data.path())
+        .args(["session", "end", "alpha", "--remind"])
+        .write_stdin(stop_input("completed"))
+        .assert()
+        .success();
+    rigger(data.path())
+        .args(["session", "draft", "alpha"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no session is open"));
+    let hub = data.path().join("written");
+    std::fs::create_dir_all(&hub).unwrap();
+    rigger(data.path()).args(["export", "alpha", "--hub"]).arg(&hub).assert().success();
+    let diary = std::fs::read_to_string(hub.join("Дневник.md")).unwrap();
+    assert!(diary.contains("started the mutation run"), "{diary}");
+    assert!(diary.contains("written after the wait"), "{diary}");
+}
+
 /// The database a test's record lives in, for the states the CLI cannot make.
 fn database(data: &Path) -> rusqlite::Connection {
     let doctor: serde_json::Value = serde_json::from_str(&output(data, &["doctor", "--json"])).unwrap();

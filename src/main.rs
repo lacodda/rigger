@@ -21,6 +21,7 @@ mod git;
 mod go;
 mod handoff;
 mod hold;
+mod hook;
 mod hub;
 mod hubfile;
 mod import;
@@ -1481,7 +1482,11 @@ fn run(cli: Cli) -> Result<()> {
                 diary,
                 entry,
                 remind,
-            } => session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), entry.as_deref(), remind, json),
+            } => {
+                // A hook is handed how the turn ended; only a hook is asked.
+                let paused = remind && hook::input().is_some_and(|input| hook::paused(&input));
+                session_end(project.as_deref(), heading.as_deref(), diary.as_deref(), entry.as_deref(), remind, paused, json)
+            }
             SessionCommand::Draft { project, heading } => session_draft(project.as_deref(), heading.as_deref(), json),
         },
         Command::Export {
@@ -2212,7 +2217,7 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
     if !joined {
         // Unless the assistant ended the sitting itself, this is where it ends:
         // the assistant has exited, and nobody is at it any more.
-        session_end(Some(&project.name), None, None, None, true, false)?;
+        session_end(Some(&project.name), None, None, None, true, false, false)?;
     }
     let code = code?;
 
@@ -6223,7 +6228,10 @@ fn session_start(project: Option<&str>, json: bool) -> Result<()> {
 /// skill file that the assistant had to remember at exactly the moment it
 /// was running out of context. A ritual that depends on remembering is a
 /// ritual that stops happening.
-fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path>, entry: Option<&Path>, remind: bool, json: bool) -> Result<()> {
+///
+/// `paused` is a hook's turn that ended with the assistant's own work still
+/// running: see `hook`.
+fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path>, entry: Option<&Path>, remind: bool, paused: bool, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     // A hook has no name to pass, so a failure to find one is not a failure
     // worth reporting: it fires in every directory, most of which are not
@@ -6255,7 +6263,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     // work is a pause; one in a sitting `go` holds ends when the assistant
     // exits, and `go` closes it then. Either way the hook leaves it open, and
     // says nothing: there is nothing yet to say.
-    if remind && hold::presence(db.path(), open.id) == hold::Presence::Live {
+    if remind && (paused || hold::presence(db.path(), open.id) == hold::Presence::Live) {
         return Ok(());
     }
 
