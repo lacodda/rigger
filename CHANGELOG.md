@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.46.0] - 2026-11-08
+
+### Build
+- Take furca-core 0.12
+
+### Performance
+- Read a tag's commit by its id instead of walking to it
+
+### Testing
+- Drop the docs address test that lyrn check already holds
+
 ## [0.45.0] - 2026-11-06
 
 ### Bug Fixes
