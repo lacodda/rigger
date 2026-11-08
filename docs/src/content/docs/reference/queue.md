@@ -47,7 +47,7 @@ The count is in releases, not days, so nothing here is tied to a date: a fortnig
 
 The order is worked out from the record each time and never stored. There is no list to fall out of step: change a weight and the order has changed, ship a version and that was its turn.
 
-**`unfinished` is what stops the line.** While a tag is not out, the next project does not start: [`go`](/rigger/reference/go/) comes back to this one, and only `--force` walks past it. It reads what is true of the repository, not what any sitting knew: a feature left untagged on purpose is still a feature nobody has. A commit that is neither a feature nor a fix - docs, a chore - waits for the next tag without holding anything up, and a stash is not counted. A release is asked after only when nothing speaks for it: one the release engine or GitHub reported is taken at its word, and a tag nothing has reported is looked for on the remote.
+**`unfinished` is what stops the line.** While a tag is not out, the next project does not start: [`go`](/rigger/reference/go/) comes back to this one, and only `--force` walks past it. It reads what is true of the repository, not what any sitting knew: a feature left untagged on purpose is still a feature nobody has. A commit that is neither a feature nor a fix - docs, a chore - waits for the next tag without holding anything up, and a stash is not counted. A release is asked after only when nothing speaks for it: one the release engine or GitHub reported is taken at its word, and a tag nothing has reported is looked for on the remote. A sitting left open says whether anyone is [at it](/rigger/reference/go/#who-is-at-a-sitting): `a sitting at work since …` while the assistant `go` started runs, `… by an assistant that has gone` once it does not.
 
 **A blocker is the way past something out of reach.** A project waiting on the outside world would otherwise stop every other. [`rigger note --kind blocker`](/rigger/reference/note/) takes it out of the queue with that as its reason, until [`resolve`](/rigger/reference/resolve/) clears it or a later release settles it.
 
@@ -127,6 +127,7 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `order[].unfinished.untagged[]` | string | One change's subject line. |
 | `order[].unfinished.undelivered` | string or null | How the last release fell short of getting out, in a few words. |
 | `order[].unfinished.sitting` | string or null | When the sitting left open began. |
+| `order[].unfinished.sitting_live` | boolean or null | Whether anyone is at that sitting: `true` while the [`go`](/rigger/reference/go/#who-is-at-a-sitting) that holds it runs, `false` once it has gone, `null` when nothing held it or no sitting is open. |
 | `order[].moved` | object or null | The request that put it first, while it stands, whatever `reason` says; otherwise `null`. |
 | `order[].moved.id` | integer | The id [`resolve`](/rigger/reference/resolve/) closes it by. |
 | `order[].moved.head` | string | The line it is known by: the reason given. |

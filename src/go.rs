@@ -59,28 +59,51 @@ impl Target {
 #[derive(Debug, Clone)]
 pub enum Choice {
     Start(Target),
-    /// The next project has a sitting open, and the record cannot tell a
-    /// live one from an abandoned one. A second assistant in a working tree
+    /// The project has a sitting open that someone may be at: one a running
+    /// `go` holds (`live`), or one nothing ever held, which the record cannot
+    /// tell from an abandoned one. A second assistant in a working tree
     /// another is writing to is the worse of the two mistakes, so `go` says
-    /// so and starts nothing.
+    /// so and starts nothing. A sitting whose holder has gone is not busy: it
+    /// is work left unfinished, and `go` takes it over.
     Busy {
         project: String,
         since: String,
+        live: bool,
     },
     /// Nothing to start, and why.
     Nothing(String),
 }
 
+/// The sitting a candidate has open, when someone may be at it: the moment
+/// it began, and whether a running `go` holds it.
+fn occupied(c: &Candidate) -> Option<(String, bool)> {
+    let unfinished = c.unfinished.as_ref()?;
+    let since = unfinished.sitting.clone()?;
+    match unfinished.sitting_live {
+        // Its holder has gone: nobody is at it.
+        Some(false) => None,
+        live => Some((since, live == Some(true))),
+    }
+}
+
 /// Reads the pick for one run of `go`.
 ///
 /// A project named outright is the owner's own word: it is started whatever
-/// the rule says of it, and joins a sitting that is open. `force` passes over
-/// every project left unfinished, and only those - the order of the rest is
-/// the rule's.
+/// the rule says of it, and joins a sitting that is open - unless an
+/// assistant is at work in it, which no word makes safe to walk into.
+/// `force` passes over every project left unfinished, and only those - the
+/// order of the rest is the rule's.
 pub fn choose(queue: &Queue, named: Option<&str>, force: bool) -> Choice {
     let order = || queue.order.iter();
     if let Some(name) = named {
         if let Some(found) = order().find(|c| c.project == name) {
+            if let Some((since, true)) = occupied(found) {
+                return Choice::Busy {
+                    project: found.project.clone(),
+                    since,
+                    live: true,
+                };
+            }
             return Choice::Start(Target::of(found));
         }
         return Choice::Start(Target {
@@ -109,10 +132,11 @@ pub fn choose(queue: &Queue, named: Option<&str>, force: bool) -> Choice {
             _ => "Nothing to work on: every project is left out - `rigger queue` says why.".to_string(),
         });
     };
-    if let Some(since) = first.unfinished.as_ref().and_then(|u| u.sitting.as_ref()) {
+    if let Some((since, live)) = occupied(first) {
         return Choice::Busy {
             project: first.project.clone(),
-            since: since.clone(),
+            since,
+            live,
         };
     }
     Choice::Start(Target::of(first))
@@ -203,9 +227,18 @@ pub fn after(target: &Target, shipped: Option<&str>, queue: &Queue) -> String {
     out
 }
 
-/// What the screen says when the next project has a sitting open.
-pub fn busy(project: &str, since: &str) -> String {
-    format!("{project} has a sitting open since {since}. Finish it there, go back to it with `rigger go {project}`, or go past it with `rigger go --force`.")
+/// What the screen says when the next project has a sitting someone may be
+/// at: `live` when an assistant `go` started is at work in it now.
+pub fn busy(project: &str, since: &str, live: bool) -> String {
+    match live {
+        true => format!(
+            "{project} is at work: an assistant has held its sitting since {since}, and a second one in that tree would write over it. \
+             Let it finish, or go past it with `rigger go --force`."
+        ),
+        false => format!(
+            "{project} has a sitting open since {since}. Finish it there, go back to it with `rigger go {project}`, or go past it with `rigger go --force`."
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -301,14 +334,57 @@ mod tests {
         let pick = pick_of(vec![candidate("busy", Some(open)), candidate("next", None)], vec![]);
 
         match choose(&pick, None, false) {
-            Choice::Busy { project, since } => {
+            Choice::Busy { project, since, live } => {
                 assert_eq!(project, "busy");
-                assert!(busy(&project, &since).contains("rigger go --force"));
+                assert!(!live);
+                assert!(busy(&project, &since, live).contains("rigger go --force"));
             }
             other => panic!("{other:?}"),
         }
         assert_eq!(started(choose(&pick, Some("busy"), false)).project, "busy");
         assert_eq!(started(choose(&pick, None, true)).project, "next");
+    }
+
+    /// A sitting an assistant is at work in is not walked into even by name:
+    /// the owner naming the project does not make two writers in one tree
+    /// safe. `--force` still goes past it to the next.
+    #[test]
+    fn a_sitting_at_work_is_not_walked_into_even_by_name() {
+        let live = Unfinished {
+            sitting: Some("2026-11-08T10:20:00Z".to_string()),
+            sitting_live: Some(true),
+            ..Unfinished::default()
+        };
+        let pick = pick_of(vec![candidate("working", Some(live)), candidate("next", None)], vec![]);
+        for named in [None, Some("working")] {
+            match choose(&pick, named, false) {
+                Choice::Busy { project, since, live } => {
+                    assert_eq!(project, "working");
+                    assert!(live, "{named:?}");
+                    let said = busy(&project, &since, live);
+                    assert!(said.contains("is at work"), "{said}");
+                }
+                other => panic!("{named:?}: {other:?}"),
+            }
+        }
+        assert_eq!(started(choose(&pick, None, true)).project, "next");
+    }
+
+    /// A sitting whose holder has gone is work left unfinished, not someone at
+    /// work: `go` comes back to it, and the assistant is told how it was left.
+    #[test]
+    fn a_sitting_whose_assistant_has_gone_is_taken_over() {
+        let gone = Unfinished {
+            sitting: Some("2026-11-08T10:20:00Z".to_string()),
+            sitting_live: Some(false),
+            ..Unfinished::default()
+        };
+        let pick = pick_of(vec![candidate("left", Some(gone)), candidate("next", None)], vec![]);
+        let target = started(choose(&pick, None, false));
+        assert_eq!(target.project, "left");
+        let said = first_message(&target, None);
+        assert!(said.contains("a sitting left open since 2026-11-08 by an assistant that has gone"), "{said}");
+        assert!(said.contains("finish that first"), "{said}");
     }
 
     /// Named outright, a project the rule leaves out is still started: the

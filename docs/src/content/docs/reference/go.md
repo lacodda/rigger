@@ -46,20 +46,35 @@ Going past widget.
 Work on gadget  v1.0.0 · Public release
 ```
 
-## A sitting already open
+## Who is at a sitting
 
-The record cannot tell a sitting someone is at from one that was abandoned, and two assistants in one working tree is the worse mistake. So `go` starts nothing and says so:
+`go` opens the sitting before it starts the assistant, and holds it while the assistant runs: it takes a lock on a file named after the sitting, in a `sittings` directory beside the database. The lock is the operating system's, and the operating system lets go of it when the process ends, however it ends - closed, crashed or killed. So the record can tell three sittings apart:
+
+| The sitting | The queue says | `go` |
+| --- | --- | --- |
+| held by a `go` that is running | a sitting at work since … | starts nothing there, even named; `--force` goes past it |
+| held by a `go` that has gone | a sitting left open since … by an assistant that has gone | takes it over: the assistant is told how it was left, and the sitting closes when this one stops |
+| opened by `session start`, held by nothing | a sitting open since … | starts nothing there unless named; named, it joins and leaves it open for whoever opened it |
+
+Two assistants in one working tree is the worst of the mistakes, so the one sitting `go` never walks into is one an assistant is at:
+
+```console
+$ rigger go
+error: widget is at work: an assistant has held its sitting since 2026-11-08T10:20:31Z, and a second one in that tree would write over it. Let it finish, or go past it with `rigger go --force`.
+```
+
+A sitting nothing held cannot be told from one that was abandoned, and `go` says so:
 
 ```console
 $ rigger go
 error: widget has a sitting open since 2026-11-05T14:02:11Z. Finish it there, go back to it with `rigger go widget`, or go past it with `rigger go --force`.
 ```
 
-A sitting `go` opened itself is closed when the assistant stops. One it joined by name is left for whoever opened it.
+A sitting `go` holds is closed by `go` when the assistant exits. The assistant's end-of-turn hook leaves it open: a turn is not the sitting (see [`session end --remind`](/rigger/reference/session/#--remind)). No process id is kept, so none can be reused, and nothing has to be cleaned up for the answer to stay true.
 
 ## Naming a project
 
-`rigger go <PROJECT>` works on that project whatever the rule says of it, even one it leaves out: that is how work on a [blocked](#when-something-out-of-reach-stops-the-tag) project resumes. It joins a sitting already open. With no stage planned, the assistant is told to plan one.
+`rigger go <PROJECT>` works on that project whatever the rule says of it, even one it leaves out: that is how work on a [blocked](#when-something-out-of-reach-stops-the-tag) project resumes. It joins a sitting already open, unless an assistant is [at work in it](#who-is-at-a-sitting). With no stage planned, the assistant is told to plan one.
 
 ## When something out of reach stops the tag
 
@@ -105,6 +120,7 @@ Under `--json` it starts nothing and opens no sitting, and prints what it would 
 | `unfinished.untagged[]` | string | One change's subject line. |
 | `unfinished.undelivered` | string or null | How the last release fell short of getting out, in a few words. |
 | `unfinished.sitting` | string or null | When the sitting left open began. |
+| `unfinished.sitting_live` | boolean or null | Whether anyone is at that sitting: `true` while the `go` that holds it runs, `false` once it has gone, `null` when nothing held it or no sitting is open. |
 | `dir` | string or null | The directory the assistant would be started in. |
 | `program` | string | The assistant's command: the first word of `RIGGER_ASSISTANT`, or `claude`. |
 | `message` | string or null | The first message the assistant would receive. |
@@ -113,16 +129,16 @@ Under `--json` it starts nothing and opens no sitting, and prints what it would 
 | `busy` | object or null | The project whose open sitting stops it, when one does. |
 | `busy.project` | string | That project. |
 | `busy.since` | string | When the sitting began. |
+| `busy.live` | boolean | `true` when an assistant a running `go` started is at work in it; `false` when nothing held it, so the record cannot say. |
 | `nothing` | string or null | Why there is nothing to start, when there is nothing. |
 
 ## Exit status
 
-The assistant's exit status becomes rigger's, after the report. A sitting open on the next project, an assistant that cannot be run and a name that is no project are failures, with the reason on stderr.
+The assistant's exit status becomes rigger's, after the report. A sitting someone may be at, an assistant that cannot be run and a name that is no project are failures, with the reason on stderr.
 
 ## Related
 
 - [`queue`](/rigger/reference/queue/) - the same answer, without starting anything.
-- [`priority`](/rigger/reference/priority/) - how often a project comes round.
 - [`priority`](/rigger/reference/priority/) - how often a project comes round.
 - [`session`](/rigger/reference/session/) - the sitting it opens.
 - [`context`](/rigger/reference/context/) - the packet the assistant reads first.

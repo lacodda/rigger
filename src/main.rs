@@ -20,6 +20,7 @@ mod gate;
 mod git;
 mod go;
 mod handoff;
+mod hold;
 mod hub;
 mod hubfile;
 mod import;
@@ -2143,7 +2144,7 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
             }),
             "passed_over": start.filter(|_| force && named.is_none()).map(|t| go::passed_over(&chosen, t)).unwrap_or_default(),
             "busy": match &choice {
-                go::Choice::Busy { project, since } => Some(serde_json::json!({ "project": project, "since": since })),
+                go::Choice::Busy { project, since, live } => Some(serde_json::json!({ "project": project, "since": since, "live": live })),
                 _ => None,
             },
             "nothing": match &choice {
@@ -2155,7 +2156,7 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
 
     let target = match choice {
         go::Choice::Start(target) => target,
-        go::Choice::Busy { project, since } => bail!("{}", go::busy(&project, &since)),
+        go::Choice::Busy { project, since, live } => bail!("{}", go::busy(&project, &since, live)),
         go::Choice::Nothing(said) => {
             println!("{said}");
             return Ok(());
@@ -2185,15 +2186,32 @@ fn go_on(named: Option<&str>, force: bool, json: bool) -> Result<()> {
     print!("{}", go::before(&target, &program, &project.path));
 
     let shipped_before = db.latest_delivery(project.id)?.map(|d| d.version);
-    // The sitting is opened here rather than left to the assistant, so that a
-    // second `go` in another terminal sees it from the first moment. One this
-    // run joined belongs to whoever opened it, and is theirs to close.
-    let joined = db.open_session(project.id)?.is_some();
-    open_sitting(&db, &project)?;
+    // Asked again here, whatever the queue said a moment ago: another
+    // terminal may have started on it since, and a project named outright was
+    // never asked at all.
+    let open = db.open_session(project.id)?;
+    let presence = open.as_ref().map(|s| hold::presence(db.path(), s.id));
+    if let (Some(open), Some(hold::Presence::Live)) = (&open, presence) {
+        bail!("{}", go::busy(&project.name, &open.started_at, true));
+    }
+    // The sitting is opened here rather than left to the assistant, and held
+    // while the assistant runs, so that a second `go` in another terminal sees
+    // someone at work from the first moment to the last. One whose holder has
+    // gone is taken over: the work in it is this turn's to finish. One nothing
+    // ever held belongs to whoever opened it, and is theirs to close.
+    let joined = presence == Some(hold::Presence::Unknown);
+    let (session, _, _) = open_sitting(&db, &project)?;
+    let held = match joined {
+        true => None,
+        false => Some(hold::take(db.path(), session.id)?),
+    };
     let code = open::run(dir, &message);
+    // Let go before closing: the close of a held sitting is left to its
+    // holder, and this is the holder.
+    drop(held);
     if !joined {
-        // Whoever was at work has gone, or never came. An assistant's own hook
-        // has usually closed it already, and then this says nothing.
+        // Unless the assistant ended the sitting itself, this is where it ends:
+        // the assistant has exited, and nobody is at it any more.
         session_end(Some(&project.name), None, None, None, true, false)?;
     }
     let code = code?;
@@ -6232,6 +6250,15 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
         return Ok(());
     };
 
+    // A hook fires at the end of every turn, and not every turn ends the
+    // sitting. One handed back to wait for the assistant's own background
+    // work is a pause; one in a sitting `go` holds ends when the assistant
+    // exits, and `go` closes it then. Either way the hook leaves it open, and
+    // says nothing: there is nothing yet to say.
+    if remind && hold::presence(db.path(), open.id) == hold::Presence::Live {
+        return Ok(());
+    }
+
     let at = db::now();
     let summary = session_summary(&db, &project, &open, &at)?;
     // The owner's words, when the draft was edited: they replace what was
@@ -6244,6 +6271,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
     };
 
     db.end_session(open.id, &at)?;
+    hold::clear(db.path(), open.id);
     // Closed right after the record closes the sitting, so the interval in
     // kasl ends where the session does rather than after a backup, a diary
     // and a hook have had their turn.

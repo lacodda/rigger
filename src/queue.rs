@@ -74,6 +74,9 @@ pub struct Unfinished {
     pub undelivered: Option<String>,
     /// When the sitting left open began.
     pub sitting: Option<String>,
+    /// Whether anyone is at that sitting: `true` while the `go` that opened
+    /// it runs, `false` once it has gone, nothing where nothing held it.
+    pub sitting_live: Option<bool>,
 }
 
 impl Unfinished {
@@ -106,7 +109,12 @@ impl Unfinished {
             out.push(undelivered.clone());
         }
         if let Some(sitting) = &self.sitting {
-            out.push(format!("a sitting open since {}", day_of(sitting)));
+            let day = day_of(sitting);
+            out.push(match self.sitting_live {
+                Some(true) => format!("a sitting at work since {day}"),
+                Some(false) => format!("a sitting left open since {day} by an assistant that has gone"),
+                None => format!("a sitting open since {day}"),
+            });
         }
         out
     }
@@ -137,6 +145,8 @@ pub struct Standing {
     pub undelivered: Option<String>,
     /// When the sitting left open began.
     pub sitting: Option<String>,
+    /// Whether anyone is at it; see `Unfinished::sitting_live`.
+    pub sitting_live: Option<bool>,
     /// When it last had a turn: its last release, or for a folder, which makes
     /// none, the end of its last sitting.
     pub last_turn: Option<String>,
@@ -496,6 +506,7 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
             untagged: db.changes_after(project.id, released.as_deref())?,
             held,
             undelivered,
+            sitting_live: open.as_ref().and_then(|s| crate::hold::presence(db.path(), s.id).live()),
             sitting: open.map(|s| s.started_at),
             blockers: notes(db.blockers(project.id)?),
             moves: notes(db.moves(project.id, last_turn.as_deref())?),
@@ -550,6 +561,7 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         untagged: s.untagged.iter().map(|(_, subject)| subject.clone()).collect(),
         undelivered: s.undelivered.clone(),
         sitting: s.sitting.clone(),
+        sitting_live: s.sitting_live,
     };
     let asked = s.moves.first();
 
@@ -897,6 +909,7 @@ mod tests {
             held: Default::default(),
             undelivered: None,
             sitting: None,
+            sitting_live: None,
             last_turn: Some("2026-10-26T10:00:00Z".to_string()),
             waited,
             refactor: false,
@@ -979,7 +992,7 @@ mod tests {
     #[test]
     fn whatever_has_not_gone_out_leaves_a_project_unfinished() {
         type Case = (&'static str, fn(&mut Standing));
-        let cases: [Case; 7] = [
+        let cases: [Case; 9] = [
             ("1 changed file not committed", |s| s.held.changed = 1),
             ("2 untracked files", |s| s.held.untracked = 2),
             ("a merge left halfway", |s| s.held.operation = Some("merge".into())),
@@ -991,6 +1004,15 @@ mod tests {
                 s.undelivered = Some("v0.1.0: released, publish failed".into())
             }),
             ("a sitting open since 2026-11-05", |s| s.sitting = Some("2026-11-05T10:00:00Z".into())),
+            // Who is at it, when the record can tell.
+            ("a sitting at work since 2026-11-05", |s| {
+                s.sitting = Some("2026-11-05T10:00:00Z".into());
+                s.sitting_live = Some(true);
+            }),
+            ("a sitting left open since 2026-11-05 by an assistant that has gone", |s| {
+                s.sitting = Some("2026-11-05T10:00:00Z".into());
+                s.sitting_live = Some(false);
+            }),
         ];
         for (said, set) in cases {
             let mut s = on_stage("alpha", 2, 0);

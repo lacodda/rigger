@@ -151,7 +151,18 @@ fn go_starts_the_assistant_on_what_comes_next() {
     project(data.path(), "second");
 
     let during = data.path().join("during.json");
-    let (bin, log) = stand_in(data.path(), &[format!("{} > \"{}\"", rigger_line("queue --json"), during.display())], 0);
+    let second_go = data.path().join("second-go.json");
+    let (bin, log) = stand_in(
+        data.path(),
+        &[
+            // The assistant's end-of-turn hook, mid-sitting: a held sitting is
+            // closed by its holder when the assistant exits, not by a turn.
+            rigger_line("session end --remind"),
+            format!("{} > \"{}\"", rigger_line("queue --json"), during.display()),
+            format!("{} > \"{}\"", rigger_line("go first --json"), second_go.display()),
+        ],
+        0,
+    );
     let said = stdout(go(data.path(), &bin, &[]).assert().success());
 
     let (cwd, args) = given(&log);
@@ -163,9 +174,16 @@ fn go_starts_the_assistant_on_what_comes_next() {
     assert!(said.contains("Work on first  v0.2.0 · Second"), "{said}");
     assert!(said.contains("Starting stand-in in"), "{said}");
 
-    // While the assistant runs, a second `go` can see someone is at it.
+    // While the assistant runs, a second `go` can see someone is at it - not
+    // only that a sitting is open, but that an assistant is at work in it -
+    // and starts nothing there, even asked for that project by name.
     let during: Value = serde_json::from_str(&std::fs::read_to_string(&during).unwrap()).unwrap();
     assert!(during["order"][0]["unfinished"]["sitting"].is_string(), "{during:#}");
+    assert_eq!(during["order"][0]["unfinished"]["sitting_live"], true, "{during:#}");
+    let second_go: Value = serde_json::from_str(&std::fs::read_to_string(&second_go).unwrap()).unwrap();
+    assert_eq!(second_go["busy"]["project"], "first", "{second_go:#}");
+    assert_eq!(second_go["busy"]["live"], true, "{second_go:#}");
+    assert!(second_go["project"].is_null(), "{second_go:#}");
 
     // And when it has gone, nobody is. Only a release ends a turn, so it is
     // still this project's.
@@ -262,6 +280,39 @@ fn an_open_sitting_stops_go_and_naming_the_project_joins_it() {
     go(data.path(), &bin, &["--force"]).assert().success();
     let (cwd, _) = given(&log);
     assert!(cwd.to_lowercase().ends_with("first"), "{cwd}");
+}
+
+/// A sitting whose `go` has gone - its terminal closed, the machine slept and
+/// woke without it - is work left unfinished, not someone at work: the next
+/// `go` takes it over, says how it was left, and closes it when it is done.
+#[test]
+fn a_sitting_whose_assistant_has_gone_is_taken_over() {
+    let data = tempfile::tempdir().unwrap();
+    init(data.path());
+    project(data.path(), "first");
+    project(data.path(), "second");
+    let opened = json(rigger(data.path()).args(["session", "start", "second", "--json"]));
+    let id = opened["session"]["id"].as_i64().unwrap();
+    // What a `go` that died leaves behind: its sitting's file, and no lock on
+    // it, because the operating system let go of the lock with the process.
+    let doctor = json(rigger(data.path()).args(["doctor", "--json"]));
+    let sittings = Path::new(doctor["database"].as_str().unwrap()).parent().unwrap().join("sittings");
+    std::fs::create_dir_all(&sittings).unwrap();
+    std::fs::write(sittings.join(format!("{id}.lock")), "").unwrap();
+
+    let queue = json(rigger(data.path()).args(["queue", "--json"]));
+    assert_eq!(queue["order"][0]["project"], "second", "{queue:#}");
+    assert_eq!(queue["order"][0]["unfinished"]["sitting_live"], false, "{queue:#}");
+
+    let (bin, log) = stand_in(data.path(), &[], 0);
+    go(data.path(), &bin, &[]).assert().success();
+    let (cwd, args) = given(&log);
+    assert!(cwd.to_lowercase().ends_with("second"), "{cwd}");
+    assert!(args.contains("by an assistant that has gone"), "{args}");
+    // Taken over, it was this turn's to close, and the file went with it.
+    let after = rigger(data.path()).args(["session", "end", "second"]).assert().success();
+    assert!(stdout(after).contains("No session is open"));
+    assert!(!sittings.join(format!("{id}.lock")).exists());
 }
 
 /// A blocker lets the line go on without `--force`, and says how it comes
