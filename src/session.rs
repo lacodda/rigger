@@ -37,6 +37,9 @@ pub struct Summary {
     pub next_step: Option<String>,
     /// Versions whose tags landed inside the session.
     pub shipped: Vec<String>,
+    /// What it said about where the work stands: the state lines it wrote,
+    /// oldest first.
+    pub state: Vec<String>,
     /// Tasks closed while it was open.
     pub tasks_closed: Vec<String>,
     /// Commits made while it was open, by their subject line.
@@ -60,6 +63,7 @@ impl Summary {
             && self.changes.is_empty()
             && self.questions.is_empty()
             && self.shipped.is_empty()
+            && self.state.is_empty()
             && self.tasks_closed.is_empty()
             && self.commits.is_empty()
     }
@@ -81,7 +85,7 @@ impl Summary {
     }
 
     pub fn recorded(&self) -> usize {
-        self.decisions.len() + self.findings.len() + self.pitfalls.len() + self.changes.len() + self.questions.len()
+        self.decisions.len() + self.findings.len() + self.pitfalls.len() + self.changes.len() + self.questions.len() + self.state.len()
     }
 
     /// What the ritual asks the assistant to check before it stops.
@@ -127,6 +131,7 @@ pub fn summarise(
         questions: Vec::new(),
         next_step,
         shipped,
+        state: Vec::new(),
         tasks_closed,
         commits,
     };
@@ -180,6 +185,9 @@ pub fn diary_entry(summary: &Summary, day: &str, heading: Option<&str>) -> Strin
     if !summary.shipped.is_empty() {
         out.push_str(&format!("\n**Выпущено.** {}\n", summary.shipped.join(", ")));
     }
+    // Where the work stood, beside the work: a stage that begins with a line
+    // about where it begins is read in the diary next to what followed.
+    section(&mut out, "Где стоит.", &summary.state);
     section(&mut out, "Сделано.", &summary.done());
     section(&mut out, "Решения.", &summary.decisions);
     section(&mut out, "Находки.", &summary.findings);
@@ -364,6 +372,25 @@ mod tests {
         assert!(entry.contains("**Следующий шаг.** ship the retro"), "{entry}");
         // An empty section is not printed as an empty heading.
         assert!(!entry.contains("**Находки.**"), "{entry}");
+    }
+
+    /// A line about where the work stands is the sitting's, and its diary
+    /// says it beside the work: a stage begun with "began at 71c2514" was in
+    /// the hub's state block and nowhere in the diary of the sitting.
+    #[test]
+    fn where_the_work_stands_is_in_the_diary_beside_the_work() {
+        let mut summary = summarise("alpha", &session(), &[], vec![], vec![], vec![], None);
+        assert!(summary.empty());
+        summary.state = vec!["Stage v0.2.0 began at 71c2514".to_string()];
+        assert!(!summary.empty(), "a sitting that said where the work stands is not empty");
+        assert_eq!(summary.recorded(), 1);
+        summary.commits = vec!["feat: the grid".to_string()];
+
+        let entry = diary_entry(&summary, "2026-09-05", None);
+        let stands = entry.find("**Где стоит.**").unwrap_or_else(|| panic!("{entry}"));
+        let line = entry.find("- Stage v0.2.0 began at 71c2514").unwrap_or_else(|| panic!("{entry}"));
+        let done = entry.find("**Сделано.**").unwrap_or_else(|| panic!("{entry}"));
+        assert!(stands < line && line < done, "{entry}");
     }
 
     #[test]

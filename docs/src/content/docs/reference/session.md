@@ -97,6 +97,8 @@ Under `--json` it prints the sitting's summary, then what came of closing it:
 | `session.next_step` | string or null | The line the next session starts from; `null` when none was set. |
 | `session.shipped` | array | Versions whose tags landed inside the sitting. |
 | `session.shipped[]` | string | One version. |
+| `session.state` | array | What the sitting said about where the work stands: the [state lines](/rigger/reference/note/) written while it was open, oldest first. |
+| `session.state[]` | string | One state line. |
 | `session.tasks_closed` | array | Tasks closed while the sitting was open. |
 | `session.tasks_closed[]` | string | One task title. |
 | `session.commits` | array | Commits made while the sitting was open. |
@@ -143,6 +145,8 @@ This is not a gate: the session closes either way. rigger reports; what to do ab
 ## The entry it leaves
 
 **Сделано.** is what the sitting did: the tasks it closed, the changes it recorded, and its commits, each said once - a change recorded by hand usually repeats the commit it describes. The project's repository is read first, so a commit made in the sitting is in the entry even if nobody ran [`sync`](/rigger/reference/sync/).
+
+**Где стоит.** comes before it: the [state lines](/rigger/reference/note/) the sitting wrote, so that where a stage began is read beside the work that followed. A state line written while a sitting is open belongs to it, as an event does; one read in from a hub belongs to no sitting.
 
 ### Which commits are the sitting's
 

@@ -705,6 +705,7 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("note", &["note", "alpha", "The template owns the footer", "--kind", "finding"]);
     r.json("note", &["note", "alpha", "A footer drawn twice looks right in print", "--kind", "pitfall"]);
     r.json("note", &["note", "alpha", "Should the header move too?", "--kind", "question"]);
+    r.json("note", &["note", "alpha", "The reader stands apart from the writer", "--kind", "state"]);
     r.json("task status", &["task", "status", &task_id(0), "done"]);
     commit(&alpha, "d.txt", "fix: draw the footer once");
     git(&alpha, &["tag", "v0.3.0"]);

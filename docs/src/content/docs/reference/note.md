@@ -46,6 +46,8 @@ $ rigger note sample "**v0.2.0 shipped.** The second stage is closed." --kind st
 Added a state line for sample; `rigger export` writes it into the README
 ```
 
+Written while a [sitting](/rigger/reference/session/) is open, the line belongs to it, as an event does, and the sitting's diary entry says it under **Где стоит.**, beside the work that followed. A line read back from a hub keeps the sitting it was written in.
+
 ## The principle a decision stands on
 
 Most decisions of a line are not new: they are one more instance of something already believed. `--principle` names which, so the instances can be read together.

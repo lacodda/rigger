@@ -299,6 +299,30 @@ fn the_first_second_of_a_sitting_is_its_own() {
     assert_eq!(json["session"]["shipped"], serde_json::json!(["v0.1.0"]), "{json}");
 }
 
+/// A line saying where the work stands belongs to the sitting that wrote it,
+/// and its diary says it beside the work. `lyrn stage` writes one at the start
+/// of every stage, and it reached the hub's state block and no diary.
+#[test]
+fn a_state_line_written_in_a_sitting_is_in_its_diary() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    project(data.path(), "alpha", &[]);
+    note(data.path(), "alpha", "state", "written before any sitting");
+
+    rigger(data.path()).args(["session", "start", "alpha"]).assert().success();
+    note(data.path(), "alpha", "state", "Stage v0.2.0 began at 71c2514");
+    let draft = output(data.path(), &["session", "draft", "alpha"]);
+    assert!(draft.contains("**Где стоит.**\n\n- Stage v0.2.0 began at 71c2514"), "{draft}");
+
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["session", "end", "alpha", "--json"])).unwrap();
+    assert_eq!(json["session"]["state"], serde_json::json!(["Stage v0.2.0 began at 71c2514"]), "{json}");
+    // A sitting that only said where things stand is not an empty one.
+    rigger(data.path()).args(["session", "start", "alpha"]).assert().success();
+    note(data.path(), "alpha", "state", "nothing else today");
+    let out = output(data.path(), &["session", "end", "alpha"]);
+    assert!(out.contains("recorded 1 state line"), "{out}");
+}
+
 /// The entry is the session's own sentences, arranged. rigger has no opinion
 /// about the day, and inventing one would put words in the owner's diary
 /// that nobody said.

@@ -151,6 +151,7 @@ fn an_open_task_from_before_reads_as_new() {
          DROP TRIGGER events_not_into_retired; DROP TRIGGER sessions_not_into_retired;
          DROP TRIGGER versions_not_into_retired; DROP TRIGGER tasks_not_into_retired;
          ALTER TABLE projects DROP COLUMN retired_by; ALTER TABLE projects DROP COLUMN retired_at;
+         ALTER TABLE state_lines DROP COLUMN session_id;
          ALTER TABLE versions DROP COLUMN installed_at; ALTER TABLE versions DROP COLUMN deployed_at;
          DROP TABLE project_settings;
          ALTER TABLE events DROP COLUMN resolved_at; ALTER TABLE events DROP COLUMN waits;
@@ -188,7 +189,8 @@ fn tiers_become_weights() {
     let db = data.path().join("profiles").join("line").join("rigger.db");
     let conn = rusqlite::Connection::open(&db).unwrap();
     conn.execute_batch(
-        "ALTER TABLE versions DROP COLUMN installed_at; ALTER TABLE versions DROP COLUMN deployed_at;
+        "ALTER TABLE state_lines DROP COLUMN session_id;
+         ALTER TABLE versions DROP COLUMN installed_at; ALTER TABLE versions DROP COLUMN deployed_at;
          DROP TABLE project_settings;
          ALTER TABLE events DROP COLUMN resolved_at; ALTER TABLE events DROP COLUMN waits;
          ALTER TABLE projects DROP COLUMN weight; ALTER TABLE projects ADD COLUMN tier TEXT;

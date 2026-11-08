@@ -437,7 +437,8 @@ fn the_migration_takes_the_carriage_returns_out_of_what_the_record_holds() {
     // The record as the schema before it left things: text with CRLF in it,
     // and no notes on hub files.
     conn.execute_batch(
-        "ALTER TABLE versions DROP COLUMN installed_at; ALTER TABLE versions DROP COLUMN deployed_at;
+        "ALTER TABLE state_lines DROP COLUMN session_id;
+         ALTER TABLE versions DROP COLUMN installed_at; ALTER TABLE versions DROP COLUMN deployed_at;
          DROP TABLE project_settings;
          ALTER TABLE events DROP COLUMN resolved_at; ALTER TABLE events DROP COLUMN waits;
          ALTER TABLE projects DROP COLUMN weight; ALTER TABLE projects ADD COLUMN tier TEXT;

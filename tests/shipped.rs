@@ -279,7 +279,8 @@ fn what_the_engine_said_in_text_comes_over_on_the_migration() {
     {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
-            "ALTER TABLE versions DROP COLUMN installed_at;
+            "ALTER TABLE state_lines DROP COLUMN session_id;
+             ALTER TABLE versions DROP COLUMN installed_at;
              ALTER TABLE versions DROP COLUMN deployed_at;
              PRAGMA user_version = 34;",
         )

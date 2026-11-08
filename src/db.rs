@@ -674,6 +674,13 @@ const MIGRATIONS: &[&str] = &[
            AND instr(e.body, 'deployed by turnout') > 0
     ) WHERE status = 'shipped';
     ",
+    // v36: the sitting a state line was written in. A line saying where the
+    // work stands at the start of a stage was kept apart from the sitting
+    // that wrote it, so the sitting's diary had the work and not where it
+    // began. Lines read in from a hub belong to no sitting, as before.
+    "
+    ALTER TABLE state_lines ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -2068,7 +2075,12 @@ impl Db {
     /// lines came in with an import and never after. Now a sitting that
     /// shifts the state says so with one line, the way the ritual always
     /// asked, and the export writes it where the hub keeps them.
+    ///
+    /// Written under the sitting that is open, as an event is: the line is
+    /// what that sitting says about where the work stands, and its diary
+    /// reads it from there.
     pub fn add_state_line(&self, project_id: i64, stamp: &str, body: &str) -> Result<()> {
+        let session = self.open_session(project_id)?.map(|s| s.id);
         let gap: i64 = self
             .conn
             .query_row("SELECT gap_after FROM state_lines WHERE project_id = ?1 AND position = 0", [project_id], |r| {
@@ -2082,10 +2094,17 @@ impl Db {
         self.conn
             .execute("UPDATE state_lines SET position = -position WHERE project_id = ?1", [project_id])?;
         self.conn.execute(
-            "INSERT INTO state_lines (project_id, position, stamp, body, gap_after) VALUES (?1, 0, ?2, ?3, ?4)",
-            params![project_id, stamp, body, gap],
+            "INSERT INTO state_lines (project_id, position, stamp, body, gap_after, session_id) VALUES (?1, 0, ?2, ?3, ?4, ?5)",
+            params![project_id, stamp, body, gap, session],
         )?;
         Ok(())
+    }
+
+    /// The state lines written in one sitting, in the order they were written.
+    pub fn session_state_lines(&self, session_id: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT body FROM state_lines WHERE session_id = ?1 ORDER BY position DESC")?;
+        let rows = stmt.query_map([session_id], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Every diary entry the record holds for a project, newest first.
@@ -2144,11 +2163,23 @@ impl Db {
         if before == lines {
             return Ok(Change::Unchanged);
         }
+        // The file knows nothing of sittings, so a line read back keeps the
+        // sitting its twin in the record was written in: a hub edited above
+        // a line must not take that line out of its sitting's diary.
+        let mut sittings: Vec<(Option<String>, String, Option<i64>)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT stamp, body, session_id FROM state_lines WHERE project_id = ?1 ORDER BY position")?;
+            let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
         self.conn.execute("DELETE FROM state_lines WHERE project_id = ?1", [project_id])?;
         for (position, line) in lines.iter().enumerate() {
+            let twin = sittings.iter().position(|(stamp, body, _)| *stamp == line.stamp && *body == line.body);
+            let session = twin.and_then(|at| sittings.remove(at).2);
             self.conn.execute(
-                "INSERT INTO state_lines (project_id, position, stamp, body, gap_after) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![project_id, position as i64, line.stamp, line.body, line.gap_after as i64],
+                "INSERT INTO state_lines (project_id, position, stamp, body, gap_after, session_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![project_id, position as i64, line.stamp, line.body, line.gap_after as i64, session],
             )?;
         }
         Ok(match before.is_empty() {
@@ -5764,6 +5795,31 @@ mod tests {
         let db = Db::create(&dir.path().join("rigger.db")).unwrap();
         let project = db.add_project("alpha", &dir.path().join("alpha").to_string_lossy(), None, Kind::Repo).unwrap();
         (dir, db, project.id)
+    }
+
+    /// A state line written in a sitting is that sitting's, and stays so when
+    /// the hub is read back with a line added above it: the file knows nothing
+    /// of sittings, so the line keeps what its twin in the record had.
+    #[test]
+    fn a_state_line_keeps_its_sitting_when_the_hub_is_read_back() {
+        let (_dir, db, project) = scratch();
+        db.add_state_line(project, "2026-11-01", "before any sitting").unwrap();
+        let (sitting, _) = db.start_session(project, "2026-11-02T10:00:00Z").unwrap();
+        db.add_state_line(project, "2026-11-02", "Stage v0.2.0 began at 71c2514").unwrap();
+        assert_eq!(db.session_state_lines(sitting.id).unwrap(), vec!["Stage v0.2.0 began at 71c2514"]);
+
+        // The hub, read back with a line somebody wrote above the others.
+        let mut lines = db.state_lines(project).unwrap();
+        lines.insert(
+            0,
+            crate::hub::StateLine {
+                stamp: Some("2026-11-03".into()),
+                body: "written in the file".into(),
+                gap_after: 0,
+            },
+        );
+        db.set_state_lines(project, &lines).unwrap();
+        assert_eq!(db.session_state_lines(sitting.id).unwrap(), vec!["Stage v0.2.0 began at 71c2514"]);
     }
 
     /// A commit read while a sitting is open is the sitting's work if it was

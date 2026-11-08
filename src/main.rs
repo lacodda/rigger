@@ -6383,6 +6383,7 @@ fn session_end(project: Option<&str>, heading: Option<&str>, diary: Option<&Path
             ("pitfall", "pitfalls", summary.pitfalls.len()),
             ("change", "changes", summary.changes.len()),
             ("question", "questions", summary.questions.len()),
+            ("state line", "state lines", summary.state.len()),
         ];
         let recorded: Vec<String> = counted.iter().filter(|(_, _, n)| *n > 0).map(|(one, many, n)| plural(*n, one, many)).collect();
         if !recorded.is_empty() {
@@ -6454,7 +6455,9 @@ fn session_summary(db: &Db, project: &db::Project, open: &db::Session, at: &str)
         ended_at: Some(at.to_string()),
         ..open.clone()
     };
-    Ok(session::summarise(&project.name, &ended, &events, shipped, closed, commits, next_step))
+    let mut summary = session::summarise(&project.name, &ended, &events, shipped, closed, commits, next_step);
+    summary.state = db.session_state_lines(open.id)?;
+    Ok(summary)
 }
 
 /// Reads an edited diary entry from a file, or from standard input as `-`.
