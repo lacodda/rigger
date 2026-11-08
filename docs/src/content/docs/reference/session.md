@@ -142,7 +142,13 @@ This is not a gate: the session closes either way. rigger reports; what to do ab
 
 ## The entry it leaves
 
-**Сделано.** is what the sitting did: the tasks it closed, the changes it recorded, and the commits it made while it was open, each said once - a change recorded by hand usually repeats the commit it describes. The project's repository is read first, so a commit made in the sitting is in the entry even if nobody ran [`sync`](/rigger/reference/sync/).
+**Сделано.** is what the sitting did: the tasks it closed, the changes it recorded, and its commits, each said once - a change recorded by hand usually repeats the commit it describes. The project's repository is read first, so a commit made in the sitting is in the entry even if nobody ran [`sync`](/rigger/reference/sync/).
+
+### Which commits are the sitting's
+
+A commit is git's, not the record's, so it carries no sitting of its own. Since v0.47.0 a commit [`sync`](/rigger/reference/sync/) reads while a sitting is open belongs to that sitting - if it was made after the project's sitting before it ended, or, with none before it, after this one began. A commit made between two sittings is nearly always the work the second one goes on with, and a window of time gave it to neither. Older commits are history: so is everything the very first read of a repository finds, however recently it was made.
+
+The window - from the second the sitting began to the second it ended, both included - still stands in for a commit read when no sitting was open. A commit given to one sitting is never counted in another. Tasks closed and versions shipped are held by the same window, its first second included: moments are kept to the second, and [`go`](/rigger/reference/go/) opens a sitting and starts the assistant at once.
 
 ### `session draft`
 

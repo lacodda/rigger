@@ -124,6 +124,8 @@ An event is dated by its commit, not by the sync that read it, so a project sync
 
 The commit's hash is what makes recording it twice impossible - not its text, which can be amended between one sync and the next.
 
+A change read while a [sitting](/rigger/reference/session/) is open on the project belongs to that sitting, if its commit was made after the sitting before it ended: a commit made between two sittings is the work the second goes on with. The first read of a repository is its history, and belongs to none. See [which commits are a sitting's](/rigger/reference/session/#which-commits-are-the-sittings).
+
 Changes reach the [context packet](/rigger/reference/context/) like any other event, but they are capped at a share of its budget. A commit can always be read again in git; a decision or a pitfall exists nowhere else, and a chronicle that filled the packet would cost a session the reasoning behind the code it is about to change.
 
 ## Activity

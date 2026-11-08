@@ -3147,11 +3147,15 @@ impl Db {
     /// every run, and a message amended between runs would otherwise arrive
     /// as a second event about one change. A unique index enforces it, so
     /// two syncs racing cannot both insert.
-    pub fn record_commit_event(&self, project_id: i64, hash: &str, body: &str, created_at: &str) -> Result<Change> {
+    ///
+    /// `session` is the sitting the commit belongs to, if any - see
+    /// `commit_sitting`. Given only to the first read: a commit read again
+    /// later, by a sitting that did not make it, keeps what it was given.
+    pub fn record_commit_event(&self, project_id: i64, hash: &str, body: &str, created_at: &str, session: Option<i64>) -> Result<Change> {
         let changed = self.conn.execute(
-            "INSERT OR IGNORE INTO events (project_id, kind, body, author, created_at, commit_hash)
-             VALUES (?1, 'change', ?2, 'git', ?3, ?4)",
-            params![project_id, body, created_at, hash],
+            "INSERT OR IGNORE INTO events (project_id, session_id, kind, body, author, created_at, commit_hash)
+             VALUES (?1, ?2, 'change', ?3, 'git', ?4, ?5)",
+            params![project_id, session, body, created_at, hash],
         )?;
         if changed > 0 {
             return Ok(Change::Added);
@@ -4844,6 +4848,38 @@ impl Db {
         Ok(())
     }
 
+    /// The sitting a commit read now belongs to, and the moment from which a
+    /// commit is its work.
+    ///
+    /// A commit is git's, not the record's, so it carries no sitting of its
+    /// own, and a window of time placed it badly: one made between two
+    /// sittings of a day belonged to neither, though it is nearly always the
+    /// work the second one went on with. So a commit read while a sitting is
+    /// open belongs to it - if it was made after the sitting before it ended,
+    /// or, with none before it, after this one began. Older ones are history
+    /// a first read of the repository brings in, not this sitting's work -
+    /// and so is everything the very first read finds, whenever it was made.
+    ///
+    /// Asked before a read writes anything: it is the read's own question.
+    pub fn commit_sitting(&self, project_id: i64) -> Result<Option<(i64, String)>> {
+        let Some(open) = self.open_session(project_id)? else {
+            return Ok(None);
+        };
+        if self.activity(project_id)?.is_none() {
+            return Ok(None);
+        }
+        let previous: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT MAX(ended_at) FROM sessions WHERE project_id = ?1 AND ended_at IS NOT NULL AND id <> ?2",
+                params![project_id, open.id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(Some((open.id, previous.unwrap_or(open.started_at))))
+    }
+
     /// The events written while one session was open, oldest first.
     pub fn session_events(&self, session_id: i64) -> Result<Vec<RecentEvent>> {
         let mut stmt = self
@@ -4861,27 +4897,40 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Versions whose tag landed between two moments.
-    pub fn shipped_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
+    /// Versions whose tag landed in a sitting: from the second it began to
+    /// the second it ended, both included.
+    ///
+    /// The first second is the sitting's. Moments are kept to the second, and
+    /// a strict boundary lost what was made in the second a sitting opened -
+    /// which `rigger go` makes a likely second, since it opens the sitting and
+    /// starts the assistant at once.
+    pub fn shipped_between(&self, project_id: i64, from: &str, until: &str) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT name FROM versions              WHERE project_id = ?1 AND shipped_ts IS NOT NULL AND shipped_ts > ?2 AND shipped_ts <= ?3")?;
-        let rows = stmt.query_map(params![project_id, after, until], |r| r.get::<_, String>(0))?;
+            .prepare("SELECT name FROM versions              WHERE project_id = ?1 AND shipped_ts IS NOT NULL AND shipped_ts >= ?2 AND shipped_ts <= ?3")?;
+        let rows = stmt.query_map(params![project_id, from, until], |r| r.get::<_, String>(0))?;
         let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
         names.sort_by_key(|n| version_order(n));
         Ok(names)
     }
 
-    /// The subject lines of the commits made between two moments, oldest
-    /// first, as `sync` read them. Dated by the commit rather than by the
-    /// sync, so a session's commits are its own even when read a day later.
-    pub fn commits_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
+    /// The subject lines of a sitting's commits, oldest first, as `sync` read
+    /// them: those read while it was open (see `commit_sitting`), and those
+    /// read with no sitting open that were made inside its window, the first
+    /// second included. Dated by the commit rather than by the sync, so a
+    /// sitting's commits are its own even when read a day later.
+    ///
+    /// The window only stands in where the record has no sitting for a
+    /// commit; one given to another sitting is that sitting's, whatever its
+    /// time.
+    pub fn sitting_commits(&self, session: &Session, until: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT body FROM events
-             WHERE project_id = ?1 AND commit_hash IS NOT NULL AND created_at > ?2 AND created_at <= ?3
+             WHERE project_id = ?1 AND commit_hash IS NOT NULL
+               AND (session_id = ?2 OR (session_id IS NULL AND created_at >= ?3 AND created_at <= ?4))
              ORDER BY created_at, id",
         )?;
-        let rows = stmt.query_map(params![project_id, after, until], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![session.project_id, session.id, session.started_at, until], |r| r.get::<_, String>(0))?;
         Ok(rows
             .collect::<rusqlite::Result<Vec<String>>>()?
             .into_iter()
@@ -4921,12 +4970,13 @@ impl Db {
             .flatten())
     }
 
-    /// Tasks closed between two moments.
-    pub fn tasks_closed_between(&self, project_id: i64, after: &str, until: &str) -> Result<Vec<String>> {
+    /// Tasks closed in a sitting, the second it began included, as for
+    /// `shipped_between`.
+    pub fn tasks_closed_between(&self, project_id: i64, from: &str, until: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT title FROM tasks              WHERE project_id = ?1 AND closed_at IS NOT NULL AND closed_at > ?2 AND closed_at <= ?3 ORDER BY id",
+            "SELECT title FROM tasks              WHERE project_id = ?1 AND closed_at IS NOT NULL AND closed_at >= ?2 AND closed_at <= ?3 ORDER BY id",
         )?;
-        let rows = stmt.query_map(params![project_id, after, until], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![project_id, from, until], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -5707,7 +5757,48 @@ fn weekday(word: &str) -> Option<jiff::civil::Weekday> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_past, parse_day, slugify, stamp, stamp_of, version_order};
+    use super::{Db, Kind, is_past, parse_day, slugify, stamp, stamp_of, version_order};
+
+    fn scratch() -> (tempfile::TempDir, Db, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::create(&dir.path().join("rigger.db")).unwrap();
+        let project = db.add_project("alpha", &dir.path().join("alpha").to_string_lossy(), None, Kind::Repo).unwrap();
+        (dir, db, project.id)
+    }
+
+    /// A commit read while a sitting is open is the sitting's work if it was
+    /// made after the sitting before it ended - and the very first read of a
+    /// repository is its history, whenever its commits were made.
+    #[test]
+    fn a_commit_belongs_to_the_sitting_that_read_it_when_it_is_its_work() {
+        let (_dir, db, project) = scratch();
+        // A diary entry read from a hub: a sitting that ended long ago.
+        let (old, _) = db.start_session(project, "2026-08-01T00:00:00Z").unwrap();
+        db.end_session(old.id, "2026-08-01T00:00:00Z").unwrap();
+        let (open, _) = db.start_session(project, "2026-11-02T10:00:00Z").unwrap();
+        assert_eq!(db.commit_sitting(project).unwrap(), None, "a first read claimed history for a sitting");
+
+        db.record_activity(project, 0, None).unwrap();
+        assert_eq!(db.commit_sitting(project).unwrap(), Some((open.id, "2026-08-01T00:00:00Z".to_string())));
+        db.end_session(open.id, "2026-11-02T12:00:00Z").unwrap();
+        assert_eq!(db.commit_sitting(project).unwrap(), None, "no sitting is open");
+
+        let (next, _) = db.start_session(project, "2026-11-02T15:00:00Z").unwrap();
+        assert_eq!(db.commit_sitting(project).unwrap(), Some((next.id, "2026-11-02T12:00:00Z".to_string())));
+        // Made between the two sittings and read in the second: its work.
+        db.record_commit_event(project, "a1", "feat: between", "2026-11-02T13:00:00Z", Some(next.id))
+            .unwrap();
+        // Read with no sitting open, made in the first second of this one: the
+        // window stands in, and its first second is the sitting's.
+        db.record_commit_event(project, "b2", "fix: at the start", "2026-11-02T15:00:00Z", None)
+            .unwrap();
+        // Read with no sitting open, made before it: not its work.
+        db.record_commit_event(project, "c3", "feat: before", "2026-11-02T14:59:59Z", None).unwrap();
+        assert_eq!(
+            db.sitting_commits(&next, "2026-11-02T16:00:00Z").unwrap(),
+            vec!["feat: between", "fix: at the start"]
+        );
+    }
 
     #[test]
     fn a_moment_is_stamped_no_later_than_it_happened() {

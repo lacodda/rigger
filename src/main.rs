@@ -6448,7 +6448,7 @@ fn session_summary(db: &Db, project: &db::Project, open: &db::Session, at: &str)
     let events = db.session_events(open.id)?;
     let shipped = db.shipped_between(project.id, &open.started_at, at)?;
     let closed = db.tasks_closed_between(project.id, &open.started_at, at)?;
-    let commits = db.commits_between(project.id, &open.started_at, at)?;
+    let commits = db.sitting_commits(open, at)?;
     let next_step = db.latest_event_body(project.id, "next")?;
     let ended = db::Session {
         ended_at: Some(at.to_string()),

@@ -237,6 +237,68 @@ fn a_reminder_speaks_only_when_there_is_something_to_say() {
     assert!(out.contains("nothing says why"), "{out}");
 }
 
+/// The database a test's record lives in, for the states the CLI cannot make.
+fn database(data: &Path) -> rusqlite::Connection {
+    let doctor: serde_json::Value = serde_json::from_str(&output(data, &["doctor", "--json"])).unwrap();
+    rusqlite::Connection::open(doctor["database"].as_str().unwrap()).unwrap()
+}
+
+/// A commit made between two sittings is nearly always the work the second
+/// one goes on with, and it used to belong to neither: the sitting held its
+/// commits by a window of time. Now a commit read while a sitting is open is
+/// its work - unless it is older than the sitting before it.
+#[test]
+fn a_commit_made_between_two_sittings_is_the_next_ones_work() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    project(data.path(), "alpha", &[]);
+    let root = data.path().join("alpha");
+
+    rigger(data.path()).args(["session", "start", "alpha"]).assert().success();
+    rigger(data.path()).args(["session", "end", "alpha"]).assert().success();
+    // Moments are kept to the second: the commit falls after the first
+    // sitting ended and before the second began.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(root.join("between.txt"), "x").unwrap();
+    git(&root, &["add", "."], None);
+    git(&root, &["commit", "--quiet", "-m", "feat: made between the sittings"], None);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    rigger(data.path()).args(["session", "start", "alpha"]).assert().success();
+    // Backdated to before the first sitting: history, whenever it is read.
+    std::fs::write(root.join("old.txt"), "x").unwrap();
+    git(&root, &["add", "."], Some("2026-08-20T12:00:00Z"));
+    git(&root, &["commit", "--quiet", "-m", "fix: an old one"], Some("2026-08-20T12:00:00Z"));
+
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["session", "end", "alpha", "--json"])).unwrap();
+    let commits: Vec<&str> = json["session"]["commits"].as_array().unwrap().iter().filter_map(|c| c.as_str()).collect();
+    assert_eq!(commits, vec!["feat: made between the sittings"], "{json}");
+}
+
+/// The first second of a sitting is the sitting's. Moments are kept to the
+/// second, and a strict boundary lost a task closed or a version shipped in
+/// the second the sitting opened - the second `rigger go` makes likely.
+#[test]
+fn the_first_second_of_a_sitting_is_its_own() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    project(data.path(), "alpha", &[]);
+    rigger(data.path()).args(["session", "start", "alpha"]).assert().success();
+
+    // Exactly the second it began, which a test cannot hit by running.
+    database(data.path())
+        .execute_batch(
+            "UPDATE tasks SET status = 'done', closed_at = (SELECT started_at FROM sessions WHERE ended_at IS NULL);
+             UPDATE versions SET status = 'shipped', shipped_at = substr((SELECT started_at FROM sessions WHERE ended_at IS NULL), 1, 10),
+                    shipped_ts = (SELECT started_at FROM sessions WHERE ended_at IS NULL);",
+        )
+        .unwrap();
+
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["session", "end", "alpha", "--json"])).unwrap();
+    assert_eq!(json["session"]["tasks_closed"], serde_json::json!(["a task"]), "{json}");
+    assert_eq!(json["session"]["shipped"], serde_json::json!(["v0.1.0"]), "{json}");
+}
+
 /// The entry is the session's own sentences, arranged. rigger has no opinion
 /// about the day, and inventing one would put words in the owner's diary
 /// that nobody said.

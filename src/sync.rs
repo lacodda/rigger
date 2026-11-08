@@ -154,8 +154,9 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
 
     // Taken before anything is written: once a tag has been recorded, its
     // version is in the record, and "did the plan know about this?" can no
-    // longer be asked.
+    // longer be asked. Nor, once this read is recorded, "is it the first?".
     let known_before = db.version_names(project.id)?;
+    let sitting = db.commit_sitting(project.id)?;
 
     // A reference that does not read fails the listing of all of them; the
     // sync says so rather than failing, as it does for a missing repository.
@@ -225,8 +226,10 @@ pub fn sync(db: &Db, project: &Project) -> Result<Report> {
     for change in history.changes.iter().rev() {
         // The timestamp is the commit's own: an event about a change that
         // landed in August must not date from the sync that read it, and a
-        // change made after a tag must not sort before it.
-        if db.record_commit_event(project.id, &change.hash, &change.body, &change.moment)? == Change::Added {
+        // change made after a tag must not sort before it. The sitting is
+        // the one open now, for a commit young enough to be its work.
+        let session = sitting.as_ref().filter(|(_, from)| change.moment.as_str() >= from.as_str()).map(|(id, _)| *id);
+        if db.record_commit_event(project.id, &change.hash, &change.body, &change.moment, session)? == Change::Added {
             report.changes_recorded += 1;
         }
     }
