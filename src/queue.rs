@@ -308,6 +308,18 @@ pub fn last_turn(db: &Db, project: &crate::db::Project) -> Result<Option<String>
     })
 }
 
+/// The moment a project's last turn settled what was said before it: the end
+/// of a folder's last sitting, and for a repository, when its last release got
+/// out rather than when its commit was made (see `Db::last_out_moment`). The
+/// owner asking for it first while its release was on its way was answered by
+/// that release, as a blocker said then was.
+pub fn settled_by(db: &Db, project: &crate::db::Project) -> Result<Option<String>> {
+    Ok(match project.kind {
+        Kind::Folder => db.last_ended_session(project.id)?.and_then(|s| s.ended_at),
+        _ => db.last_out_moment(project.id)?,
+    })
+}
+
 /// A weight after `up`, `down` or a number.
 pub fn changed_weight(current: u32, change: &str) -> Result<u32> {
     match change {
@@ -569,7 +581,7 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
             sitting_live: open.as_ref().and_then(|s| crate::hold::presence(db.path(), s.id).live()),
             sitting: open.map(|s| s.started_at),
             blockers: notes(db.blockers(project.id)?),
-            moves: notes(db.moves(project.id, last_turn.as_deref())?),
+            moves: notes(db.moves(project.id, settled_by(db, project)?.as_deref())?),
             pulled,
             last_turn,
             waited,

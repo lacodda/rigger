@@ -353,9 +353,14 @@ pub fn record(db: &crate::db::Db, project: &crate::db::Project, word: &Word) -> 
     let closed = change != crate::db::Change::Unchanged;
     let past_publish = word.installed || word.deployed;
     let only_past_publish = past_publish && !word.release && registries.is_empty();
+    // Exactly the words whose event below begins "<version> went out".
+    let went_out = !only_past_publish || closed;
     if let Some(id) = db.version_id(project.id, Some(&name))? {
         if !only_past_publish {
             db.set_delivery(id, Delivery::from_engine(word.release, &registries), &registries, "engine")?;
+        }
+        if went_out {
+            db.set_went_out(id, &moment)?;
         }
         db.set_past_publish(id, word.installed, word.deployed, &moment)?;
     }
@@ -377,7 +382,7 @@ pub fn record(db: &crate::db::Db, project: &crate::db::Project, word: &Word) -> 
             true => format!("{name} went out as a tag"),
             false => format!("{name} went out: {}", reached.join(", ")),
         };
-        match (only_past_publish && !closed, after.is_empty()) {
+        match (!went_out, after.is_empty()) {
             (true, _) => format!("{name} {after}"),
             (false, true) => went,
             (false, false) => format!("{went}; {after}"),

@@ -51,6 +51,8 @@ The order is worked out from the record each time and never stored. There is no 
 
 **A blocker is the way past something out of reach.** A project waiting on the outside world would otherwise stop every other. [`rigger note --kind blocker`](/rigger/reference/note/) takes it out of the queue with that as its reason, until [`resolve`](/rigger/reference/resolve/) clears it or a later release settles it.
 
+A release settles what was said while it was on its way, too. Whether a commit is in a release goes by the commit its tag points at; whether a blocker - or the owner asking for it first - was settled by a release goes by when the release got out: the [release engine's word](/rigger/reference/note/) that it went out, where that came after the commit. A blocker said while the CI of the release commit was red, and before the tag, is what that release got past. With no word from the engine, the commit's moment is all there is.
+
 **Questions do not take a project out.** A question to the owner does not stop a stage, so it does not stop the queue either; the questions waiting, and the orders [neighbours](/rigger/reference/link/) placed, are counted on the line.
 
 ## Git is read first

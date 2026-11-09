@@ -5875,8 +5875,8 @@ fn queue_first(project: &str, why: Option<&str>, json: bool) -> Result<()> {
 fn queue_back(project: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let project = working_project(&db, project)?;
-    let last = queue::last_turn(&db, &project)?;
-    let open = db.moves(project.id, last.as_deref())?;
+    let settled = queue::settled_by(&db, &project)?;
+    let open = db.moves(project.id, settled.as_deref())?;
     for moved in &open {
         db.resolve_event(project.id, moved.id, None, false)?;
     }

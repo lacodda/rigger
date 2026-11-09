@@ -379,6 +379,89 @@ fn what_is_left_out_is_named_with_its_reason() {
     assert!(said.contains("everything planned is put down"), "{said}");
 }
 
+/// A release settles what was said while it was on its way: a blocker, or the
+/// owner asking for it first, recorded after its commit and before it got out.
+/// Its commit says what is in it, and the release engine's word says when it
+/// got out - whether that word comes after the tag is read or before.
+#[test]
+fn a_release_settles_what_was_said_while_it_was_on_its_way() {
+    let data = tempfile::tempdir().unwrap();
+    init(data.path());
+    let read_first = project(data.path(), "tag-read-first", &["v0.2.0 · Second", "v0.3.0 · Third"]);
+    let said_first = project(data.path(), "word-said-first", &["v0.2.0 · Second", "v0.3.0 · Third"]);
+    project(data.path(), "other", &["v0.2.0 · Second"]);
+    let left_out = |found: &Value| -> Vec<String> {
+        found["left_out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["project"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let moved = |found: &Value, name: &str| -> Value {
+        found["order"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["project"] == name)
+            .unwrap_or_else(|| panic!("{name} is not in the order: {found:#}"))["moved"]
+            .clone()
+    };
+
+    // The release commits are made; while their CI runs, the tags are
+    // stopped, and the owner asks for one of them first.
+    for (root, name) in [(&read_first, "tag-read-first"), (&said_first, "word-said-first")] {
+        commit(root, "b.txt", "feat: the second thing", Some("2026-08-20T12:00:00Z"));
+        rigger(data.path()).args(["sync", name]).assert().success();
+        rigger(data.path())
+            .args(["note", name, "The runner is down", "--kind", "blocker"])
+            .assert()
+            .success();
+    }
+    rigger(data.path())
+        .args(["queue", "first", "tag-read-first", "--why", "needed for Monday"])
+        .assert()
+        .success();
+    assert_eq!(left_out(&queue(data.path())), vec!["tag-read-first", "word-said-first"]);
+
+    // A tag on the commit made before the blocker was said does not settle it
+    // by itself: the commit is older than the blocker.
+    git(&read_first, &["tag", "v0.2.0"], Some("2026-08-20T12:00:00Z"));
+    assert_eq!(left_out(&queue(data.path())), vec!["tag-read-first", "word-said-first"]);
+
+    // The engine's word that it went out does, after the tag was read...
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    rigger(data.path())
+        .args(["note", "tag-read-first", "--kind", "shipped", "--tag", "v0.2.0", "--release"])
+        .assert()
+        .success();
+    let found = queue(data.path());
+    assert_eq!(left_out(&found), vec!["word-said-first"], "{found:#}");
+    assert_eq!(
+        moved(&found, "tag-read-first"),
+        serde_json::json!([]),
+        "the release answered the owner too: {found:#}"
+    );
+
+    // ...and before it, where reading the tag then moves the release back to
+    // its commit.
+    rigger(data.path())
+        .args(["note", "word-said-first", "--kind", "shipped", "--tag", "v0.2.0", "--release"])
+        .assert()
+        .success();
+    git(&said_first, &["tag", "v0.2.0"], Some("2026-08-20T12:00:00Z"));
+    let found = queue(data.path());
+    assert!(left_out(&found).is_empty(), "{found:#}");
+
+    // A blocker said after the release got out is the next one's.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    rigger(data.path())
+        .args(["note", "tag-read-first", "No signing key", "--kind", "blocker"])
+        .assert()
+        .success();
+    assert_eq!(left_out(&queue(data.path())), vec!["tag-read-first"]);
+}
+
 /// A folder makes no releases: its turn is a sitting, and it needs no version
 /// planned to have one.
 #[test]

@@ -681,6 +681,21 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE state_lines ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
     ",
+    // v37: the moment a release went out, beside the moment of its commit.
+    // `shipped_ts` is the commit the tag points at, which is what a commit is
+    // in a release or not by; but a release goes out later - after its CI and
+    // its tag - and a blocker said in between was settled by it. The engine's
+    // word is when the record learnt it went out, so its first word that the
+    // version went out is read out of the text of what it said, once, as v35
+    // read the install and the deploy.
+    "
+    ALTER TABLE versions ADD COLUMN went_out_at TEXT;
+    UPDATE versions SET went_out_at = (
+        SELECT MIN(e.created_at) FROM events e
+         WHERE e.project_id = versions.project_id AND e.kind = 'shipped'
+           AND substr(e.body, 1, length(versions.name) + 9) = versions.name || ' went out'
+    ) WHERE status = 'shipped';
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -4788,11 +4803,15 @@ impl Db {
     /// the tag did not stop this one. Otherwise a blocker nobody remembered to
     /// clear would keep a working project out of the queue for good.
     ///
+    /// "After" is after the release went out, not after its commit: a blocker
+    /// said while the release was on its way - its CI red, its tag not yet
+    /// made - is what that release got past (see `last_out_moment`).
+    ///
     /// One second holding both says nothing about which came first, and the
     /// record keeps seconds: it counts as still open, since what stops a tag
     /// said out loud is worse to lose than to clear by hand.
     pub fn blockers(&self, project_id: i64) -> Result<Vec<Queued>> {
-        let released = self.last_release_moment(project_id)?;
+        let released = self.last_out_moment(project_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
               WHERE project_id = ?1 AND kind = 'blocker' AND created_at >= ?2
@@ -5021,7 +5040,7 @@ impl Db {
             .collect())
     }
 
-    /// When the newest release went out: its tag's moment, or its day where
+    /// When the newest release was made: its tag's moment, or its day where
     /// the record knows no more than the day a changelog gave it.
     pub fn last_release_moment(&self, project_id: i64) -> Result<Option<String>> {
         Ok(self
@@ -5033,6 +5052,39 @@ impl Db {
             )
             .optional()?
             .flatten())
+    }
+
+    /// When the newest release got out: the engine's word that it went out,
+    /// where that came after the commit its tag points at, and the commit's
+    /// moment where it did not or where no engine spoke.
+    ///
+    /// Two moments, because they answer two questions. Whether a commit is in
+    /// a release goes by the commit (`last_release_moment`): one made after the
+    /// tagged commit is not in it, however soon the tag followed. Whether
+    /// something said in the record was settled by a release - a blocker, a
+    /// request to come first - goes by this one: what was said while the
+    /// release was on its way is what it got past.
+    pub fn last_out_moment(&self, project_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT MAX(MAX(COALESCE(shipped_ts, shipped_at), COALESCE(went_out_at, '')))
+                   FROM versions WHERE project_id = ?1 AND shipped_at IS NOT NULL",
+                [project_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// Says a shipped version went out, at the first word of it: a release
+    /// resumed and recorded again does not move it.
+    pub fn set_went_out(&self, version_id: i64, moment: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE versions SET went_out_at = COALESCE(went_out_at, ?2) WHERE id = ?1",
+            params![version_id, moment],
+        )?;
+        Ok(())
     }
 
     /// Tasks closed in a sitting, the second it began included, as for

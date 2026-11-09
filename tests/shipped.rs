@@ -279,7 +279,8 @@ fn what_the_engine_said_in_text_comes_over_on_the_migration() {
     {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
-            "ALTER TABLE state_lines DROP COLUMN session_id;
+            "ALTER TABLE versions DROP COLUMN went_out_at;
+             ALTER TABLE state_lines DROP COLUMN session_id;
              ALTER TABLE versions DROP COLUMN installed_at;
              ALTER TABLE versions DROP COLUMN deployed_at;
              PRAGMA user_version = 34;",
@@ -308,6 +309,12 @@ fn what_the_engine_said_in_text_comes_over_on_the_migration() {
             [],
         )
         .unwrap();
+        // A word only about the install says nothing of when it went out.
+        conn.execute(
+            "INSERT INTO events (project_id, kind, body, author, created_at) SELECT id, 'shipped', 'v0.3.0 installed', 'engine', '2026-10-01T10:00:00Z' FROM projects WHERE name = 'sample'",
+            [],
+        )
+        .unwrap();
     }
 
     let at = |version: &str| json(data.path(), &["version", "show", "sample", version]);
@@ -320,4 +327,16 @@ fn what_the_engine_said_in_text_comes_over_on_the_migration() {
     let unsaid = at("v0.4.0");
     assert!(unsaid["installed_at"].is_null(), "{unsaid:#}");
     assert!(at("v0.1.0")["installed_at"].is_null());
+
+    // When each went out comes over too: the first word that it did, from the
+    // engine's own sentence, and no other version's.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let went_out = |version: &str| -> Option<String> {
+        conn.query_row("SELECT went_out_at FROM versions WHERE name = ?1", [version], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(went_out("v0.2.0").as_deref(), Some("2026-10-05T10:00:00Z"), "the first of its words");
+    assert_eq!(went_out("v0.3.0").as_deref(), Some("2026-10-05T10:00:00Z"), "an install alone is not going out");
+    let own = went_out("v0.4.0").expect("its own word went out");
+    assert_ne!(own, "2026-10-06T10:00:00Z", "v0.40.0's sentence is not v0.4.0's");
 }
