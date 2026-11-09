@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.49.0] - 2026-11-09
+
+### Breaking Changes
+
+- **Name every reason a project is moved up**
+`queue --json` order[].moved is an array of every
+request, empty when there is none, in place of one object or null.
+
+### Bug Fixes
+- Let a release settle what was said while it was on its way
+
+### Build
+- Take furca-core 0.14
+
+### Features
+- Name every reason a project is moved up
+- Move a user up only for a break in a package it uses
+
 ## [0.48.0] - 2026-11-09
 
 ### Breaking Changes
