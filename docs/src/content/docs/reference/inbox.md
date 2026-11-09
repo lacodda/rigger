@@ -68,9 +68,20 @@ These are not questions and nothing is being asked of you to decide: they are wo
 
 One is taken off the list by [`rigger resolve`](/rigger/reference/resolve/), like any wish.
 
+## Tickets taken in kasl without a card
+
+In a [ticket profile](/rigger/reference/profile/), the last line names the tickets you took in kasl and never made a card for - read from kasl's inbox, as [`task incoming`](/rigger/reference/task/#tickets-from-kasls-inbox) reads it:
+
+```console
+2 tickets taken in kasl have no card: ACME-2, ACME-5 - rigger task incoming
+```
+
+Taken only: a ticket nobody took is not anybody's work yet, and `task incoming` lists those. The one taken longest ago comes first, and past five the rest are counted. A ticket asleep or gone from the tracker is left out, as is one whose card knows it by its key or an alias.
+
+The questions do not need kasl, so the inbox never fails for want of it. With no kasl here it says nothing about tickets; a kasl that cannot list its inbox is one line in place of this one - `kasl did not list its inbox (...): the tickets taken there are not counted`. A line profile does not ask kasl, and neither does `--project`: a ticket is the desk's, not one project's.
 ## JSON
 
-Under `--json` it prints the three groups of the screen.
+Under `--json` it prints the groups of the screen.
 
 <!-- json: inbox -->
 | Field | Type | Meaning |
@@ -95,7 +106,13 @@ Under `--json` it prints the three groups of the screen.
 | `asked_by_neighbours[].asked_by` | string | The project that asked. |
 | `asked_by_neighbours[].project` | string | The project being asked. |
 | `asked_by_neighbours[].date` | string | The day it was recorded, `YYYY-MM-DD`. |
-
+| `taken_without_card` | array or null | The tickets taken in kasl that have no card, taken longest ago first; `null` when kasl's inbox was not read - a line profile, `--project`, no kasl here, or a kasl that could not answer. |
+| `taken_without_card[]` | object | One ticket. |
+| `taken_without_card[].key` | string | The ticket's id in the tracker. |
+| `taken_without_card[].summary` | string | The tracker's title for it. |
+| `taken_without_card[].status` | string or null | The tracker's status, by name; `null` until kasl knows it. |
+| `taken_without_card[].taken_at` | string | When it was taken in kasl, in kasl's local `YYYY-MM-DDTHH:MM:SS`. |
+| `kasl_said` | string or null | Why kasl could not list its inbox, when it ran and did not; `null` otherwise. |
 ## Answering
 
 [`rigger resolve`](/rigger/reference/resolve/) takes a question off the queue, and the answer becomes a decision in the record:

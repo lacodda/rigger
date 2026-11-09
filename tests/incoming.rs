@@ -256,3 +256,120 @@ fn a_card_taken_from_the_inbox_shows_its_ticket_and_tray_as_json() {
     assert_eq!(show["ticket"]["key"], "ACME-2");
     assert_eq!(show["tray"]["files"][0]["path"], "shot.png");
 }
+
+/// Five tickets taken in kasl, none with a card yet, beside one that is not
+/// taken: more than the inbox names in its line.
+const SIX_TAKEN: &str = r#"{"issues":[
+  {"key":"ACME-11","summary":"one","taken_at":"2026-09-21T10:00:00"},
+  {"key":"ACME-12","summary":"two","taken_at":"2026-09-20T10:00:00"},
+  {"key":"ACME-13","summary":"three","taken_at":"2026-09-22T10:00:00"},
+  {"key":"ACME-14","summary":"four","taken_at":"2026-09-23T10:00:00"},
+  {"key":"ACME-15","summary":"five","taken_at":"2026-09-24T10:00:00"},
+  {"key":"ACME-16","summary":"six","taken_at":"2026-09-25T10:00:00"},
+  {"key":"ACME-17","summary":"not taken"}
+]}"#;
+
+fn inbox_json(cmd: TestCommand) -> serde_json::Value {
+    serde_json::from_str(&output(cmd, &["inbox", "--json"])).unwrap()
+}
+
+/// The owner looks at the inbox for everything waiting; at a desk that
+/// includes the tickets they took in kasl and never made a card for. Only a
+/// ticket profile asks, and only for the whole inbox - a ticket is the
+/// desk's, not one project's. The taken ones only: a ticket nobody took is
+/// not yet anybody's work.
+#[test]
+fn a_ticket_profiles_inbox_names_the_tickets_taken_in_kasl_without_a_card() {
+    let data = tempfile::tempdir().unwrap();
+    desk(data.path());
+    let (kasl, log) = fake_kasl(data.path(), INBOX);
+
+    // The line's inbox is about questions, and does not ask kasl at all.
+    let out = output(with_kasl(data.path(), &kasl), &["inbox"]);
+    assert_eq!(out.trim(), "Nothing is waiting on you.", "{out}");
+    let json = inbox_json(with_kasl(data.path(), &kasl));
+    assert!(json["taken_without_card"].is_null() && json["kasl_said"].is_null(), "{json}");
+    assert!(!log.exists(), "a line profile asked kasl");
+
+    output(rigger(data.path()), &["profile", "add", "desk", "--kind", "tickets", "--use"]);
+    let out = output(with_kasl(data.path(), &kasl), &["inbox"]);
+    assert_eq!(out.trim(), "1 ticket taken in kasl has no card: ACME-2 - rigger task incoming", "{out}");
+    let json = inbox_json(with_kasl(data.path(), &kasl));
+    let taken = json["taken_without_card"].as_array().expect("an array once kasl was read");
+    assert_eq!(taken.len(), 1, "{json}");
+    assert_eq!(taken[0]["key"], "ACME-2");
+    assert_eq!(taken[0]["summary"], "rtf files are not supported");
+    assert_eq!(taken[0]["taken_at"], "2026-09-21T10:00:00");
+    assert!(json["kasl_said"].is_null(), "{json}");
+
+    // Beside a question, after it; with one project named, not asked.
+    let root = data.path().join("alpha");
+    std::fs::create_dir_all(&root).unwrap();
+    rigger(data.path()).args(["project", "add"]).arg(&root).assert().success();
+    output(rigger(data.path()), &["note", "alpha", "Which sheet comes first?", "--kind", "question"]);
+    let out = output(with_kasl(data.path(), &kasl), &["inbox"]);
+    let question = out.find("Which sheet comes first?").expect("the question");
+    let ticket = out.find("1 ticket taken in kasl").expect("the ticket line");
+    assert!(question < ticket, "{out}");
+    let out = output(with_kasl(data.path(), &kasl), &["inbox", "--project", "alpha"]);
+    assert!(!out.contains("kasl"), "{out}");
+    assert!(inbox_json(with_kasl(data.path(), &kasl))["taken_without_card"].is_array());
+    let json: serde_json::Value = serde_json::from_str(&output(with_kasl(data.path(), &kasl), &["inbox", "--project", "alpha", "--json"])).unwrap();
+    assert!(json["taken_without_card"].is_null(), "{json}");
+    rigger(data.path())
+        .args(["resolve", "alpha", &question_id(&json), "the first"])
+        .assert()
+        .success();
+
+    // Its card made, it is not waiting any more.
+    rigger(data.path()).args(["task", "new", "rtf", "--id", "ACME-2"]).assert().success();
+    let out = output(with_kasl(data.path(), &kasl), &["inbox"]);
+    assert_eq!(out.trim(), "Nothing is waiting on you.", "{out}");
+    let json = inbox_json(with_kasl(data.path(), &kasl));
+    assert_eq!(json["taken_without_card"], serde_json::json!([]), "read, and none: {json}");
+
+    // More than the line names: the longest taken first, the rest counted.
+    let (many, _) = fake_kasl(data.path(), SIX_TAKEN);
+    let out = output(with_kasl(data.path(), &many), &["inbox"]);
+    assert_eq!(
+        out.trim(),
+        "6 tickets taken in kasl have no card: ACME-12, ACME-11, ACME-13, ACME-14, ACME-15 and 1 more - rigger task incoming",
+        "{out}"
+    );
+    assert_eq!(inbox_json(with_kasl(data.path(), &many))["taken_without_card"].as_array().unwrap().len(), 6);
+}
+
+fn question_id(inbox: &serde_json::Value) -> String {
+    inbox["waiting"][0]["id"].as_i64().expect("a question").to_string()
+}
+
+/// The questions do not need kasl, so the inbox never fails for want of it.
+#[test]
+fn a_ticket_profiles_inbox_stands_without_kasl() {
+    let data = tempfile::tempdir().unwrap();
+    desk(data.path());
+    output(rigger(data.path()), &["profile", "add", "desk", "--kind", "tickets", "--use"]);
+
+    // No kasl here: nothing to say about it.
+    let out = output(rigger(data.path()), &["inbox"]);
+    assert_eq!(out.trim(), "Nothing is waiting on you.", "{out}");
+    let json = inbox_json(rigger(data.path()));
+    assert!(json["taken_without_card"].is_null() && json["kasl_said"].is_null(), "{json}");
+
+    // A kasl that cannot list its inbox is said so, in a line.
+    let old = old_kasl(data.path());
+    let out = output(with_kasl(data.path(), &old), &["inbox"]);
+    assert_eq!(
+        out.trim(),
+        "kasl did not list its inbox (unexpected argument '--json' found): the tickets taken there are not counted",
+        "{out}"
+    );
+    let json = inbox_json(with_kasl(data.path(), &old));
+    assert!(json["taken_without_card"].is_null(), "{json}");
+    assert_eq!(json["kasl_said"], "unexpected argument '--json' found");
+
+    // An answer that is not the contract is not an empty inbox either.
+    let (garbled, _) = fake_kasl(data.path(), "[{\"key\":\"ACME-1\"}]");
+    let out = output(with_kasl(data.path(), &garbled), &["inbox"]);
+    assert!(out.contains("not the inbox rigger reads"), "{out}");
+}

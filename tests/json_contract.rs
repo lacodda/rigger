@@ -1022,5 +1022,7 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("profile set", &["profile", "set", "desk", "--trays", data.join("desk-trays").to_str().unwrap()]);
     r.json("profile use", &["profile", "use", "desk"]);
     r.json("profile show", &["profile", "show", "desk"]);
+    // A ticket profile's inbox reads kasl's for the tickets taken without a card.
+    r.json("inbox", &["inbox"]);
     r.json("profile use", &["profile", "use", "line"]);
 }

@@ -2881,22 +2881,36 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
         asked.retain(|a| a.project == name);
     }
 
+    let tickets = match project {
+        Some(_) => Taken::NotAsked,
+        None => taken_without_card(&db)?,
+    };
+
     if json {
+        let (taken, said) = match &tickets {
+            Taken::Read(issues) => (Some(issues.iter().map(TakenTicket::from).collect::<Vec<_>>()), None),
+            Taken::Refused(why) => (None, Some(why.clone())),
+            Taken::NotAsked => (None, None),
+        };
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "waiting": waiting,
                 "shared": owner::shared_subjects(&waiting),
                 "asked_by_neighbours": asked,
+                "taken_without_card": taken,
+                "kasl_said": said,
             }))?
         );
         return Ok(());
     }
 
+    let ticket_line = taken_line(&tickets);
     if waiting.is_empty() && asked.is_empty() {
-        match project {
-            Some(name) => println!("{name} is waiting on nothing."),
-            None => println!("Nothing is waiting on you."),
+        match (&ticket_line, project) {
+            (Some(line), _) => println!("{line}"),
+            (None, Some(name)) => println!("{name} is waiting on nothing."),
+            (None, None) => println!("Nothing is waiting on you."),
         }
         return Ok(());
     }
@@ -2904,6 +2918,7 @@ fn inbox(project: Option<&str>, json: bool) -> Result<()> {
     let projects: std::collections::BTreeSet<&str> = waiting.iter().map(|q| q.project.as_str()).collect();
     if waiting.is_empty() {
         print_asked(&asked, project.is_some());
+        print_tickets_line(ticket_line.as_deref());
         return Ok(());
     }
     let late = waiting.iter().filter(|q| q.overdue).count();
@@ -2957,11 +2972,98 @@ Asked by several projects - one answer settles each group:"
         }
     }
     print_asked(&asked, project.is_some());
+    print_tickets_line(ticket_line.as_deref());
     println!(
         "
 Answer one with: rigger resolve <project> <id> \"<answer>\""
     );
     Ok(())
+}
+
+/// What kasl's inbox puts on the owner's screen: the tickets taken there
+/// that have no card yet.
+///
+/// Asked only in a ticket profile, where tickets are the work, and only for
+/// the whole inbox: a ticket is the desk's, not one project's. kasl is not
+/// needed for the questions, so a kasl that is not here is silence, and one
+/// that cannot answer is a line - never the inbox failing.
+enum Taken {
+    NotAsked,
+    Read(Vec<kasl::Issue>),
+    Refused(String),
+}
+
+fn taken_without_card(db: &Db) -> Result<Taken> {
+    let config = profile::Config::load()?;
+    if config.current()?.1.kind != profile::Kind::Tickets {
+        return Ok(Taken::NotAsked);
+    }
+    let issues = match kasl::inbox() {
+        kasl::Inbox::Read(issues) => issues,
+        kasl::Inbox::Absent => return Ok(Taken::NotAsked),
+        kasl::Inbox::Refused(why) => return Ok(Taken::Refused(why)),
+    };
+    let cards = db.cards(None)?;
+    let mut taken: Vec<kasl::Issue> = issues
+        .into_iter()
+        .filter(|i| i.taken_at.is_some() && !i.is_gone() && !i.is_asleep() && card_of(&cards, i).is_none())
+        .collect();
+    // Taken longest ago first: that is the one that has gone without a card
+    // the longest.
+    taken.sort_by(|a, b| a.taken_at.cmp(&b.taken_at).then_with(|| a.key.cmp(&b.key)));
+    Ok(Taken::Read(taken))
+}
+
+/// A ticket taken in kasl without a card, as `inbox --json` prints it.
+#[derive(serde::Serialize)]
+struct TakenTicket {
+    key: String,
+    summary: String,
+    status: Option<String>,
+    taken_at: Option<String>,
+}
+
+impl From<&kasl::Issue> for TakenTicket {
+    fn from(issue: &kasl::Issue) -> TakenTicket {
+        TakenTicket {
+            key: issue.key.clone(),
+            summary: issue.summary.clone(),
+            status: issue.status.clone(),
+            taken_at: issue.taken_at.clone(),
+        }
+    }
+}
+
+/// How many taken tickets the inbox names before it counts the rest.
+const TAKEN_NAMED: usize = 5;
+
+/// The tickets taken in kasl without a card, in one line; nothing when
+/// there are none or kasl was not asked.
+fn taken_line(tickets: &Taken) -> Option<String> {
+    match tickets {
+        Taken::NotAsked => None,
+        Taken::Refused(why) => Some(format!("kasl did not list its inbox ({why}): the tickets taken there are not counted")),
+        Taken::Read(issues) if issues.is_empty() => None,
+        Taken::Read(issues) => {
+            let named = issues.iter().take(TAKEN_NAMED).map(|i| i.key.as_str()).collect::<Vec<_>>().join(", ");
+            let more = match issues.len().saturating_sub(TAKEN_NAMED) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            Some(format!(
+                "{} taken in kasl {} no card: {named}{more} - rigger task incoming",
+                plural(issues.len(), "ticket", "tickets"),
+                if issues.len() == 1 { "has" } else { "have" }
+            ))
+        }
+    }
+}
+
+fn print_tickets_line(line: Option<&str>) {
+    if let Some(line) = line {
+        println!();
+        println!("{line}");
+    }
 }
 
 /// What a question's day says, as the tail of its line.

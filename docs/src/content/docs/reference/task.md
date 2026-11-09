@@ -173,6 +173,8 @@ Made card ACME-4131 from kasl's inbox and opened it: Export drops the footer
           https://tracker.example.com/browse/ACME-4131
 ```
 
+In a ticket profile, [`rigger inbox`](/rigger/reference/inbox/#tickets-taken-in-kasl-without-a-card) names the tickets taken in kasl that still have no card in one line, beside the questions waiting on you, so they are seen where everything waiting is looked at.
+
 The ticket's facts are not copied into the card. They stay kasl's, and a card that is a ticket shows them on its [screen](#what-git-says-about-a-card) and in its [packet](#the-packet-of-a-card) as kasl says them at that moment - including that it has gone.
 
 ### The shape rigger reads from kasl
