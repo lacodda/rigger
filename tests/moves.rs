@@ -114,7 +114,7 @@ fn a_breaking_release_moves_up_who_uses_it() {
     let found = queue(data.path());
     assert_eq!(found["order"][0]["project"], "app", "{found:#}");
     assert_eq!(entry(&found, "app")["reason"], "moved");
-    assert_eq!(entry(&found, "app")["moved"]["head"], "library broke what it uses: feat: change the part");
+    assert_eq!(entry(&found, "app")["moved"][0]["head"], "library broke what it uses: feat: change the part");
     assert_eq!(entry(&found, "loner")["reason"], "turn", "{found:#}");
     assert!(text(data.path(), &["queue"]).contains("moved up: library broke what it uses"));
 
@@ -126,6 +126,52 @@ fn a_breaking_release_moves_up_who_uses_it() {
     let found = queue(data.path());
     assert_eq!(entry(&found, "app")["reason"], "turn", "{found:#}");
     assert_eq!(entry(&found, "app")["waited"], 0, "{found:#}");
+}
+
+/// Everything that asks for a project to come first is named, not only the
+/// first: a note with nothing to do in it must not hide a release that broke
+/// the build. The screen gives the first and counts the rest; the JSON has
+/// them all, the owner's word first.
+#[test]
+fn every_reason_to_come_first_is_named() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let library = project(data.path(), "library", LIBRARY);
+    project(data.path(), "app", APP);
+    rigger(data.path())
+        .args(["queue", "first", "app", "--why", "the owner asked"])
+        .assert()
+        .success();
+    release(&library, "feat!: change the part", "v0.2.0");
+    release(&library, "feat!: change it again", "v0.3.0");
+
+    let found = queue(data.path());
+    let heads: Vec<&str> = entry(&found, "app")["moved"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["head"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        heads,
+        vec![
+            "the owner asked",
+            "library broke what it uses: feat: change the part",
+            "library broke what it uses: feat: change it again"
+        ],
+        "{found:#}"
+    );
+    let said = text(data.path(), &["queue"]);
+    assert!(said.contains("moved up: the owner asked (and 2 more)"), "{said}");
+
+    // Back in its turn, the owner's word is gone, and what broke is still named.
+    let said = text(data.path(), &["queue", "back", "app"]);
+    assert!(
+        said.contains("app stays moved up: library broke what it uses: feat: change the part (and 1 more)."),
+        "{said}"
+    );
+    let found = queue(data.path());
+    assert_eq!(entry(&found, "app")["moved"].as_array().unwrap().len(), 2, "{found:#}");
 }
 
 /// A change that broke something and has not been released has reached nobody.
@@ -211,7 +257,7 @@ fn an_order_built_moves_up_who_asked() {
     tick();
     let found = queue(data.path());
     assert_eq!(entry(&found, "app")["reason"], "moved", "{found:#}");
-    assert_eq!(entry(&found, "app")["moved"]["head"], "library built what it asked for: A date picker");
+    assert_eq!(entry(&found, "app")["moved"][0]["head"], "library built what it asked for: A date picker");
 
     release(&app, "feat: use the date picker", "v0.2.0");
     assert_eq!(entry(&queue(data.path()), "app")["reason"], "turn");
@@ -275,7 +321,7 @@ fn an_order_sorted_into_the_plan_is_built_when_its_stage_is_done() {
     tick();
     let found = queue(data.path());
     assert_eq!(entry(&found, "app")["reason"], "moved", "{found:#}");
-    assert_eq!(entry(&found, "app")["moved"]["head"], "library built what it asked for: A date picker");
+    assert_eq!(entry(&found, "app")["moved"][0]["head"], "library built what it asked for: A date picker");
 
     // Built once is built.
     rigger(data.path())
@@ -311,7 +357,7 @@ fn a_stage_waiting_moves_up_what_it_waits_on() {
     let id = said["event"]["id"].as_i64().unwrap().to_string();
     let found = queue(data.path());
     assert_eq!(found["order"][0]["project"], "library", "{found:#}");
-    assert_eq!(found["order"][0]["moved"]["head"], "app waits on it: A reader block");
+    assert_eq!(found["order"][0]["moved"][0]["head"], "app waits on it: A reader block");
     let packet = text(data.path(), &["context", "library"]);
     assert!(packet.contains("(app asks, and its stage waits on this) A reader block"), "{packet}");
 

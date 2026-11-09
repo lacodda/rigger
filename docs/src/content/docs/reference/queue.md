@@ -128,10 +128,11 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `order[].unfinished.undelivered` | string or null | How the last release fell short of getting out, in a few words. |
 | `order[].unfinished.sitting` | string or null | When the sitting left open began. |
 | `order[].unfinished.sitting_live` | boolean or null | Whether anyone is at that sitting: `true` while the [`go`](/rigger/reference/go/#who-is-at-a-sitting) that holds it runs, `false` once it has gone, `null` when nothing held it or no sitting is open. |
-| `order[].moved` | object or null | The request that put it first, while it stands, whatever `reason` says; otherwise `null`. |
-| `order[].moved.id` | integer | The id [`resolve`](/rigger/reference/resolve/) closes it by. |
-| `order[].moved.head` | string | The line it is known by: the reason given. |
-| `order[].moved.since` | string | The day it was recorded, as `YYYY-MM-DD`. |
+| `order[].moved` | array | Everything that asks for it to come first, while it stands, whatever `reason` says: the owner's word first, then its neighbours', each oldest first. Empty when nothing does. The first is what its place goes by. |
+| `order[].moved[]` | object | One of them. |
+| `order[].moved[].id` | integer | The event's id: [`resolve`](/rigger/reference/resolve/) closes the owner's word or a neighbour's order by it. |
+| `order[].moved[].head` | string | The line it is known by: the reason given, or what the neighbour did. |
+| `order[].moved[].since` | string | The day it was recorded, as `YYYY-MM-DD`; empty for a neighbour's order its stage waits on. |
 | `order[].waited` | integer | Releases the line has made since this project's last one. |
 | `order[].last_turn` | string or null | The day of its last sitting, as `YYYY-MM-DD`; `null` if it never had one. |
 | `order[].waiting` | integer | Its questions waiting on the owner. |
@@ -203,7 +204,9 @@ A project can come before its turn, and the turn it takes is the one it had comi
 
 An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0 or put down; the others leave it where it is.
 
-Being unfinished comes before being moved up, and does not hide it. [`rigger go`](/rigger/reference/go/) opens a sitting before it starts your assistant, so a project moved up reads as `unfinished` from the moment its turn begins; the screen then says both, and `order[].moved` still names what asked for it.
+All of it is named. The screen gives the first thing and counts the rest - `moved up: the owner asked (and 2 more)` - and `order[].moved` has every one, so a note with nothing to do in it cannot hide a release that broke the build.
+
+Being unfinished comes before being moved up, and does not hide it. [`rigger go`](/rigger/reference/go/) opens a sitting before it starts your assistant, so a project moved up reads as `unfinished` from the moment its turn begins; the screen then says both, and `order[].moved` still names everything that asked for it.
 
 ## Related
 

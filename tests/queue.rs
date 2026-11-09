@@ -312,7 +312,7 @@ fn a_project_put_first_stays_first_until_it_ships() {
     let found = queue(data.path());
     assert_eq!(order(&found), vec!["urgent", "older"], "{found:#}");
     assert_eq!(found["order"][0]["reason"], "moved");
-    assert_eq!(found["order"][0]["moved"]["head"], "needed for Monday");
+    assert_eq!(found["order"][0]["moved"][0]["head"], "needed for Monday");
     assert!(text(data.path(), &["queue"]).contains("moved up: needed for Monday"));
 
     // `rigger go` opens a sitting before the assistant starts, and sends it here
@@ -320,7 +320,7 @@ fn a_project_put_first_stays_first_until_it_ships() {
     rigger(data.path()).args(["session", "start", "urgent"]).assert().success();
     let found = queue(data.path());
     assert_eq!(found["order"][0]["reason"], "unfinished", "{found:#}");
-    assert_eq!(found["order"][0]["moved"]["head"], "needed for Monday", "{found:#}");
+    assert_eq!(found["order"][0]["moved"][0]["head"], "needed for Monday", "{found:#}");
     let said = text(data.path(), &["queue"]);
     assert!(said.contains("a sitting open since"), "{said}");
     assert!(said.contains("moved up: needed for Monday"), "{said}");
@@ -338,7 +338,7 @@ fn a_project_put_first_stays_first_until_it_ships() {
     git(&urgent, &["tag", "v0.2.0"], None);
     let found = queue(data.path());
     assert_eq!(found["order"][0]["project"], "older", "{found:#}");
-    assert!(found["order"][1]["moved"].is_null(), "{found:#}");
+    assert_eq!(found["order"][1]["moved"], serde_json::json!([]), "{found:#}");
 
     // A project with no plan, put first, is asked for all the same.
     rigger(data.path()).args(["priority", "older", "0"]).assert().success();

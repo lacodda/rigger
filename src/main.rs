@@ -5887,10 +5887,10 @@ fn queue_back(project: &str, json: bool) -> Result<()> {
         .into_iter()
         .find(|s| s.project == project.name)
         .map_or(Vec::new(), |s| s.pulled);
-    match (open.is_empty(), pulled.first()) {
-        (_, Some(pull)) => println!("{} stays moved up: {}. Its next release settles that.", project.name, pull.head),
-        (true, None) => println!("{} was not moved up: it is in its turn already.", project.name),
-        (false, None) => println!("{} is back in its turn.", project.name),
+    match (open.is_empty(), pulled.is_empty()) {
+        (_, false) => println!("{} stays {}. Its next release settles that.", project.name, queue::moved_up(&pulled)),
+        (true, true) => println!("{} was not moved up: it is in its turn already.", project.name),
+        (false, true) => println!("{} is back in its turn.", project.name),
     }
     Ok(())
 }

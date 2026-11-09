@@ -49,7 +49,7 @@ impl Target {
             title: c.title.clone(),
             reason: Some(c.reason),
             unfinished: c.unfinished.clone(),
-            moved: c.moved.is_some(),
+            moved: !c.moved.is_empty(),
             why: Some(crate::queue::why(c)),
         }
     }
@@ -255,7 +255,7 @@ mod tests {
             version: "v0.2.0".to_string(),
             title: Some("Second".to_string()),
             unfinished,
-            moved: None,
+            moved: Vec::new(),
             waited: 0,
             last_turn: None,
             waiting: 0,
@@ -419,13 +419,13 @@ mod tests {
         };
         let mut moved = candidate("urgent", None);
         moved.reason = Reason::Moved;
-        moved.moved = Some(asked.clone());
+        moved.moved = vec![asked.clone()];
         let said = first_message(&Target::of(&moved), None);
         assert!(said.contains("It comes before its turn"), "{said}");
         assert!(!said.contains("needed for Monday"), "{said}");
 
         let mut both = candidate("urgent", Some(dirty()));
-        both.moved = Some(asked);
+        both.moved = vec![asked];
         let said = first_message(&Target::of(&both), None);
         assert!(said.contains("It was left unfinished (2 changed files not committed)"), "{said}");
         assert!(said.contains("It comes before its turn"), "{said}");

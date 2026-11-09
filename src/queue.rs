@@ -186,8 +186,12 @@ pub struct Candidate {
     pub title: Option<String>,
     /// What it holds that has not gone out, for `unfinished`.
     pub unfinished: Option<Unfinished>,
-    /// What asked for it to come first, for `moved`.
-    pub moved: Option<Note>,
+    /// Everything that asks for it to come first, while it stands, whatever
+    /// the reason: the owner's word first, oldest first, then its neighbours',
+    /// oldest first. The first is what its place goes by; a screen names it
+    /// and counts the rest, so that a note with nothing to do in it cannot
+    /// hide a release that broke the build.
+    pub moved: Vec<Note>,
     /// How many releases the line has made since its last turn.
     pub waited: usize,
     /// The day of its last turn.
@@ -563,16 +567,17 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         sitting: s.sitting.clone(),
         sitting_live: s.sitting_live,
     };
-    let asked = s.moves.first();
-
     // Set aside on purpose, a project is not holding the line up, whatever it
     // was left holding - unless the owner moved it up, which is asking for it.
     let out = s.weight == 0;
     let put_down = s.stage.as_ref().is_some_and(|stage| stage.put_down);
     let is_unfinished = !unfinished.is_empty() && !out && !put_down;
     let aside = out || put_down;
-    let moved = asked.or(s.pulled.first().filter(|_| !aside));
-    if !is_unfinished && moved.is_none() {
+    let mut moved = s.moves.clone();
+    if !aside {
+        moved.extend(s.pulled.iter().cloned());
+    }
+    if !is_unfinished && moved.is_empty() {
         if out {
             return Err(Aside::Out);
         }
@@ -584,8 +589,8 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
     let (reason, since) = if is_unfinished {
         let since = s.untagged.first().map(|(at, _)| at.clone()).or_else(|| s.last_turn.clone());
         (Reason::Unfinished, since)
-    } else if let Some(moved) = moved {
-        (Reason::Moved, Some(moved.since.clone()))
+    } else if let Some(first) = moved.first() {
+        (Reason::Moved, Some(first.since.clone()))
     } else {
         (Reason::Turn, None)
     };
@@ -598,7 +603,7 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         version: s.stage.as_ref().map_or_else(|| "unplanned".to_string(), |stage| stage.version.clone()),
         title: s.stage.as_ref().and_then(|stage| stage.title.clone()),
         unfinished: (reason == Reason::Unfinished).then_some(unfinished),
-        moved: moved.cloned(),
+        moved,
         waited: s.waited,
         last_turn: s.last_turn.as_deref().map(day_of),
         waiting: s.waiting,
@@ -779,14 +784,21 @@ pub fn render_ahead(turns: &[Turn]) -> String {
 pub fn why(c: &Candidate) -> String {
     match c.reason {
         Reason::Unfinished => format!("not finished: {}{}", unfinished_parts(c), moved_too(c)),
-        Reason::Moved => match &c.moved {
-            Some(moved) => format!("moved up: {}", moved.head),
-            None => "moved up".to_string(),
-        },
+        Reason::Moved => moved_up(&c.moved),
         Reason::Turn => match &c.last_turn {
             Some(_) => format!("its turn: {} since its last, at weight {}", plural(c.waited, "release", "releases"), c.weight),
             None => format!("its turn: it has had none yet, at weight {}", c.weight),
         },
+    }
+}
+
+/// What moved a project up, in a line: the first thing in full, and how many
+/// more there are. `--json` has every one of them.
+pub fn moved_up(moved: &[Note]) -> String {
+    match moved {
+        [] => "moved up".to_string(),
+        [first] => format!("moved up: {}", first.head),
+        [first, rest @ ..] => format!("moved up: {} (and {} more)", first.head, rest.len()),
     }
 }
 
@@ -796,17 +808,17 @@ pub fn why(c: &Candidate) -> String {
 /// moved up reads as unfinished from the moment its turn begins. Its first
 /// message sends the assistant here for what moved it, and this is that answer.
 fn moved_too(c: &Candidate) -> String {
-    c.moved.as_ref().map_or_else(String::new, |moved| format!("; moved up: {}", moved.head))
+    match c.moved.is_empty() {
+        true => String::new(),
+        false => format!("; {}", moved_up(&c.moved)),
+    }
 }
 
 /// The reason in a few words, for a line among others.
 fn short(c: &Candidate) -> String {
     match c.reason {
         Reason::Unfinished => format!("{}{}", unfinished_parts(c), moved_too(c)),
-        Reason::Moved => c
-            .moved
-            .as_ref()
-            .map_or_else(|| "moved up".to_string(), |moved| format!("moved up: {}", moved.head)),
+        Reason::Moved => moved_up(&c.moved),
         Reason::Turn => match &c.last_turn {
             Some(_) => format!("waited {}", plural(c.waited, "release", "releases")),
             None => "no turn yet".to_string(),
