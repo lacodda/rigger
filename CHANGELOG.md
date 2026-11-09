@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.48.0] - 2026-11-09
+
+### Breaking Changes
+
+- **Drop id_pattern, and refuse a key the config does not read**
+`profile add` and `profile set` lose --id-pattern,
+`profile show --json` loses profile.id_pattern, and a config.toml that
+still holds id_pattern is refused until the line is deleted.
+
+### Build
+- Take furca-core 0.13
+
+### Features
+- Drop id_pattern, and refuse a key the config does not read
+- Say a task is back from sleep for two days
+- Name the tickets taken in kasl without a card
+
 ## [0.47.0] - 2026-11-08
 
 ### Bug Fixes
