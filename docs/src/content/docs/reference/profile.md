@@ -7,8 +7,8 @@ description: One binary, several ways of working - each with a record of its own
 rigger profile list [--json]
 rigger profile show [<NAME>] [--json]
 rigger profile use <NAME>
-rigger profile add <NAME> [--kind line|tickets] [--root <DIR>]... [--hubs <DIR>] [--id-pattern <REGEX>] [--trays <DIR>] [--use]
-rigger profile set [<NAME>] [--root <DIR>]... [--hubs <DIR>] [--id-pattern <REGEX>] [--trays <DIR>]
+rigger profile add <NAME> [--kind line|tickets] [--root <DIR>]... [--hubs <DIR>] [--trays <DIR>] [--use]
+rigger profile set [<NAME>] [--root <DIR>]... [--hubs <DIR>] [--trays <DIR>]
 ```
 
 At home a project is a repository with a plan, and the unit of work is a version that ends in a tag. At work the unit is a ticket: one id, a branch in each of several repositories, an inbox the tickets arrive in. None of it belongs in the same record as the line. A profile is what tells the two apart - its own database, its own roots, its own way of naming work - and every command reads the current one without being told.
@@ -34,7 +34,6 @@ hubs = "C:\\notes\\Projects"
 [profiles.work]
 kind = "tickets"
 roots = ["C:\\work"]
-id_pattern = "[A-Z]{2,8}-\\d+"
 trays = "C:\\work\\trays"
 ```
 
@@ -43,10 +42,11 @@ trays = "C:\\work\\trays"
 | `kind` | what the unit of work is: `line` (a version, a tag) or `tickets` (an id, a branch) |
 | `roots` | directories whose children are repositories; what [`adopt`](/rigger/reference/adopt/) walks when told nothing |
 | `hubs` | the directory whose children are hubs, one per project name; `adopt`'s `--hubs` when told nothing |
-| `id_pattern` | how a ticket id is spelt, as a regular expression |
 | `trays` | where the cards' [trays](/rigger/reference/tray/) are kept - the material that arrives for a task; `trays/` in the profile's directory when it is not said. Read under its first name, `inbox`, too, and written back as `trays` |
 
-`id_pattern` is recorded now and read by the task commands of the releases that follow; `trays` is read by [`tray`](/rigger/reference/tray/) since v0.25.0; `kind` says which way of working the profile is, and the rest of the surface grows around it. The profile is configuration, not a branch of the code.
+`trays` is read by [`tray`](/rigger/reference/tray/) since v0.25.0; `kind` says which way of working the profile is, and the rest of the surface grows around it. The profile is configuration, not a branch of the code.
+
+A key the file holds that is none of these - a misspelt `root`, a field rigger no longer reads - stops every command with the key, its line and the file, rather than being passed over: a setting read as nothing would leave you sure of one that does not exist. `id_pattern` is such a field since v0.48.0: it was stored and read by nothing, while every command already reads a ticket id one way - two to eight letters, a dash and up to six digits, `ACME-7310` or `ops-512`. A config that still says it is told so; delete the line.
 
 ## Which profile
 
@@ -95,7 +95,6 @@ line
 | `profile.roots` | array | Directories whose children are repositories; left out when none are set. |
 | `profile.roots[]` | string | One such directory. |
 | `profile.hubs` | string | The directory whose children are hubs; left out when not set. |
-| `profile.id_pattern` | string | How a ticket id is spelt, as a regular expression; left out when not set. |
 | `profile.trays` | string | Where the cards' trays are kept; left out when not set. |
 
 ## Where the database is

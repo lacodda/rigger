@@ -13,7 +13,7 @@ rigger records five kinds of things. Everything it shows - the digest, the queue
 | **Session** | One conversation of the assistant about a project or a task: start, end, events | `rigger session`, or the MCP server |
 | **Event** | A decision, finding, pitfall, change, next step or question to the owner - dated, attributed, tied to a session | MCP recording tools, or `rigger note` |
 
-A **profile** is configuration, not a branch of code: roots, the id pattern, the unit of work (tag or branch), where incoming material lands. Each profile has its own database.
+A **profile** is configuration, not a branch of code: roots, the unit of work (tag or branch), where incoming material lands. Each profile has its own database.
 
 ## Facts outrank records
 

@@ -49,7 +49,11 @@ impl Kind {
     }
 }
 
+/// A key the file holds that is not one of these is an error, not a line
+/// quietly passed over: a person edits this file, and a misspelt key read as
+/// nothing would leave them sure of a setting that does not exist.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     #[serde(default)]
     pub kind: Kind,
@@ -60,9 +64,6 @@ pub struct Profile {
     /// The directory whose children are hubs, one per project name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hubs: Option<PathBuf>,
-    /// How a ticket id is spelt, as a regular expression: `[A-Z]{2,8}-\d+`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id_pattern: Option<String>,
     /// Where the trays of the cards are: the material that arrives for a
     /// task. `trays/` in the profile's directory when it is not said.
     ///
@@ -73,6 +74,7 @@ pub struct Profile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// The profile every command uses unless `RIGGER_PROFILE` says otherwise.
     pub current: String,
@@ -202,14 +204,28 @@ mod tests {
 
     #[test]
     fn a_ticket_profile_keeps_its_fields() {
-        let text = "current = \"work\"\n\n[profiles.work]\nkind = \"tickets\"\nroots = [\"C:\\\\work\"]\nid_pattern = \"[A-Z]{2,8}-\\\\d+\"\ntrays = \"C:\\\\work\\\\trays\"\n";
+        let text = "current = \"work\"\n\n[profiles.work]\nkind = \"tickets\"\nroots = [\"C:\\\\work\"]\ntrays = \"C:\\\\work\\\\trays\"\n";
         let config: Config = toml::from_str(text).unwrap();
         let work = &config.profiles["work"];
         assert_eq!(work.kind, Kind::Tickets);
         assert_eq!(work.roots, vec![PathBuf::from("C:\\work")]);
-        assert_eq!(work.id_pattern.as_deref(), Some("[A-Z]{2,8}-\\d+"));
         assert_eq!(work.trays, Some(PathBuf::from("C:\\work\\trays")));
         assert!(work.hubs.is_none());
+    }
+
+    /// `id_pattern` was stored and read by nothing until v0.48.0; a file that
+    /// still says it is told so, by the key and its line, rather than kept
+    /// believing a ticket id is checked against it.
+    #[test]
+    fn a_key_the_config_does_not_read_is_refused_by_its_name() {
+        let gone = "current = \"work\"\n\n[profiles.work]\nkind = \"tickets\"\nid_pattern = \"[A-Z]+-\\\\d+\"\n";
+        let error = toml::from_str::<Config>(gone).unwrap_err().to_string();
+        assert!(error.contains("id_pattern"), "{error}");
+        let misspelt = "current = \"line\"\n\n[profiles.line]\nroot = [\"C:\\\\work\"]\n";
+        let error = toml::from_str::<Config>(misspelt).unwrap_err().to_string();
+        assert!(error.contains("root"), "{error}");
+        let beside = "current = \"line\"\nprofile = \"work\"\n";
+        assert!(toml::from_str::<Config>(beside).is_err(), "a key beside the profiles passed");
     }
 
     #[test]

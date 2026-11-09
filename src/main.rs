@@ -609,9 +609,6 @@ enum ProfileCommand {
         /// The directory whose children are hubs, one per project name
         #[arg(long, value_name = "DIR")]
         hubs: Option<PathBuf>,
-        /// How a ticket id is spelt, as a regular expression
-        #[arg(long, value_name = "REGEX")]
-        id_pattern: Option<String>,
         /// Where the trays of the cards are kept; `trays/` in the profile's directory when omitted
         #[arg(long, value_name = "DIR")]
         trays: Option<PathBuf>,
@@ -629,9 +626,6 @@ enum ProfileCommand {
         /// The directory whose children are hubs, one per project name
         #[arg(long, value_name = "DIR")]
         hubs: Option<PathBuf>,
-        /// How a ticket id is spelt, as a regular expression
-        #[arg(long, value_name = "REGEX")]
-        id_pattern: Option<String>,
         /// Where the trays of the cards are kept; `trays/` in the profile's directory when omitted
         #[arg(long, value_name = "DIR")]
         trays: Option<PathBuf>,
@@ -1291,28 +1285,10 @@ fn run(cli: Cli) -> Result<()> {
                 kind,
                 roots,
                 hubs,
-                id_pattern,
                 trays,
                 r#use,
-            } => profile_add(
-                &name,
-                profile::Profile {
-                    kind,
-                    roots,
-                    hubs,
-                    id_pattern,
-                    trays,
-                },
-                r#use,
-                json,
-            ),
-            ProfileCommand::Set {
-                name,
-                roots,
-                hubs,
-                id_pattern,
-                trays,
-            } => profile_set(name.as_deref(), roots, hubs, id_pattern, trays, json),
+            } => profile_add(&name, profile::Profile { kind, roots, hubs, trays }, r#use, json),
+            ProfileCommand::Set { name, roots, hubs, trays } => profile_set(name.as_deref(), roots, hubs, trays, json),
         },
         Command::Task { command } => match command {
             TaskCommand::New {
@@ -3724,9 +3700,6 @@ fn profile_show(name: Option<&str>, json: bool) -> Result<()> {
     if let Some(hubs) = &p.hubs {
         println!("  hubs:      {}", hubs.display());
     }
-    if let Some(pattern) = &p.id_pattern {
-        println!("  ids:       {pattern}");
-    }
     match &p.trays {
         Some(trays) => println!("  trays:     {}", trays.display()),
         None => println!("  trays:     {}", profile::dir(&name)?.join("trays").display()),
@@ -3789,23 +3762,20 @@ fn profile_add(name: &str, p: profile::Profile, use_it: bool, json: bool) -> Res
 /// Changes what a profile says about itself. Only the fields given change;
 /// the roots given replace the roots it had, because a list appended to
 /// can never be shortened.
-fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, id_pattern: Option<String>, trays: Option<PathBuf>, json: bool) -> Result<()> {
+fn profile_set(name: Option<&str>, roots: Vec<PathBuf>, hubs: Option<PathBuf>, trays: Option<PathBuf>, json: bool) -> Result<()> {
     let mut config = profile::Config::load()?;
     let name = name.map(str::to_string).unwrap_or_else(|| config.current_name());
     let Some(p) = config.profiles.get_mut(&name) else {
         bail!("no profile named '{name}'; see `rigger profile list`");
     };
-    if roots.is_empty() && hubs.is_none() && id_pattern.is_none() && trays.is_none() {
-        bail!("nothing to set; give --root, --hubs, --id-pattern or --trays");
+    if roots.is_empty() && hubs.is_none() && trays.is_none() {
+        bail!("nothing to set; give --root, --hubs or --trays");
     }
     if !roots.is_empty() {
         p.roots = roots;
     }
     if let Some(hubs) = hubs {
         p.hubs = Some(hubs);
-    }
-    if let Some(pattern) = id_pattern {
-        p.id_pattern = Some(pattern);
     }
     if let Some(trays) = trays {
         p.trays = Some(trays);

@@ -1013,18 +1013,7 @@ fn fill(r: &mut Record, data: &Path) {
             data.join("desk-hubs").to_str().unwrap(),
         ],
     );
-    r.json(
-        "profile set",
-        &[
-            "profile",
-            "set",
-            "desk",
-            "--id-pattern",
-            "[A-Z]+-[0-9]+",
-            "--trays",
-            data.join("desk-trays").to_str().unwrap(),
-        ],
-    );
+    r.json("profile set", &["profile", "set", "desk", "--trays", data.join("desk-trays").to_str().unwrap()]);
     r.json("profile use", &["profile", "use", "desk"]);
     r.json("profile show", &["profile", "show", "desk"]);
     r.json("profile use", &["profile", "use", "line"]);
