@@ -329,6 +329,9 @@ pub struct Use {
     pub package: Option<String>,
     /// The version the manifest asks for.
     pub requirement: Option<String>,
+    /// Where the package's manifest is in the supplier's repository, from its
+    /// root, `.` for the root; `None` for a tie the record keeps.
+    pub directory: Option<String>,
     /// What the record says about the tie.
     pub note: Option<String>,
 }
@@ -348,6 +351,7 @@ pub fn uses(db: &Db) -> Result<Vec<Use>> {
             supplier: u.supplier,
             package: Some(u.package),
             requirement: Some(u.requirement),
+            directory: Some(u.directory),
             note: None,
         })
         .collect();
@@ -365,6 +369,7 @@ pub fn uses(db: &Db) -> Result<Vec<Use>> {
                     supplier: link.far.project.clone(),
                     package: None,
                     requirement: None,
+                    directory: None,
                     note: link.note.clone(),
                 });
             }
@@ -390,13 +395,51 @@ pub fn use_line(item: &Use) -> String {
     format!("{} uses {} - {through}", item.consumer, item.supplier)
 }
 
+/// What the breaking commits of the work changed, read once each however many
+/// projects use their supplier: a design system's break is asked about by
+/// every product that draws on it.
+#[derive(Default)]
+pub struct Touched {
+    /// Every package's directory, by supplier.
+    homes: HashMap<i64, std::collections::BTreeSet<String>>,
+    /// The paths of a commit, by supplier and commit; `None` where they could
+    /// not be read.
+    paths: HashMap<(i64, String), Option<Vec<String>>>,
+}
+
+impl Touched {
+    /// Whether a supplier's commit changed a package whose directory is in
+    /// `drawn`. A commit that does not read reaches everything.
+    fn reaches(&mut self, supplier: &crate::db::Project, commit: &str, drawn: &std::collections::BTreeSet<String>) -> bool {
+        let homes = self
+            .homes
+            .entry(supplier.id)
+            .or_insert_with(|| crate::deps::read(std::path::Path::new(&supplier.path)).homes);
+        let paths = self
+            .paths
+            .entry((supplier.id, commit.to_string()))
+            .or_insert_with(|| crate::git::open(&supplier.path).ok().and_then(|repo| crate::git::paths_of(&repo, commit).ok()));
+        match paths {
+            Some(paths) => crate::deps::reaches(homes, drawn, paths),
+            None => true,
+        }
+    }
+}
+
 /// What a project's neighbours need of it, and it of them: see the head of this
 /// module. Worked out each time, so it needs nobody to remember to undo it: the
 /// project's next release is what settles the first two.
 ///
 /// A project that has never released has nothing to catch up with yet. An order
 /// built and not yet released waits for the release, like the work it is.
-fn pulls(db: &Db, project: &crate::db::Project, last_turn: Option<&str>, all: &[crate::db::Project], uses: &[Use]) -> Result<Vec<Note>> {
+///
+/// A breaking release reaches a project through the packages it uses, so a
+/// breaking commit moves it only where it changed one of them: `feat(release)!`
+/// in a workspace's release crate breaks nothing for a user of its core crate
+/// alone. A tie in the record names no package, and moves its project for any
+/// breaking change, as does a commit whose changes cannot be read - a missed
+/// break costs more than a turn spent finding nothing to do.
+fn pulls(db: &Db, project: &crate::db::Project, last_turn: Option<&str>, all: &[crate::db::Project], uses: &[Use], touched: &mut Touched) -> Result<Vec<Note>> {
     let mut out = Vec::new();
     for order in db.waited_on(project.id)? {
         let head = crate::context::headline(&order.body);
@@ -417,7 +460,19 @@ fn pulls(db: &Db, project: &crate::db::Project, last_turn: Option<&str>, all: &[
         if !seen.insert(supplier.id) {
             continue;
         }
+        // The directories of every package it uses from this supplier; none
+        // for a tie, which reaches the whole of it.
+        let drawn: Option<std::collections::BTreeSet<String>> = uses
+            .iter()
+            .filter(|u| u.consumer == project.name && u.supplier == supplier.name)
+            .map(|u| u.directory.clone())
+            .collect();
         for change in db.breaking_released(supplier.id, last_turn)? {
+            if let Some(drawn) = &drawn
+                && !touched.reaches(supplier, &change.commit, drawn)
+            {
+                continue;
+            }
             let subject = change.body.lines().next().unwrap_or_default().trim_start_matches("breaking: ");
             out.push(Note {
                 id: change.id,
@@ -480,13 +535,14 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
     let releases = db.release_moments()?;
     let uses = uses(db)?;
     let rota = crate::refactor::rota(db)?;
+    let mut touched = Touched::default();
     for project in &projects {
         // A place the record keeps for itself is not work anyone does.
         if !project.kind.has_a_place() {
             continue;
         }
         let last_turn = last_turn(db, project)?;
-        let pulled = pulls(db, project, last_turn.as_deref(), &projects, &uses)?;
+        let pulled = pulls(db, project, last_turn.as_deref(), &projects, &uses, &mut touched)?;
         let stage = db.current_stage(project.id)?.map(|stage| {
             let open: Vec<&crate::db::Task> = stage.tasks.iter().chain(&stage.asleep).collect();
             Stage {

@@ -46,9 +46,16 @@ fn tick() {
 
 /// A project with a manifest, one release behind it and a stage planned.
 fn project(data: &Path, name: &str, manifest: &str) -> PathBuf {
+    project_of(data, name, &[("package.json", manifest)])
+}
+
+/// A project of the manifests given, by path, with one release behind it and
+/// a stage planned.
+fn project_of(data: &Path, name: &str, manifests: &[(&str, &str)]) -> PathBuf {
     let root = data.join("repos").join(name);
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("package.json"), manifest).unwrap();
+    for (path, text) in manifests {
+        write(&root, path, text);
+    }
     git(&root, &["init", "--quiet", "--initial-branch", "main"]);
     commit(&root, "a.txt", "feat: the first thing");
     git(&root, &["tag", "v0.1.0"]);
@@ -64,6 +71,23 @@ fn project(data: &Path, name: &str, manifest: &str) -> PathBuf {
     rigger(data).args(["sync", name]).assert().success();
     tick();
     root
+}
+
+fn write(root: &Path, path: &str, text: &str) {
+    let path = root.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+/// A release made of a commit that changed the files given.
+fn release_of(root: &Path, files: &[&str], message: &str, tag: &str) {
+    for file in files {
+        write(root, file, message);
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "--quiet", "-m", message]);
+    git(root, &["tag", tag]);
+    tick();
 }
 
 const LIBRARY: &str = r#"{ "name": "widget-ui" }"#;
@@ -126,6 +150,71 @@ fn a_breaking_release_moves_up_who_uses_it() {
     let found = queue(data.path());
     assert_eq!(entry(&found, "app")["reason"], "turn", "{found:#}");
     assert_eq!(entry(&found, "app")["waited"], 0, "{found:#}");
+}
+
+/// A breaking release reaches through the packages it changed. A workspace
+/// that publishes two packages breaks the users of the one its breaking commit
+/// changed, and not the users of the other; what the commit changed beside
+/// every package - its docs - reaches nobody. A tie in the record names no
+/// package, and is moved by any breaking change, as before.
+#[test]
+fn a_breaking_release_moves_up_only_who_uses_what_it_changed() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let kit = project_of(
+        data.path(),
+        "kit",
+        &[
+            ("package.json", r#"{ "name": "kit", "private": true, "workspaces": ["packages/*"] }"#),
+            ("packages/core/package.json", r#"{ "name": "kit-core" }"#),
+            ("packages/release/package.json", r#"{ "name": "kit-release" }"#),
+            ("packages/release-notes/package.json", r#"{ "name": "kit-release-notes", "private": true }"#),
+        ],
+    );
+    project(
+        data.path(),
+        "core-user",
+        r#"{ "name": "core-user", "private": true, "dependencies": { "kit-core": "^0.1.0" } }"#,
+    );
+    project(
+        data.path(),
+        "release-user",
+        r#"{ "name": "release-user", "private": true, "dependencies": { "kit-release": "^0.1.0" } }"#,
+    );
+    project(data.path(), "reader", LONER);
+    rigger(data.path())
+        .args(["link", "add", "reader", "kit", "--kind", "consumer", "--note", "reads its JSON"])
+        .assert()
+        .success();
+
+    let uses: Value = serde_json::from_str(&text(data.path(), &["link", "uses", "--json"])).unwrap();
+    let directory = |consumer: &str| uses["uses"].as_array().unwrap().iter().find(|u| u["consumer"] == consumer).unwrap()["directory"].clone();
+    assert_eq!(directory("core-user"), "packages/core", "{uses:#}");
+    assert_eq!(directory("release-user"), "packages/release", "{uses:#}");
+    assert!(directory("reader").is_null(), "a tie names no directory: {uses:#}");
+
+    release_of(
+        &kit,
+        &["packages/release/run.js", "packages/release-notes/notes.js", "docs/release.md"],
+        "feat(release)!: run the plan in steps",
+        "v0.2.0",
+    );
+    let found = queue(data.path());
+    assert_eq!(entry(&found, "release-user")["reason"], "moved", "{found:#}");
+    assert_eq!(entry(&found, "core-user")["reason"], "turn", "kit-core did not change: {found:#}");
+    assert_eq!(entry(&found, "reader")["reason"], "moved", "a tie reaches all of it: {found:#}");
+
+    release_of(&kit, &["packages/core/part.js"], "feat(core)!: change the part", "v0.3.0");
+    let found = queue(data.path());
+    assert_eq!(entry(&found, "core-user")["reason"], "moved", "{found:#}");
+    assert_eq!(
+        entry(&found, "core-user")["moved"][0]["head"],
+        "kit broke what it uses: feat(core): change the part"
+    );
+    let release_user = entry(&found, "release-user")["moved"].as_array().unwrap().clone();
+    assert_eq!(release_user.len(), 1, "kit-release did not change again: {found:#}");
+    assert_eq!(release_user[0]["head"], "kit broke what it uses: feat(release): run the plan in steps");
+    assert_eq!(entry(&found, "reader")["moved"].as_array().unwrap().len(), 2, "{found:#}");
 }
 
 /// Everything that asks for a project to come first is named, not only the

@@ -11,6 +11,10 @@
 //! those by name. Only the files at the known places are read: the root, the
 //! members a workspace names, and the usual directories of an app's second half.
 //! Nothing is installed, and nothing is asked of a registry.
+//!
+//! Each package is kept with the directory its manifest is in, because that is
+//! what a release reaches through: a breaking change in one crate of a
+//! workspace has broken nothing for the users of another (see `reaches`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -20,10 +24,15 @@ use serde::Serialize;
 /// What a repository's manifests say about it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Manifests {
-    /// The packages it puts out for others to use.
-    pub published: BTreeSet<String>,
+    /// The packages it puts out for others to use, each with the directory
+    /// its manifest is in, as `dir_of` spells it.
+    pub published: BTreeMap<String, String>,
     /// What it asks for from outside itself, with the version it asks for.
     pub used: BTreeMap<String, String>,
+    /// Every directory a named package's manifest is in, published or not:
+    /// what a path in the repository is part of. A private tool beside a
+    /// published crate is still where its own files belong.
+    pub homes: BTreeSet<String>,
 }
 
 /// One project drawing on another, through a package.
@@ -34,6 +43,8 @@ pub struct Use {
     pub package: String,
     /// The version the consumer asks for, as its manifest spells it.
     pub requirement: String,
+    /// Where the package's manifest is in the supplier's repository.
+    pub directory: String,
 }
 
 /// The directories an app keeps a second manifest in, beside the root.
@@ -77,15 +88,58 @@ pub fn read(root: &Path) -> Manifests {
     files.sort();
     files.dedup();
     for file in files {
+        let dir = dir_of(root, file.parent().unwrap_or(root));
         match file.file_name().and_then(|n| n.to_str()) {
-            Some("Cargo.toml") => read_cargo(&file, &mut manifests),
-            _ => read_package_json(&file, &mut manifests),
+            Some("Cargo.toml") => read_cargo(&file, &dir, &mut manifests),
+            _ => read_package_json(&file, &dir, &mut manifests),
         }
     }
     // What it makes itself is no neighbour's.
     let own = manifests.published.clone();
-    manifests.used.retain(|name, _| !own.contains(name));
+    manifests.used.retain(|name, _| !own.contains_key(name));
     manifests
+}
+
+/// A directory of a repository as git spells its paths: from the root, with
+/// `/` between the parts, and `.` for the root itself.
+pub fn dir_of(root: &Path, dir: &Path) -> String {
+    let parts: Vec<String> = dir
+        .strip_prefix(root)
+        .unwrap_or(dir)
+        .components()
+        .filter_map(|part| match part {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    if parts.is_empty() { ".".to_string() } else { parts.join("/") }
+}
+
+/// The package a path of the repository is part of: the deepest directory
+/// holding a package's manifest that the path lies in. `None` for a path in
+/// no package - a document or a workflow beside a workspace that has no
+/// package of its own at the root.
+pub fn home_of<'a>(homes: &'a BTreeSet<String>, path: &str) -> Option<&'a str> {
+    homes
+        .iter()
+        .filter(|home| within(home, path))
+        .max_by_key(|home| if home.as_str() == "." { 0 } else { home.len() + 1 })
+        .map(String::as_str)
+}
+
+fn within(dir: &str, path: &str) -> bool {
+    dir == "." || path.strip_prefix(dir).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Whether a commit that changed `paths` reached any package in `drawn` - the
+/// directories of the packages a consumer uses - given the directory of every
+/// package in the supplier, `homes`.
+///
+/// A path counts for the package it is part of and for no other, so a change
+/// in a workspace's member does not reach a package at its root, and a change
+/// beside every package - its docs, its CI - reaches none.
+pub fn reaches(homes: &BTreeSet<String>, drawn: &BTreeSet<String>, paths: &[String]) -> bool {
+    paths.iter().any(|path| home_of(homes, path).is_some_and(|home| drawn.contains(home)))
 }
 
 /// Who uses whom, across the projects given by name and directory.
@@ -94,16 +148,16 @@ pub fn read(root: &Path) -> Manifests {
 /// than guessed at: a wrong tie moves the wrong project.
 pub fn uses(projects: &[(String, PathBuf)]) -> Vec<Use> {
     let read: Vec<(&String, Manifests)> = projects.iter().map(|(name, path)| (name, self::read(path))).collect();
-    let mut publishers: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
+    let mut publishers: BTreeMap<&str, Vec<(&String, &String)>> = BTreeMap::new();
     for (name, manifests) in &read {
-        for package in &manifests.published {
-            publishers.entry(package).or_default().push(name);
+        for (package, directory) in &manifests.published {
+            publishers.entry(package).or_default().push((name, directory));
         }
     }
     let mut out = Vec::new();
     for (consumer, manifests) in &read {
         for (package, requirement) in &manifests.used {
-            if let Some([supplier]) = publishers.get(package.as_str()).map(Vec::as_slice)
+            if let Some([(supplier, directory)]) = publishers.get(package.as_str()).map(Vec::as_slice)
                 && supplier != consumer
             {
                 out.push(Use {
@@ -111,6 +165,7 @@ pub fn uses(projects: &[(String, PathBuf)]) -> Vec<Use> {
                     supplier: (*supplier).clone(),
                     package: package.clone(),
                     requirement: requirement.clone(),
+                    directory: (*directory).clone(),
                 });
             }
         }
@@ -176,7 +231,7 @@ fn expand(root: &Path, member: &str) -> Vec<PathBuf> {
     }
 }
 
-fn read_cargo(path: &Path, out: &mut Manifests) {
+fn read_cargo(path: &Path, dir: &str, out: &mut Manifests) {
     let Some(toml) = read_toml(path) else {
         return;
     };
@@ -187,8 +242,11 @@ fn read_cargo(path: &Path, out: &mut Manifests) {
             Some(toml::Value::Array(registries)) => registries.is_empty(),
             _ => false,
         };
-        if !private && let Some(name) = package.get("name").and_then(toml::Value::as_str) {
-            out.published.insert(name.to_string());
+        if let Some(name) = package.get("name").and_then(toml::Value::as_str) {
+            out.homes.insert(dir.to_string());
+            if !private {
+                out.published.entry(name.to_string()).or_insert_with(|| dir.to_string());
+            }
         }
     }
     let workspace_deps = toml.get("workspace").and_then(|w| w.get("dependencies"));
@@ -216,13 +274,16 @@ fn read_cargo(path: &Path, out: &mut Manifests) {
     }
 }
 
-fn read_package_json(path: &Path, out: &mut Manifests) {
+fn read_package_json(path: &Path, dir: &str, out: &mut Manifests) {
     let Some(json) = read_json(path) else {
         return;
     };
     let private = json.get("private").and_then(serde_json::Value::as_bool).unwrap_or(false);
-    if !private && let Some(name) = json.get("name").and_then(serde_json::Value::as_str) {
-        out.published.insert(name.to_string());
+    if let Some(name) = json.get("name").and_then(serde_json::Value::as_str) {
+        out.homes.insert(dir.to_string());
+        if !private {
+            out.published.entry(name.to_string()).or_insert_with(|| dir.to_string());
+        }
     }
     for table in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] {
         let Some(deps) = json.get(table).and_then(serde_json::Value::as_object) else {
@@ -260,7 +321,7 @@ mod tests {
             r#"{ "name": "widget-ui", "dependencies": { "react": "^19.0.0", "own": "workspace:*" }, "devDependencies": { "vite": "8" } }"#,
         );
         let read = read(dir.path());
-        assert_eq!(read.published, BTreeSet::from(["widget-ui".to_string()]));
+        assert_eq!(read.published, BTreeMap::from([("widget-ui".to_string(), ".".to_string())]));
         assert_eq!(read.used.get("react").map(String::as_str), Some("^19.0.0"));
         assert_eq!(read.used.get("vite").map(String::as_str), Some("8"));
         assert!(!read.used.contains_key("own"), "{read:?}");
@@ -316,7 +377,13 @@ mod tests {
             r#"{ "name": "web", "private": true, "dependencies": { "widget-ui": "^0.4.0" } }"#,
         );
         let read = read(dir.path());
-        assert_eq!(read.published, BTreeSet::from(["inner".to_string()]), "{read:?}");
+        assert_eq!(read.published, BTreeMap::from([("inner".to_string(), "crates/inner".to_string())]), "{read:?}");
+        // The private ones are homes too: their files are theirs.
+        assert_eq!(
+            read.homes,
+            BTreeSet::from(["crates/inner", "src-tauri", "tool", "web"].map(String::from)),
+            "{read:?}"
+        );
         for (package, requirement) in [
             ("serde", "1"),
             ("widget-core", "0.9"),
@@ -348,7 +415,11 @@ mod tests {
             r#"{ "name": "site", "private": true, "dependencies": { "astro": "7" } }"#,
         );
         let read = read(dir.path());
-        assert_eq!(read.published, BTreeSet::from(["widget-ui".to_string()]), "{read:?}");
+        assert_eq!(
+            read.published,
+            BTreeMap::from([("widget-ui".to_string(), "packages/ui".to_string())]),
+            "{read:?}"
+        );
         assert!(read.used.contains_key("react") && read.used.contains_key("astro"), "{read:?}");
     }
 
@@ -394,7 +465,47 @@ mod tests {
                 supplier: "ui".to_string(),
                 package: "widget-ui".to_string(),
                 requirement: "^1.2.0".to_string(),
+                directory: ".".to_string(),
             }]
         );
+    }
+
+    /// A path is part of the deepest package it lies in, and of no other: a
+    /// root package does not swallow its members, and what lies in no package
+    /// reaches nobody.
+    #[test]
+    fn a_path_counts_for_the_package_it_is_part_of() {
+        let homes = BTreeSet::from([".", "crates/core", "crates/core-extra", "crates/release"].map(String::from));
+        assert_eq!(home_of(&homes, "crates/core/src/lib.rs"), Some("crates/core"));
+        assert_eq!(
+            home_of(&homes, "crates/core-extra/src/lib.rs"),
+            Some("crates/core-extra"),
+            "a prefix of a name is not a parent"
+        );
+        assert_eq!(home_of(&homes, "crates/release/Cargo.toml"), Some("crates/release"));
+        assert_eq!(home_of(&homes, "docs/index.md"), Some("."));
+        let bare = BTreeSet::from(["crates/core", "crates/release"].map(String::from));
+        assert_eq!(home_of(&bare, "docs/index.md"), None);
+
+        let core = BTreeSet::from(["crates/core".to_string()]);
+        let root = BTreeSet::from([".".to_string()]);
+        let paths = |list: &[&str]| list.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        assert!(reaches(&bare, &core, &paths(&["docs/release.md", "crates/core/src/remote.rs"])));
+        assert!(!reaches(
+            &bare,
+            &core,
+            &paths(&["docs/release.md", "crates/release/src/run.rs", "CHANGELOG.md"])
+        ));
+        assert!(!reaches(&homes, &core, &paths(&["crates/core-extra/src/lib.rs"])));
+        assert!(!reaches(&homes, &root, &paths(&["crates/core/src/lib.rs"])));
+        assert!(reaches(&homes, &root, &paths(&["src/main.rs"])));
+    }
+
+    #[test]
+    fn a_directory_is_spelt_as_git_spells_a_path() {
+        let root = Path::new("repo");
+        assert_eq!(dir_of(root, root), ".");
+        assert_eq!(dir_of(root, &root.join("crates").join("core")), "crates/core");
+        assert_eq!(dir_of(root, &root.join(".").join("tool")), "tool");
     }
 }

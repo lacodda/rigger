@@ -1243,6 +1243,16 @@ pub struct Queued {
     pub waits: bool,
 }
 
+/// A breaking change a project released, with the commit that made it.
+#[derive(Debug, Clone)]
+pub struct Breaking {
+    pub id: i64,
+    pub body: String,
+    /// The day it was committed, `YYYY-MM-DD`.
+    pub date: String,
+    pub commit: String,
+}
+
 /// An event as the packet reads it back.
 pub struct RecentEvent {
     /// The id `rigger event` reads it whole by.
@@ -4563,17 +4573,24 @@ impl Db {
 
     /// The breaking changes a project released after a moment: its own moment
     /// is not enough, since what is not released has reached nobody.
-    pub fn breaking_released(&self, project_id: i64, after: &str) -> Result<Vec<Queued>> {
+    pub fn breaking_released(&self, project_id: i64, after: &str) -> Result<Vec<Breaking>> {
         let Some(released) = self.last_release_moment(project_id)? else {
             return Ok(Vec::new());
         };
         let mut stmt = self.conn.prepare(
-            "SELECT id, kind, body, substr(created_at, 1, 10), due FROM events
+            "SELECT id, body, substr(created_at, 1, 10), commit_hash FROM events
               WHERE project_id = ?1 AND commit_hash IS NOT NULL AND body LIKE 'breaking:%'
                 AND created_at > ?2 AND created_at <= ?3
               ORDER BY created_at, id",
         )?;
-        let rows = stmt.query_map(params![project_id, after, released], row_to_note)?;
+        let rows = stmt.query_map(params![project_id, after, released], |r| {
+            Ok(Breaking {
+                id: r.get(0)?,
+                body: r.get(1)?,
+                date: r.get(2)?,
+                commit: r.get(3)?,
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

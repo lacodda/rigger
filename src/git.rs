@@ -119,6 +119,20 @@ pub fn commit(repo: &Repository, id: &str) -> Result<Option<Commit>> {
     }
 }
 
+/// The paths a commit changed against its first parent, each from the root of
+/// the repository with `/` between the parts. A file moved by the commit
+/// counts where it was as well as where it went: the package it left was
+/// changed too.
+pub fn paths_of(repo: &Repository, id: &str) -> Result<Vec<String>> {
+    let changes = repo
+        .changes(id)
+        .map_err(|e| anyhow::Error::new(e).context(format!("cannot read what {id} changed")))?;
+    let mut paths: Vec<String> = changes.files.into_iter().flat_map(|file| std::iter::once(file.path).chain(file.from)).collect();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// A commit's message, its first line only.
 pub fn subject(repo: &Repository, id: &str) -> Option<String> {
     let message = repo.message(id).ok()?;

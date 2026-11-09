@@ -198,11 +198,13 @@ A project can come before its turn, and the turn it takes is the one it had comi
 | What | Settled by |
 | --- | --- |
 | `rigger queue first` - the owner's word | its next release, or `queue back` |
-| A release of something it [builds against](/rigger/reference/link/#what-a-project-builds-against) with a breaking change, since its own last release | its next release |
+| A release of something it [builds against](/rigger/reference/link/#what-a-project-builds-against) with a breaking change to a package it uses, since its own last release | its next release |
 | An order of its own, [built](/rigger/reference/resolve/) and released, since its own last release | its next release |
 | A neighbour's order it holds, placed with [`wish --waits`](/rigger/reference/note/): that stage cannot go on without it | resolving the order |
 
 An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0 or put down; the others leave it where it is.
+
+A breaking release reaches through the packages it changed. A breaking commit moves a project only when it changed a file of a package that project uses - a file in the package's [directory](/rigger/reference/link/#what-a-project-builds-against), and in no package nested deeper inside it. So `feat(release)!` in one crate of a workspace moves the users of that crate and not the users of its neighbour, and what the commit changed beside every package - its docs, its CI - moves nobody. A [tie](/rigger/reference/link/) in the record names no package, so any breaking change moves its project; so does a commit whose changes cannot be read, since a break missed costs more than a turn spent finding nothing to do.
 
 All of it is named. The screen gives the first thing and counts the rest - `moved up: the owner asked (and 2 more)` - and `order[].moved` has every one, so a note with nothing to do in it cannot hide a release that broke the build.
 

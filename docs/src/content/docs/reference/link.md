@@ -160,6 +160,8 @@ sample uses widget - reads its JSON
 
 A project uses a neighbour when a manifest of its own asks for a package the neighbour's manifests publish. A package marked private or `publish = false` publishes nothing, a path or workspace dependency is the project's own, and a package two projects both publish is left out rather than guessed at.
 
+Each package is kept with the directory its manifest is in. A file of the repository belongs to the package whose directory it lies deepest in, private or not, and to no package when it lies in none - so a breaking change [moves](/rigger/reference/queue/#moved-up) the users of the packages whose files it changed, and nobody else.
+
 This is the list the [queue](/rigger/reference/queue/) goes by when a release [moves a project up](/rigger/reference/queue/#moved-up).
 
 <!-- json: link uses -->
@@ -171,6 +173,7 @@ This is the list the [queue](/rigger/reference/queue/) goes by when a release [m
 | `uses[].supplier` | string | The project drawn on. |
 | `uses[].package` | string or null | The package, from a manifest; `null` for a tie in the record. |
 | `uses[].requirement` | string or null | The version the manifest asks for, as it spells it. |
+| `uses[].directory` | string or null | Where the package's manifest is in the supplier's repository, from its root with `/` between the parts, `.` for the root; `null` for a tie in the record. |
 | `uses[].note` | string or null | What the record says about the tie. |
 
 ## Related
