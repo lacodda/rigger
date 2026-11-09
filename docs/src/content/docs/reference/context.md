@@ -166,12 +166,14 @@ The same packet as data, for a tool that renders it or an editor that feeds it t
 | `current.tasks[].id` | integer | The task's id. |
 | `current.tasks[].status` | string | One of `new`, `active`, `waiting-handoff`, `frozen`, `done`, `dropped`. |
 | `current.tasks[].title` | string | The task's title. |
+| `current.tasks[].woke` | string or null | The day it came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. The packet marks it `back from sleep`. |
 | `current.asleep` | array | Open tasks asleep until a day; counted in the text packet, listed here. |
 | `current.asleep[]` | object | One sleeping task. |
 | `current.asleep[].id` | integer | The task's id. |
 | `current.asleep[].status` | string | The task's status, as in `current.tasks[].status`. |
 | `current.asleep[].title` | string | The task's title. |
 | `current.asleep[].snoozed_until` | string | The day it wakes, `YYYY-MM-DD`. |
+| `current.asleep[].woke` | null | Always `null`: a task asleep has not come back yet. |
 | `current.set_aside` | array | Earlier versions whose open work is all frozen or asleep. |
 | `current.set_aside[]` | object | One version set aside. |
 | `current.set_aside[].version` | string | The version. |

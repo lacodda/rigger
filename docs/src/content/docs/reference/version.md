@@ -164,6 +164,7 @@ $ rigger version show sample --json
 | `tasks[].title` | string | The task's title. |
 | `tasks[].status` | string | The task's status, such as `new`, `active` or `done`. |
 | `tasks[].snoozed_until` | string | The day the task sleeps until, as `YYYY-MM-DD`; present only while it is asleep. |
+| `tasks[].woke` | string or null | The day the task came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. |
 | `open_tasks` | integer | How many of the tasks are still work to do. |
 
 When every version has shipped and none is being built, `version show` prints only `project` and a `version` of `null`.

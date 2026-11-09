@@ -673,6 +673,12 @@ fn fill(r: &mut Record, data: &Path) {
     let stage = r.json("version show", &["version", "show", "alpha"]);
     let task_id = |n: usize| stage["tasks"][n]["id"].as_i64().unwrap_or_default().to_string();
     r.json("task status", &["task", "status", &task_id(1), "active"]);
+    // A task whose sleep ended today is back from it: only the day passing
+    // does that, so the day is written where a snooze would have put it.
+    rusqlite::Connection::open(data.join("profiles").join("line").join("rigger.db"))
+        .unwrap()
+        .execute("UPDATE tasks SET snoozed_until = date('now', 'localtime') WHERE id = ?1", [task_id(0)])
+        .unwrap();
     let later = r.json("version show", &["version", "show", "alpha", "v0.4.0"]);
     let later_id = |n: usize| later["tasks"][n]["id"].as_i64().unwrap_or_default().to_string();
     r.json("task snooze", &["task", "snooze", &later_id(1), "--until", "+7d"]);

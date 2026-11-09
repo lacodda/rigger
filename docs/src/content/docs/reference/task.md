@@ -100,6 +100,7 @@ Under `--json` the commands that write a card (`task new`, `open`, `close`, `lin
 | `card.created_at` | string | When the card was made, in RFC 3339 UTC. |
 | `card.updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
 | `card.snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `card.woke` | string or null | The day the card came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. |
 | `links` | array | The repositories the card is worked in. |
 | `links[]` | object | One repository link. |
 | `links[].project` | string | The recorded project's name. |
@@ -122,6 +123,7 @@ Under `--json` the commands that write a card (`task new`, `open`, `close`, `lin
 | `created_at` | string | When the card was made, in RFC 3339 UTC. |
 | `updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
 | `snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `woke` | string or null | The day the card came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. |
 
 `task list --json` prints an array of the cards listed:
 
@@ -139,6 +141,7 @@ Under `--json` the commands that write a card (`task new`, `open`, `close`, `lin
 | `[].created_at` | string | When the card was made, in RFC 3339 UTC. |
 | `[].updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
 | `[].snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `[].woke` | string or null | The day the card came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. |
 
 ## Tickets from kasl's inbox
 
@@ -304,6 +307,7 @@ This is a contract: a git client that makes a worktree per task reads the branch
 | `card.created_at` | string | When the card was made, in RFC 3339 UTC. |
 | `card.updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
 | `card.snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `card.woke` | string or null | The day the card came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. |
 | `links` | array | The repositories the card is worked in. |
 | `links[]` | object | One repository link. |
 | `links[].project` | string | The recorded project's name. |
@@ -433,6 +437,7 @@ What it is, its ticket as kasl sees it, where it is worked, what git and its tra
 | `card.created_at` | string | When the card was made, in RFC 3339 UTC. |
 | `card.updated_at` | string or null | When the card last changed, in RFC 3339 UTC. |
 | `card.snoozed_until` | string or null | The day the card sleeps until as `YYYY-MM-DD`, `null` when it is awake. |
+| `card.woke` | string or null | The day the card came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. |
 | `packet` | string | The packet as markdown text. |
 
 ## Statuses
@@ -471,6 +476,14 @@ A task asleep is out of sight, not out of mind:
 - the project's [packet](/rigger/reference/context/) leaves it out of the stage and counts it in its place - `(1 task asleep until 2026-10-14)`; the `plan` tool still lists it, with its day, because that is where the id to wake it comes from;
 - `task list` leaves sleeping cards out and says how many - `--snoozed` shows them with their day;
 - a card asleep is not in hand, and putting the card in hand to sleep lets go of it, as freezing does.
+
+And back, it says so. On the day its sleep ends and the day after, a task is marked `back from sleep` in the packet, the `plan` tool, [`show`](/rigger/reference/show/) and `version show`, and a card in `task list`, `task show` and its packet - so that what returns is not lost among what was there all along. The JSON carries the day as `woke`. After two days it reads like any other task. A task woken with `unsnooze` is not marked: whoever woke it knows.
+
+```console
+$ rigger context sample
+...
+- do the thing (back from sleep)
+```
 
 `freeze` is `task status <TASK> frozen` with its reason recorded against the task as a decision - `Set aside: waits for the alerts API` - because a frozen task that does not say why is a question for whoever finds it.
 

@@ -972,6 +972,8 @@ pub struct Task {
     /// The day it sleeps until, while that day has not come.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snoozed_until: Option<String>,
+    /// The day it came back from sleep, while that is today or yesterday.
+    pub woke: Option<String>,
 }
 
 impl Task {
@@ -985,6 +987,18 @@ impl Task {
 /// has come is the same as no day: nothing has to wake a task on time.
 pub fn asleep_until(snoozed_until: Option<String>, today: &str) -> Option<String> {
     snoozed_until.filter(|day| day.as_str() > today)
+}
+
+/// The day a task came back from sleep, while that is today or yesterday.
+///
+/// Nothing wakes a task: its day comes, and from then on it reads like any
+/// other. For two days it is said to be back, so that what returns is not
+/// lost among what was there all along. A task woken by hand has no day
+/// left to say: whoever woke it knows.
+pub fn woke_on(snoozed_until: Option<&str>, today: &str) -> Option<String> {
+    let day = snoozed_until?;
+    let yesterday = today.parse::<jiff::civil::Date>().ok()?.yesterday().ok()?.to_string();
+    (day <= today && day >= yesterday.as_str()).then(|| day.to_string())
 }
 
 /// A question waiting for the owner, and where it came from.
@@ -4065,6 +4079,8 @@ impl Db {
 
     fn row_to_card(r: &rusqlite::Row) -> rusqlite::Result<crate::card::Card> {
         let aliases: Option<String> = r.get(4)?;
+        let until: Option<String> = r.get(8)?;
+        let today = today();
         Ok(crate::card::Card {
             id: r.get(0)?,
             key: r.get(1)?,
@@ -4074,7 +4090,8 @@ impl Db {
             summary: r.get(5)?,
             created_at: r.get(6)?,
             updated_at: r.get(7)?,
-            snoozed_until: asleep_until(r.get(8)?, &today()),
+            woke: woke_on(until.as_deref(), &today),
+            snoozed_until: asleep_until(until, &today),
         })
     }
 
@@ -5554,11 +5571,13 @@ fn end_from(row: &rusqlite::Row, project: usize, version: usize, shipped: usize)
 /// A task from `id, title, status, snoozed_until`, its sleep read against
 /// `today`.
 fn row_to_task(r: &rusqlite::Row, today: &str) -> rusqlite::Result<Task> {
+    let until: Option<String> = r.get(3)?;
     Ok(Task {
         id: r.get(0)?,
         title: r.get(1)?,
         status: r.get(2)?,
-        snoozed_until: asleep_until(r.get(3)?, today),
+        woke: woke_on(until.as_deref(), today),
+        snoozed_until: asleep_until(until, today),
     })
 }
 
@@ -5788,7 +5807,19 @@ fn weekday(word: &str) -> Option<jiff::civil::Weekday> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Db, Kind, is_past, parse_day, slugify, stamp, stamp_of, version_order};
+    use super::{Db, Kind, is_past, parse_day, slugify, stamp, stamp_of, version_order, woke_on};
+
+    /// Back on the day the sleep ends and the day after, across a month and
+    /// a year; not before, not later, and not without a day.
+    #[test]
+    fn a_task_is_back_from_sleep_on_its_day_and_the_next() {
+        assert_eq!(woke_on(Some("2026-03-01"), "2026-03-01").as_deref(), Some("2026-03-01"));
+        assert_eq!(woke_on(Some("2026-02-28"), "2026-03-01").as_deref(), Some("2026-02-28"));
+        assert_eq!(woke_on(Some("2025-12-31"), "2026-01-01").as_deref(), Some("2025-12-31"));
+        assert_eq!(woke_on(Some("2026-02-27"), "2026-03-01"), None, "two days on it is not news");
+        assert_eq!(woke_on(Some("2026-03-02"), "2026-03-01"), None, "still asleep");
+        assert_eq!(woke_on(None, "2026-03-01"), None);
+    }
 
     fn scratch() -> (tempfile::TempDir, Db, i64) {
         let dir = tempfile::tempdir().unwrap();

@@ -1017,6 +1017,9 @@ fn render_plan(db: &Db, project: &Project) -> Result<String> {
         if let Some(day) = &task.snoozed_until {
             marks.push(format!("asleep until {day}"));
         }
+        if task.woke.is_some() {
+            marks.push(crate::context::BACK.to_string());
+        }
         let marks = if marks.is_empty() {
             String::new()
         } else {

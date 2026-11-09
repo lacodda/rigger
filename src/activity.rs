@@ -212,6 +212,7 @@ mod tests {
             created_at: String::new(),
             updated_at: None,
             snoozed_until: None,
+            woke: None,
         }
     }
 

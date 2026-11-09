@@ -202,7 +202,12 @@ pub fn render(screen: &Screen) -> String {
             // The first line of a task, because a task of these plans is a
             // paragraph with the point in its opening clause.
             let first = task.title.lines().next().unwrap_or("").trim();
-            let _ = writeln!(out, "  {} {}", mark(&task.status), trim_to(first, 96));
+            let back = if task.woke.is_some() {
+                format!(" ({})", crate::context::BACK)
+            } else {
+                String::new()
+            };
+            let _ = writeln!(out, "  {} {}{back}", mark(&task.status), trim_to(first, 96));
         }
         for line in crate::context::put_down_lines(&stage.asleep, &stage.set_aside) {
             let _ = writeln!(out, "  ({line})");

@@ -78,12 +78,14 @@ The screen as data: the same facts, without the text form's sentences.
 | `stage.tasks[].id` | integer | The task's id. |
 | `stage.tasks[].status` | string | One of `new`, `active`, `waiting-handoff`, `frozen`, `done`, `dropped`. |
 | `stage.tasks[].title` | string | The task's title. |
+| `stage.tasks[].woke` | string or null | The day it came back from sleep as `YYYY-MM-DD`, while that is today or yesterday; `null` otherwise. The packet marks it `back from sleep`. |
 | `stage.asleep` | array | Open tasks asleep until a day. |
 | `stage.asleep[]` | object | One sleeping task. |
 | `stage.asleep[].id` | integer | The task's id. |
 | `stage.asleep[].status` | string | The task's status. |
 | `stage.asleep[].title` | string | The task's title. |
 | `stage.asleep[].snoozed_until` | string | The day it wakes, `YYYY-MM-DD`. |
+| `stage.asleep[].woke` | null | Always `null`: a task asleep has not come back yet. |
 | `stage.set_aside` | array | Earlier versions whose open work is all frozen or asleep. |
 | `stage.set_aside[]` | object | One version set aside. |
 | `stage.set_aside[].version` | string | The version. |

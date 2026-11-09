@@ -4208,6 +4208,9 @@ fn task_show(task: &str, json: bool) -> Result<()> {
     if let Some(day) = &card.snoozed_until {
         println!("  asleep:   until {day}");
     }
+    if let Some(day) = &card.woke {
+        println!("  woke:     {day}, {}", context::BACK);
+    }
     if !card.aliases.is_empty() {
         println!("  aliases:  {}", card.aliases.join(", "));
     }
@@ -4323,6 +4326,9 @@ fn render_card(db: &Db, card: &card::Card, budget: usize) -> Result<String> {
     out.push_str(&format!("Status: {}", card.status));
     if let Some(day) = &card.snoozed_until {
         out.push_str(&format!(" · asleep until {day}"));
+    }
+    if card.woke.is_some() {
+        out.push_str(&format!(" · {}", context::BACK));
     }
     if !card.aliases.is_empty() {
         out.push_str(&format!(" · also {}", card.aliases.join(", ")));
@@ -4492,7 +4498,11 @@ fn task_list(status: &str, snoozed: bool, json: bool) -> Result<()> {
     }
     let width = cards.iter().map(|c| c.key.len()).max().unwrap_or(0);
     for c in &cards {
-        let zzz = c.snoozed_until.as_deref().map(|d| format!("  (asleep until {d})")).unwrap_or_default();
+        let zzz = match (&c.snoozed_until, &c.woke) {
+            (Some(day), _) => format!("  (asleep until {day})"),
+            (None, Some(_)) => format!("  ({})", context::BACK),
+            (None, None) => String::new(),
+        };
         println!("{:width$}  {:<16} {}{zzz}", c.key, c.status, c.title);
     }
     if !asleep.is_empty() {
@@ -6069,7 +6079,12 @@ fn version_show(project: &str, version: Option<&str>, json: bool) -> Result<()> 
     }
     println!("tasks      {} open of {}", open.len(), card.tasks.len());
     for task in &card.tasks {
-        println!("  [{}] {:<7} {}", task.id, task.status, task.title);
+        let back = if task.woke.is_some() {
+            format!("  ({})", context::BACK)
+        } else {
+            String::new()
+        };
+        println!("  [{}] {:<7} {}{back}", task.id, task.status, task.title);
     }
     Ok(())
 }

@@ -181,3 +181,86 @@ fn a_card_asleep_is_out_of_the_list_and_out_of_hand() {
     let active = output(data.path(), &["task", "active"]);
     assert!(active.contains("ACME-7310"), "{active}");
 }
+
+/// The day a sleep ends, the task is back, and says so for that day and the
+/// next, so that what returns is not lost among what was there all along.
+/// After that it reads like any other; woken by hand, it has no day to say.
+#[test]
+fn a_task_whose_day_came_is_back_from_sleep_for_two_days() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    let id = task_id(data.path(), "do one thing");
+    output(data.path(), &["task", "snooze", &id, "--until", "+3d"]);
+    let ended = |shift: &str| {
+        db(data.path())
+            .execute(
+                "UPDATE tasks SET snoozed_until = date('now', 'localtime', ?1) WHERE id = ?2",
+                [shift, id.as_str()],
+            )
+            .unwrap();
+    };
+
+    ended("+0 days");
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(packet.contains("- do one thing (back from sleep)\n"), "{packet}");
+    assert!(packet.contains("- do another\n") && !packet.contains("asleep"), "{packet}");
+    let day: String = db(data.path()).query_row("SELECT date('now', 'localtime')", [], |r| r.get(0)).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["context", "sample", "--json"])).unwrap();
+    let tasks = json["current"]["tasks"].as_array().unwrap();
+    let woke: Vec<&serde_json::Value> = tasks.iter().map(|t| &t["woke"]).collect();
+    assert_eq!(woke, vec![&serde_json::json!(day), &serde_json::Value::Null], "{json}");
+    let version = output(data.path(), &["version", "show", "sample"]);
+    assert!(version.contains("do one thing  (back from sleep)"), "{version}");
+    let shown = output(data.path(), &["show", "sample"]);
+    assert!(shown.contains("do one thing (back from sleep)"), "{shown}");
+
+    ended("-1 days");
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(packet.contains("- do one thing (back from sleep)\n"), "the next day too: {packet}");
+
+    ended("-2 days");
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(packet.contains("- do one thing\n") && !packet.contains("back from sleep"), "{packet}");
+
+    // A status says itself beside it.
+    ended("+0 days");
+    output(data.path(), &["task", "status", &id, "active"]);
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(packet.contains("- do one thing (active, back from sleep)\n"), "{packet}");
+
+    // Woken by hand, it is not back from anything anyone missed.
+    output(data.path(), &["task", "snooze", &id, "--until", "+3d"]);
+    output(data.path(), &["task", "unsnooze", &id]);
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(!packet.contains("back from sleep"), "{packet}");
+}
+
+#[test]
+fn a_card_whose_day_came_is_back_in_the_list_and_its_packet() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    output(data.path(), &["task", "new", "Archived alerts look live", "--id", "ACME-7310"]);
+    output(data.path(), &["task", "new", "Export is slow", "--id", "ACME-7311"]);
+    output(data.path(), &["task", "snooze", "ACME-7310", "--until", "3d"]);
+    db(data.path())
+        .execute("UPDATE tasks SET snoozed_until = date('now', 'localtime') WHERE key = 'ACME-7310'", [])
+        .unwrap();
+
+    let list = output(data.path(), &["task", "list"]);
+    let line = list.lines().find(|l| l.starts_with("ACME-7310")).unwrap_or_default();
+    assert!(line.ends_with("Archived alerts look live  (back from sleep)"), "{list}");
+    assert!(!list.lines().any(|l| l.starts_with("ACME-7311") && l.contains("back")), "{list}");
+    let shown = output(data.path(), &["task", "show", "ACME-7310"]);
+    assert!(shown.contains("woke:     ") && shown.contains(", back from sleep"), "{shown}");
+    let packet = output(data.path(), &["task", "context", "ACME-7310"]);
+    assert!(packet.contains("Status: new · back from sleep"), "{packet}");
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["task", "list", "--json"])).unwrap();
+    let mut woke: Vec<(String, bool)> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["key"].as_str().unwrap_or_default().to_string(), c["woke"].is_string()))
+        .collect();
+    woke.sort();
+    assert_eq!(woke, vec![("ACME-7310".to_string(), true), ("ACME-7311".to_string(), false)], "{json}");
+}

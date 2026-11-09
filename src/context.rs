@@ -203,6 +203,10 @@ impl From<crate::db::CurrentStage> for Stage {
     }
 }
 
+/// What a task or a card that came back from sleep is marked with, while it
+/// is today or yesterday that it woke.
+pub const BACK: &str = "back from sleep";
+
 /// What was put down, in a line each: the tasks asleep, counted with the
 /// first day one comes back, and the versions set aside. Counted and not
 /// listed, because out of sight is what sleeping is for - but not out of
@@ -842,9 +846,16 @@ fn render_stage(stage: &Stage) -> String {
     out.push('\n');
     for task in &stage.tasks {
         // The box of a plan means `new`; any other word is worth a mark.
-        match task.status.as_str() {
-            "new" => out.push_str(&format!("- {}\n", task.title)),
-            status => out.push_str(&format!("- {} ({status})\n", task.title)),
+        let mut marks = Vec::new();
+        if task.status != "new" {
+            marks.push(task.status.as_str());
+        }
+        if task.woke.is_some() {
+            marks.push(BACK);
+        }
+        match marks.is_empty() {
+            true => out.push_str(&format!("- {}\n", task.title)),
+            false => out.push_str(&format!("- {} ({})\n", task.title, marks.join(", "))),
         }
     }
     for line in put_down_lines(&stage.asleep, &stage.set_aside) {
