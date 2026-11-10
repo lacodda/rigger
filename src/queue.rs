@@ -1000,9 +1000,11 @@ fn short(c: &Candidate) -> String {
         Reason::Unfinished => format!("{}{}", unfinished_parts(c), moved_too(c)),
         Reason::Moved => moved_up(&c.moved),
         Reason::Turn if !c.moved.is_empty() => moves_once_due(c),
+        // The weight beside the wait, or an order by `(waited + 1) * weight`
+        // reads as no order at all.
         Reason::Turn => match &c.last_turn {
-            Some(_) => format!("waited {}", plural(c.waited, "release", "releases")),
-            None => "no turn yet".to_string(),
+            Some(_) => format!("waited {} at weight {}", plural(c.waited, "release", "releases"), c.weight),
+            None => format!("no turn yet at weight {}", c.weight),
         },
     }
 }
@@ -1436,7 +1438,7 @@ mod tests {
         for n in 0..9 {
             assert!(named.contains(format!("p{n}").as_str()), "{said}");
         }
-        assert!(said.contains("waited 12 releases"), "{said}");
+        assert!(said.contains("waited 12 releases at weight 1"), "{said}");
     }
 
     /// The forecast is the same rule, so it comes out in the weights' shares, each

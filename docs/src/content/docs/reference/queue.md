@@ -19,8 +19,8 @@ Next: widget  v0.2.0 · Plugins
   1 question waits on the owner · 1 order from neighbours
 
 Then
-  sample  v0.2.0  no turn yet
-  gadget  v1.0.0  waited 3 releases
+  sample  v0.2.0  no turn yet at weight 2
+  gadget  v1.0.0  waited 3 releases at weight 1
 
 Left out
   archive  weight 0 - worked on when asked
