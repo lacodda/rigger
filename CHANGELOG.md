@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.49.1] - 2026-11-10
+
+### Bug Fixes
+- Let a neighbour's need wait for the project's share
+- Show the weight beside the wait, so the order reads as one
+
+### Documentation
+- Keep the rule list one list for rustdoc
+
 ## [0.49.0] - 2026-11-09
 
 ### Breaking Changes
