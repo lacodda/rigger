@@ -15,9 +15,9 @@
 //!    a sitting left open. The line does not move on past it.
 //! 2. `moved` - something asked for it to come first, and it has not shipped
 //!    since. The owner's word, and a neighbour's stage that cannot go on
-//!    without it, move it at once. What a neighbour did that it has to take up
-//!    - a release of what it builds against that broke it, an order of its own
-//!    that was built - moves it once it has waited its share, below.
+//!    without it, move it at once. What a neighbour did that it has to take
+//!    up, a release of what it builds against that broke it or an order of
+//!    its own that was built, moves it once it has waited its share, below.
 //! 3. `turn` - nothing presses, so it goes by waiting and weight: the highest
 //!    `(waited + 1) * weight` is next, where `waited` is how many releases the
 //!    line has made since this project's last one.
