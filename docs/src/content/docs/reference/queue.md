@@ -38,7 +38,7 @@ An order of reasons. The first reason that holds for a project is its reason, an
 | Reason | Holds when | Within it, first |
 | --- | --- | --- |
 | `unfinished` | a turn begun and not over: work not committed or not pushed, an operation git left halfway, a feature or a fix since the last release, a release that did not get out, a sitting left open | the one waiting longest |
-| `moved` | something asked for it to come first, and it has not had its turn since | the one moved longest ago |
+| `moved` | something asked for it to come first, and it has not had its turn since: the owner's word or a neighbour's stage waiting on it at once, what a neighbour did once it has [waited its share](#its-share) | the one moved longest ago |
 | `turn` | nothing presses | the highest `(waited + 1) * weight` |
 
 For a `turn`, `waited` is how many releases the line has made since this project's last one, and `weight` is what [`priority`](/rigger/reference/priority/) says. A folder's turn is the end of its last sitting.
@@ -130,7 +130,7 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `order[].unfinished.undelivered` | string or null | How the last release fell short of getting out, in a few words. |
 | `order[].unfinished.sitting` | string or null | When the sitting left open began. |
 | `order[].unfinished.sitting_live` | boolean or null | Whether anyone is at that sitting: `true` while the [`go`](/rigger/reference/go/#who-is-at-a-sitting) that holds it runs, `false` once it has gone, `null` when nothing held it or no sitting is open. |
-| `order[].moved` | array | Everything that asks for it to come first, while it stands, whatever `reason` says: the owner's word first, then its neighbours', each oldest first. Empty when nothing does. The first is what its place goes by. |
+| `order[].moved` | array | Everything that asks for it to come first, while it stands, whatever `reason` says: the owner's word first, then its neighbours', each oldest first. Empty when nothing does. What a neighbour did moves it only once it has [waited its share](#its-share), so a project whose `reason` is `turn` can have something here: what that turn takes up. |
 | `order[].moved[]` | object | One of them. |
 | `order[].moved[].id` | integer | The event's id: [`resolve`](/rigger/reference/resolve/) closes the owner's word or a neighbour's order by it. |
 | `order[].moved[].head` | string | The line it is known by: the reason given, or what the neighbour did. |
@@ -180,7 +180,7 @@ $ rigger queue --ahead 6
 6  widget  v0.5.0       Sharing
 ```
 
-Each turn is assumed to end in a release, and nothing else to change. So it is a forecast and says no more than that: a release out of turn, a changed weight or a neighbour's breaking change redraws it, which is the point of working it out rather than keeping it. The notes say what a turn is besides a stage: `unfinished` and `moved` go first, once; `refactor` takes the turn instead of a stage; `grow` is where the [plan](/rigger/reference/tail/) would be short enough that the turn starts by growing it. A plan that has run out shows `unplanned`.
+Each turn is assumed to end in a release, and nothing else to change. So it is a forecast and says no more than that: a release out of turn, a changed weight or a neighbour's breaking change redraws it, which is the point of working it out rather than keeping it. The notes say what a turn is besides a stage: `unfinished` and `moved` go first, once, and a project in its turn with something a neighbour did comes `moved` at the turn it has [waited its share](#its-share); `refactor` takes the turn instead of a stage; `grow` is where the [plan](/rigger/reference/tail/) would be short enough that the turn starts by growing it. A plan that has run out shows `unplanned`.
 
 <!-- json: queue -->
 | Field | Type | Meaning |
@@ -195,22 +195,30 @@ Each turn is assumed to end in a release, and nothing else to change. So it is a
 
 ## Moved up
 
-A project can come before its turn, and the turn it takes is the one it had coming, taken earlier: it gets no more of them for being moved. Four things move one, each settled without anyone having to remember it:
+A project can come before its turn, and it gets no more turns for being moved than its weight gives it. Four things move one, each settled without anyone having to remember it:
 
-| What | Settled by |
-| --- | --- |
-| `rigger queue first` - the owner's word | its next release, or `queue back` |
-| A release of something it [builds against](/rigger/reference/link/#what-a-project-builds-against) with a breaking change to a package it uses, since its own last release | its next release |
-| An order of its own, [built](/rigger/reference/resolve/) and released, since its own last release | its next release |
-| A neighbour's order it holds, placed with [`wish --waits`](/rigger/reference/note/): that stage cannot go on without it | resolving the order |
+| What | Moves it | Settled by |
+| --- | --- | --- |
+| `rigger queue first` - the owner's word | at once | its next release, or `queue back` |
+| A neighbour's order it holds, placed with [`wish --waits`](/rigger/reference/note/): that stage cannot go on without it | at once | resolving the order |
+| A release of something it [builds against](/rigger/reference/link/#what-a-project-builds-against) with a breaking change to a package it uses, since its own last release | once it has waited its share | its next release |
+| An order of its own, [built](/rigger/reference/resolve/) and released, since its own last release | once it has waited its share | its next release |
 
 An ordinary release of a library moves nobody: its users take it up in their own turn. Only the owner's word brings back a project at weight 0 or put down; the others leave it where it is.
+
+### Its share
+
+A project has waited its share once `(waited + 1) * weight` reaches the weight of the whole order - the sum of the weights of every project in it, leaving out what is left out. That is the point at which the formula's own turn comes round: at weight 2 in an order weighing 37, after 18 releases. Until then, what its neighbours did is named on its line - `waited 2 of 18 releases before moving up: widget broke what it uses: feat: rename a field` - and the project stays in its turn; from then, it comes before every project in its turn, however long those have waited.
+
+Without the share, a break would buy a turn. A stage breaks something whenever it has to, so two projects that draw on each other would move each other up after every release and hand the line back and forth while everything else waited. With it, they come round as their weights say and take up what broke in that turn. The owner's word and a stage that cannot go on are not shares of anything, so they do not wait for one.
 
 A breaking release reaches through the packages it changed. A breaking commit moves a project only when it changed a file of a package that project uses - a file in the package's [directory](/rigger/reference/link/#what-a-project-builds-against), and in no package nested deeper inside it. So `feat(release)!` in one crate of a workspace moves the users of that crate and not the users of its neighbour, and what the commit changed beside every package - its docs, its CI - moves nobody. A [tie](/rigger/reference/link/) in the record names no package, so any breaking change moves its project; so does a commit whose changes cannot be read, since a break missed costs more than a turn spent finding nothing to do.
 
 All of it is named. The screen gives the first thing and counts the rest - `moved up: the owner asked (and 2 more)` - and `order[].moved` has every one, so a note with nothing to do in it cannot hide a release that broke the build.
 
-Being unfinished comes before being moved up, and does not hide it. [`rigger go`](/rigger/reference/go/) opens a sitting before it starts your assistant, so a project moved up reads as `unfinished` from the moment its turn begins; the screen then says both, and `order[].moved` still names everything that asked for it.
+Being unfinished comes before being moved up, and does not hide it. [`rigger go`](/rigger/reference/go/) opens a sitting before it starts your assistant, so a project moved up reads as `unfinished` from the moment its turn begins; the screen then says both - `; moved up: …`, or `; to take up: …` for what has not waited its share - and `order[].moved` still names everything that asked for it. The assistant's first message says the same: a project moved up hears that it comes before its turn, and one in its turn with something a neighbour did hears that its neighbours left it something to take up.
+
+`queue back` takes back only the owner's word. What a neighbour did stays, and the answer says where that leaves the project: still moved up, or back in its turn and how far it has got towards its share.
 
 ## Related
 

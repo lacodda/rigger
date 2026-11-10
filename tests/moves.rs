@@ -193,6 +193,8 @@ fn a_breaking_release_moves_up_only_who_uses_what_it_changed() {
     assert_eq!(directory("release-user"), "packages/release", "{uses:#}");
     assert!(directory("reader").is_null(), "a tie names no directory: {uses:#}");
 
+    // What reaches whom; when it moves them is the share's to say.
+    let asks = |found: &Value, name: &str| entry(found, name)["moved"].as_array().unwrap().len();
     release_of(
         &kit,
         &["packages/release/run.js", "packages/release-notes/notes.js", "docs/release.md"],
@@ -200,13 +202,13 @@ fn a_breaking_release_moves_up_only_who_uses_what_it_changed() {
         "v0.2.0",
     );
     let found = queue(data.path());
-    assert_eq!(entry(&found, "release-user")["reason"], "moved", "{found:#}");
-    assert_eq!(entry(&found, "core-user")["reason"], "turn", "kit-core did not change: {found:#}");
-    assert_eq!(entry(&found, "reader")["reason"], "moved", "a tie reaches all of it: {found:#}");
+    assert_eq!(asks(&found, "release-user"), 1, "{found:#}");
+    assert_eq!(asks(&found, "core-user"), 0, "kit-core did not change: {found:#}");
+    assert_eq!(asks(&found, "reader"), 1, "a tie reaches all of it: {found:#}");
 
     release_of(&kit, &["packages/core/part.js"], "feat(core)!: change the part", "v0.3.0");
     let found = queue(data.path());
-    assert_eq!(entry(&found, "core-user")["reason"], "moved", "{found:#}");
+    assert_eq!(asks(&found, "core-user"), 1, "{found:#}");
     assert_eq!(
         entry(&found, "core-user")["moved"][0]["head"],
         "kit broke what it uses: feat(core): change the part"
@@ -261,6 +263,62 @@ fn every_reason_to_come_first_is_named() {
     );
     let found = queue(data.path());
     assert_eq!(entry(&found, "app")["moved"].as_array().unwrap().len(), 2, "{found:#}");
+}
+
+/// Two projects that use each other cannot hand the line back and forth: what
+/// a neighbour broke moves a project only once it has waited its share, and
+/// until then the projects in their turn that waited longer come first.
+#[test]
+fn two_projects_that_break_each_other_wait_their_share() {
+    let data = tempfile::tempdir().unwrap();
+    rigger(data.path()).arg("init").assert().success();
+    let one = project(data.path(), "one", LONER);
+    let two = project(data.path(), "two", LONER);
+    let three = project(data.path(), "three", LONER);
+    for (consumer, supplier) in [("two", "one"), ("one", "two")] {
+        rigger(data.path())
+            .args(["link", "add", consumer, supplier, "--kind", "consumer", "--note", "reads its JSON"])
+            .assert()
+            .success();
+    }
+    let order = |found: &Value| -> Vec<String> {
+        found["order"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["project"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Two has waited a whole round: one's break moves it.
+    release(&one, "feat!: rename a field", "v0.2.0");
+    let found = queue(data.path());
+    assert_eq!(order(&found)[0], "two", "{found:#}");
+    assert_eq!(entry(&found, "two")["reason"], "moved");
+
+    // One has just had its turn: two's break waits for its share, and three,
+    // in its turn and waiting longer, comes first.
+    release(&two, "feat!: rename another", "v0.2.0");
+    let found = queue(data.path());
+    assert_eq!(order(&found), vec!["three", "one", "two"], "{found:#}");
+    assert_eq!(entry(&found, "one")["reason"], "turn", "{found:#}");
+    assert_eq!(entry(&found, "one")["moved"][0]["head"], "two broke what it uses: feat: rename another");
+    let said = text(data.path(), &["queue"]);
+    assert!(
+        said.contains("one  v0.3.0  waited 1 of 2 releases before moving up: two broke what it uses: feat: rename another"),
+        "{said}"
+    );
+    let said = text(data.path(), &["queue", "back", "one"]);
+    assert!(
+        said.contains("one was not moved up: it is in its turn already - waited 1 of 2 releases"),
+        "{said}"
+    );
+
+    // One release later it has.
+    release(&three, "feat: something else", "v0.2.0");
+    let found = queue(data.path());
+    assert_eq!(order(&found)[0], "one", "{found:#}");
+    assert_eq!(entry(&found, "one")["reason"], "moved", "{found:#}");
 }
 
 /// A change that broke something and has not been released has reached nobody.
@@ -361,8 +419,12 @@ fn an_order_built_moves_up_who_asked() {
     let id = said["event"]["id"].as_i64().unwrap().to_string();
     rigger(data.path()).args(["resolve", "library", &id, "--built"]).assert().success();
     let found = queue(data.path());
-    assert_eq!(entry(&found, "other")["reason"], "moved", "{found:#}");
-    assert_eq!(entry(&found, "app")["reason"], "turn", "{found:#}");
+    assert_eq!(
+        entry(&found, "other")["moved"][0]["head"],
+        "library built what it asked for: A chart",
+        "{found:#}"
+    );
+    assert_eq!(entry(&found, "app")["moved"], serde_json::json!([]), "{found:#}");
 
     // Only a wish is built.
     let question = rigger(data.path())

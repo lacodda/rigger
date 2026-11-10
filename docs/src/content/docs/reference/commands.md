@@ -43,7 +43,7 @@ The command surface arrives one release at a time. Each release adds its command
 | [`rigger project set --about`](/rigger/reference/project/#--about) | v0.30.0 | One line about a project whose manifest says nothing |
 | [`rigger doctor --hubs`](/rigger/reference/doctor/#behind-is-not-edited), behind or edited | v0.31.0 | Tell a hub file the record only moved past from one somebody wrote in; `session end` writes the first kind again, and `import` takes every `.md` of a hub in |
 | [`rigger go`](/rigger/reference/go/) | v0.34.0 | Work on what comes next: the project, its stage, your assistant started on it; a turn left unfinished comes back |
-| [`rigger link uses`](/rigger/reference/link/#what-a-project-builds-against) | v0.36.0 | What the projects build against, from their manifests; a release that breaks its users moves them up the queue |
+| [`rigger link uses`](/rigger/reference/link/#what-a-project-builds-against) | v0.36.0 | What the projects build against, from their manifests; a release that breaks its users moves them up the queue once they have waited their share |
 | [`rigger version list`](/rigger/reference/version/#version-list) | v0.40.0 | The whole plan of a project, in order |
 | [`rigger version move`](/rigger/reference/version/#version-move) | v0.44.0 | Give a stage another number in the record, shifting what stands in its way |
 | [`rigger note --installed`, `--deployed`](/rigger/reference/note/#installed-deployed) | v0.45.0 | A release installed for the owner or deployed, said as a fact; what the newest version still owes shows on the screens |

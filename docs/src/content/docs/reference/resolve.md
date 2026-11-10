@@ -36,7 +36,7 @@ Answered [1]: Pick the release day.
 
 The decision keeps the question above it, so the reasoning reads as a whole later.
 
-A wish a neighbour placed can be more than sorted. `--built` says it is done, not only given a place in the plan, and once that is released the neighbour [moves up](/rigger/reference/queue/#moved-up) to take it:
+A wish a neighbour placed can be more than sorted. `--built` says it is done, not only given a place in the plan, and once that is released the neighbour [moves up](/rigger/reference/queue/#moved-up) to take it, as soon as it has waited its share:
 
 ```console
 $ rigger resolve sample 6 --built

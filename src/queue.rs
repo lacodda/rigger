@@ -14,10 +14,10 @@
 //!    feature or a fix since the last release, a release that did not get out,
 //!    a sitting left open. The line does not move on past it.
 //! 2. `moved` - something asked for it to come first, and it has not shipped
-//!    since: the owner's word, a release of what it builds against that broke
-//!    it, or an order of its own that was built; or, the other way round, a
-//!    neighbour's stage that waits on it. The turn it takes is the one it had
-//!    coming, taken earlier: it gets no more of them for being moved.
+//!    since. The owner's word, and a neighbour's stage that cannot go on
+//!    without it, move it at once. What a neighbour did that it has to take up
+//!    - a release of what it builds against that broke it, an order of its own
+//!    that was built - moves it once it has waited its share, below.
 //! 3. `turn` - nothing presses, so it goes by waiting and weight: the highest
 //!    `(waited + 1) * weight` is next, where `waited` is how many releases the
 //!    line has made since this project's last one.
@@ -26,6 +26,15 @@
 //! week off changes nothing about whose turn it is. And that formula gives each
 //! project exactly its weight's share of the turns, spaced evenly; without the
 //! `+ 1` the lightest projects get more than their share.
+//!
+//! A neighbour's need does not buy a turn. A project has waited its share once
+//! `(waited + 1) * weight` reaches the weight of the whole order - the point at
+//! which the formula's turn comes round - and only from then does what its
+//! neighbours did put it ahead of the projects in their turn, however long
+//! those have waited. Moved any sooner, it would get one more turn than its
+//! weight gives it each time a neighbour broke something, and two projects
+//! that use each other would hand the line back and forth for good. Until then
+//! it stands in its turn, and what will move it is named on its line.
 //!
 //! What cannot be finished from here is not unfinished: a project whose tag is
 //! stopped by something out of reach - a missing key, a red pipeline, a broken
@@ -158,8 +167,13 @@ pub struct Standing {
     pub blockers: Vec<Note>,
     /// What the owner asked to come first, oldest first.
     pub moves: Vec<Note>,
-    /// What its neighbours need of it, oldest first. Unlike the owner's word this
-    /// does not bring back a project set aside on purpose.
+    /// The orders it holds that a neighbour's stage waits on: that stage cannot
+    /// go on without them, so they move it at once. Unlike the owner's word
+    /// they do not bring back a project set aside on purpose.
+    pub awaited: Vec<Note>,
+    /// What its neighbours did that it has to take up, oldest first: a break
+    /// in what it uses, an order of its own built. It moves the project once
+    /// that has waited its share, and brings back nothing set aside either.
     pub pulled: Vec<Note>,
     pub waiting: usize,
     pub asked: usize,
@@ -188,9 +202,10 @@ pub struct Candidate {
     pub unfinished: Option<Unfinished>,
     /// Everything that asks for it to come first, while it stands, whatever
     /// the reason: the owner's word first, oldest first, then its neighbours',
-    /// oldest first. The first is what its place goes by; a screen names it
-    /// and counts the rest, so that a note with nothing to do in it cannot
-    /// hide a release that broke the build.
+    /// oldest first. A screen names the first and counts the rest, so that a
+    /// note with nothing to do in it cannot hide a release that broke the
+    /// build. What a neighbour did moves it only once it has waited its share,
+    /// so a project in its turn can have something here.
     pub moved: Vec<Note>,
     /// How many releases the line has made since its last turn.
     pub waited: usize,
@@ -205,6 +220,15 @@ pub struct Candidate {
     pub(crate) since: Option<String>,
     #[serde(skip)]
     pub(crate) turn_at: Option<String>,
+    /// What asks for it puts it before its turn: the owner's word, a stage
+    /// waiting on it, or what a neighbour did, once it has waited its share.
+    /// Being unfinished does not hide it.
+    #[serde(skip)]
+    pub(crate) early: bool,
+    /// How many releases it waits, at its weight, before what a neighbour did
+    /// moves it: its share of the order.
+    #[serde(skip)]
+    pub(crate) share: usize,
 }
 
 /// Why a project is not in the order at all.
@@ -438,9 +462,23 @@ impl Touched {
     }
 }
 
-/// What a project's neighbours need of it, and it of them: see the head of this
-/// module. Worked out each time, so it needs nobody to remember to undo it: the
-/// project's next release is what settles the first two.
+/// The orders a project holds that a neighbour's stage is waiting for. Resolving
+/// the order settles it, whichever way.
+fn awaited(db: &Db, project: &crate::db::Project) -> Result<Vec<Note>> {
+    Ok(db
+        .waited_on(project.id)?
+        .into_iter()
+        .map(|order| Note {
+            id: order.id,
+            head: format!("{} waits on it: {}", order.asked_by, crate::context::headline(&order.body)),
+            since: String::new(),
+        })
+        .collect())
+}
+
+/// What a project's neighbours did that it has to take up: see the head of
+/// this module. Worked out each time, so it needs nobody to remember to undo
+/// it: the project's next release is what settles it.
 ///
 /// A project that has never released has nothing to catch up with yet. An order
 /// built and not yet released waits for the release, like the work it is.
@@ -453,14 +491,6 @@ impl Touched {
 /// break costs more than a turn spent finding nothing to do.
 fn pulls(db: &Db, project: &crate::db::Project, last_turn: Option<&str>, all: &[crate::db::Project], uses: &[Use], touched: &mut Touched) -> Result<Vec<Note>> {
     let mut out = Vec::new();
-    for order in db.waited_on(project.id)? {
-        let head = crate::context::headline(&order.body);
-        out.push(Note {
-            id: order.id,
-            head: format!("{} waits on it: {head}", order.asked_by),
-            since: String::new(),
-        });
-    }
     let Some(last_turn) = last_turn else {
         return Ok(out);
     };
@@ -582,6 +612,7 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
             sitting: open.map(|s| s.started_at),
             blockers: notes(db.blockers(project.id)?),
             moves: notes(db.moves(project.id, settled_by(db, project)?.as_deref())?),
+            awaited: awaited(db, project)?,
             pulled,
             last_turn,
             waited,
@@ -596,10 +627,14 @@ pub fn gather(db: &Db) -> Result<Vec<Standing>> {
 
 /// Puts every project in its place: the order, and what is left out of it.
 pub fn choose(standings: &[Standing]) -> Queue {
+    // What a project's share is measured against. Who is in the order does not
+    // depend on what the neighbours did - that brings back nothing set aside -
+    // so this can be known before any place is.
+    let total: usize = standings.iter().filter(|s| in_the_order(s).is_ok()).map(|s| s.weight as usize).sum();
     let mut order = Vec::new();
     let mut left_out = Vec::new();
     for standing in standings {
-        match candidate(standing) {
+        match candidate(standing, total) {
             Ok(found) => order.push(found),
             Err(why) => left_out.push(LeftOut {
                 project: standing.project.clone(),
@@ -618,13 +653,40 @@ pub fn choose(standings: &[Standing]) -> Queue {
     }
 }
 
-/// The reason a project is in the order, or the reason it is not.
-fn candidate(s: &Standing) -> Result<Candidate, Aside> {
+/// Set aside on purpose: weight 0, or everything planned put down.
+fn set_aside(s: &Standing) -> bool {
+    s.weight == 0 || s.stage.as_ref().is_some_and(|stage| stage.put_down)
+}
+
+/// Whether a project is in the order at all, and if not, why not.
+fn in_the_order(s: &Standing) -> Result<(), Aside> {
     // Before anything else: nobody can ask for work that something out of
     // reach is stopping.
     if !s.blockers.is_empty() {
         return Err(Aside::Blocked);
     }
+    // Set aside on purpose, a project is not holding the line up, whatever it
+    // was left holding - unless the owner moved it up, which is asking for it.
+    if set_aside(s) && s.moves.is_empty() {
+        return Err(if s.weight == 0 { Aside::Out } else { Aside::PutDown });
+    }
+    Ok(())
+}
+
+/// How many releases a project waits, at its weight, before what a neighbour
+/// did moves it: the least `waited` at which `(waited + 1) * weight` reaches
+/// the weight of the whole order. A project at weight 0 never gets there.
+pub fn share(weight: u32, total: usize) -> usize {
+    match weight {
+        0 => usize::MAX,
+        weight => total.div_ceil(weight as usize).saturating_sub(1),
+    }
+}
+
+/// The reason a project is in the order, or the reason it is not. `total` is
+/// the weight of the whole order.
+fn candidate(s: &Standing, total: usize) -> Result<Candidate, Aside> {
+    in_the_order(s)?;
     let unfinished = Unfinished {
         changed: s.held.changed,
         untracked: s.held.untracked,
@@ -635,30 +697,24 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         sitting: s.sitting.clone(),
         sitting_live: s.sitting_live,
     };
-    // Set aside on purpose, a project is not holding the line up, whatever it
-    // was left holding - unless the owner moved it up, which is asking for it.
-    let out = s.weight == 0;
-    let put_down = s.stage.as_ref().is_some_and(|stage| stage.put_down);
-    let is_unfinished = !unfinished.is_empty() && !out && !put_down;
-    let aside = out || put_down;
+    let aside = set_aside(s);
+    let is_unfinished = !unfinished.is_empty() && !aside;
+    // Only the owner's word reaches a project set aside.
     let mut moved = s.moves.clone();
     if !aside {
+        moved.extend(s.awaited.iter().cloned());
         moved.extend(s.pulled.iter().cloned());
     }
-    if !is_unfinished && moved.is_empty() {
-        if out {
-            return Err(Aside::Out);
-        }
-        if put_down {
-            return Err(Aside::PutDown);
-        }
-    }
+    let share = share(s.weight, total);
+    let early = !s.moves.is_empty() || (!aside && (!s.awaited.is_empty() || (!s.pulled.is_empty() && s.waited >= share)));
 
     let (reason, since) = if is_unfinished {
         let since = s.untagged.first().map(|(at, _)| at.clone()).or_else(|| s.last_turn.clone());
         (Reason::Unfinished, since)
-    } else if let Some(first) = moved.first() {
-        (Reason::Moved, Some(first.since.clone()))
+    } else if early {
+        // The owner's word, a stage waiting, then what a neighbour did: the
+        // first of them is what moves it.
+        (Reason::Moved, moved.first().map(|first| first.since.clone()))
     } else {
         (Reason::Turn, None)
     };
@@ -679,6 +735,8 @@ fn candidate(s: &Standing) -> Result<Candidate, Aside> {
         refactor: s.refactor,
         since,
         turn_at: s.last_turn.clone(),
+        early,
+        share,
     })
 }
 
@@ -749,8 +807,11 @@ pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&st
         /// Which simulated turn it last had: none yet is the longest ago.
         played: usize,
         pressing: Option<&'static str>,
+        /// What a neighbour did is waiting for it to have waited its share.
+        lifted: bool,
         refactor: bool,
     }
+    let total: usize = queue.order.iter().map(|c| c.weight as usize).sum();
     let mut walks: Vec<Walk> = queue
         .order
         .iter()
@@ -770,6 +831,7 @@ pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&st
                     Reason::Moved => Some("moved"),
                     Reason::Turn => None,
                 },
+                lifted: candidate.reason == Reason::Turn && !candidate.moved.is_empty(),
                 refactor: refactor == Some(candidate.project.as_str()),
             }
         })
@@ -777,9 +839,23 @@ pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&st
 
     let mut out = Vec::new();
     for turn in 1..=turns {
-        // What presses goes first, in the order the queue already put it in; then
-        // the rule. A project at weight 0 is here only for what pressed.
-        let next = walks.iter().position(|w| w.pressing.is_some()).or_else(|| {
+        // What presses goes first, in the order the queue already put it in;
+        // then what a neighbour did, once its project has waited its share,
+        // longest asked first; then the rule. A project at weight 0 is here
+        // only for what pressed.
+        let pressed = walks.iter().position(|w| w.pressing.is_some());
+        let lifted = || {
+            walks
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| w.lifted && w.waited >= share(w.candidate.weight, total))
+                .min_by(|(_, a), (_, b)| {
+                    let asked = |w: &Walk| w.candidate.moved.first().map(|n| n.since.clone());
+                    asked(a).cmp(&asked(b)).then_with(|| a.candidate.project.cmp(&b.candidate.project))
+                })
+                .map(|(index, _)| index)
+        };
+        let by_turn = || {
             walks
                 .iter()
                 .enumerate()
@@ -794,7 +870,14 @@ pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&st
                         .then_with(|| a.candidate.project.cmp(&b.candidate.project))
                 })
                 .map(|(index, _)| index)
-        });
+        };
+        let (next, moved) = match pressed {
+            Some(next) => (Some(next), false),
+            None => match lifted() {
+                Some(next) => (Some(next), true),
+                None => (by_turn(), false),
+            },
+        };
         let Some(next) = next else {
             break;
         };
@@ -804,8 +887,10 @@ pub fn ahead(queue: &Queue, plans: &HashMap<String, Ahead>, refactor: Option<&st
         let walk = &mut walks[next];
         walk.waited = 0;
         walk.played = turn;
+        // Its release settles what its neighbours did, however it got the turn.
+        walk.lifted = false;
 
-        let pressing = walk.pressing.take();
+        let pressing = walk.pressing.take().or(moved.then_some("moved"));
         let refactoring = std::mem::take(&mut walk.refactor);
         let folder = walk.candidate.kind == Kind::Folder;
         // A refactoring ships no stage, and a folder's turn takes none off a plan.
@@ -853,21 +938,46 @@ pub fn why(c: &Candidate) -> String {
     match c.reason {
         Reason::Unfinished => format!("not finished: {}{}", unfinished_parts(c), moved_too(c)),
         Reason::Moved => moved_up(&c.moved),
-        Reason::Turn => match &c.last_turn {
-            Some(_) => format!("its turn: {} since its last, at weight {}", plural(c.waited, "release", "releases"), c.weight),
-            None => format!("its turn: it has had none yet, at weight {}", c.weight),
-        },
+        Reason::Turn => {
+            let turn = match &c.last_turn {
+                Some(_) => format!("its turn: {} since its last, at weight {}", plural(c.waited, "release", "releases"), c.weight),
+                None => format!("its turn: it has had none yet, at weight {}", c.weight),
+            };
+            match c.moved.is_empty() {
+                true => turn,
+                false => format!("{turn}; to take up: {}", heads(&c.moved)),
+            }
+        }
     }
 }
 
-/// What moved a project up, in a line: the first thing in full, and how many
-/// more there are. `--json` has every one of them.
+/// The first thing that asks, in full, and how many more there are. `--json`
+/// has every one of them.
+fn heads(moved: &[Note]) -> String {
+    match moved {
+        [] => String::new(),
+        [first] => first.head.clone(),
+        [first, rest @ ..] => format!("{} (and {} more)", first.head, rest.len()),
+    }
+}
+
+/// What moved a project up, in a line.
 pub fn moved_up(moved: &[Note]) -> String {
     match moved {
         [] => "moved up".to_string(),
-        [first] => format!("moved up: {}", first.head),
-        [first, rest @ ..] => format!("moved up: {} (and {} more)", first.head, rest.len()),
+        _ => format!("moved up: {}", heads(moved)),
     }
+}
+
+/// What a neighbour did, for a project in its turn that has not waited its
+/// share yet: how far it has got, and what moves it once it has.
+pub fn moves_once_due(c: &Candidate) -> String {
+    format!(
+        "waited {} of {} before moving up: {}",
+        c.waited,
+        plural(c.share, "release", "releases"),
+        heads(&c.moved)
+    )
 }
 
 /// What moved a project that is also unfinished, said after the first reason.
@@ -875,10 +985,12 @@ pub fn moved_up(moved: &[Note]) -> String {
 /// `rigger go` opens a sitting and only then starts the assistant, so a project
 /// moved up reads as unfinished from the moment its turn begins. Its first
 /// message sends the assistant here for what moved it, and this is that answer.
+/// What a neighbour did that has not moved it up yet is still there to take up.
 fn moved_too(c: &Candidate) -> String {
-    match c.moved.is_empty() {
-        true => String::new(),
-        false => format!("; {}", moved_up(&c.moved)),
+    match (c.moved.is_empty(), c.early) {
+        (true, _) => String::new(),
+        (false, true) => format!("; {}", moved_up(&c.moved)),
+        (false, false) => format!("; to take up: {}", heads(&c.moved)),
     }
 }
 
@@ -887,6 +999,7 @@ fn short(c: &Candidate) -> String {
     match c.reason {
         Reason::Unfinished => format!("{}{}", unfinished_parts(c), moved_too(c)),
         Reason::Moved => moved_up(&c.moved),
+        Reason::Turn if !c.moved.is_empty() => moves_once_due(c),
         Reason::Turn => match &c.last_turn {
             Some(_) => format!("waited {}", plural(c.waited, "release", "releases")),
             None => "no turn yet".to_string(),
@@ -995,6 +1108,7 @@ mod tests {
             refactor: false,
             blockers: Vec::new(),
             moves: Vec::new(),
+            awaited: Vec::new(),
             pulled: Vec::new(),
             waiting: 0,
             asked: 0,
@@ -1184,6 +1298,118 @@ mod tests {
         assert_eq!(order_of(&[newer, older]), vec!["older", "newer"]);
     }
 
+    /// What a neighbour did moves a project only once it has waited its share:
+    /// before that it stands in its turn, behind the ones that have waited
+    /// longer, and says how far it has got. The owner's word and a stage
+    /// waiting on it do not wait for a share.
+    #[test]
+    fn a_neighbours_need_moves_a_project_once_it_has_waited_its_share() {
+        // The whole order weighs 5, so at weight 2 the share is 2 releases.
+        let broke = note(4, "lib broke what it uses: feat!: a part", "2026-11-03");
+        let mut pulled = on_stage("pulled", 2, 1);
+        pulled.pulled = vec![broke.clone()];
+        let line = |pulled: Standing| vec![pulled, on_stage("heavy", 2, 9), on_stage("light", 1, 30)];
+
+        let queue = choose(&line(pulled.clone()));
+        let order: Vec<(&str, Reason)> = queue.order.iter().map(|c| (c.project.as_str(), c.reason)).collect();
+        assert_eq!(order, vec![("light", Reason::Turn), ("heavy", Reason::Turn), ("pulled", Reason::Turn)]);
+        assert_eq!(queue.order[2].moved, vec![broke.clone()], "what will move it is named all the same");
+        let said = render(&queue);
+        assert!(
+            said.contains("pulled  v0.2.0  waited 1 of 2 releases before moving up: lib broke what it uses: feat!: a part"),
+            "{said}"
+        );
+        // What is left out of the order is not part of what the share is of.
+        let mut blocked = on_stage("blocked", 6, 0);
+        blocked.blockers = vec![note(7, "The signing key has expired", "2026-11-01")];
+        let mut with_blocked = line(pulled.clone());
+        with_blocked.push(blocked);
+        assert_eq!(choose(&with_blocked).order[2].share, 2);
+
+        // One more release, and it has: ahead of everyone in their turn.
+        pulled.waited = 2;
+        let queue = choose(&line(pulled.clone()));
+        assert_eq!(queue.order[0].project, "pulled");
+        assert_eq!(queue.order[0].reason, Reason::Moved);
+        assert_eq!(why(&queue.order[0]), "moved up: lib broke what it uses: feat!: a part");
+
+        // The owner's word, and a stage that cannot go on, move it at once.
+        let asks: [fn(&mut Standing); 2] = [
+            |s| s.moves = vec![note(5, "the owner asked", "2026-11-04")],
+            |s| s.awaited = vec![note(6, "app waits on it: a part", "")],
+        ];
+        for asked in asks {
+            let mut now = on_stage("pulled", 2, 0);
+            asked(&mut now);
+            let queue = choose(&line(now));
+            assert_eq!(
+                (queue.order[0].project.as_str(), queue.order[0].reason),
+                ("pulled", Reason::Moved),
+                "{:?}",
+                queue.order[0]
+            );
+        }
+
+        // Unfinished, it says what is still there to take up.
+        pulled.waited = 0;
+        pulled.held.changed = 1;
+        let queue = choose(&line(pulled));
+        assert_eq!(
+            why(&queue.order[0]),
+            "not finished: 1 changed file not committed; to take up: lib broke what it uses: feat!: a part"
+        );
+    }
+
+    /// The loop that took the line over: two projects that use each other, each
+    /// release of one breaking the other. Played out over many turns, everyone
+    /// still gets the weight's share, and no gap opens wider than a round.
+    #[test]
+    fn two_projects_that_break_each_other_cannot_take_the_line_over() {
+        let weights = [("a", 2), ("b", 2), ("c", 3), ("d", 2), ("e", 1), ("f", 1), ("g", 1)];
+        let total: usize = weights.iter().map(|(_, w)| *w as usize).sum();
+        let mut waited: BTreeMap<&str, usize> = weights.iter().enumerate().map(|(i, (name, _))| (*name, i)).collect();
+        // What the other one broke since its own last release.
+        let mut broken: BTreeMap<&str, Option<usize>> = weights.iter().map(|(name, _)| (*name, None)).collect();
+        let mut turns: Vec<String> = Vec::new();
+        let rounds = 40;
+        for turn in 0..total * rounds {
+            let standings: Vec<Standing> = weights
+                .iter()
+                .map(|(name, w)| {
+                    let mut s = on_stage(name, *w, waited[name]);
+                    if let Some(at) = broken[name] {
+                        s.pulled = vec![note(at as i64, "the other broke what it uses", &format!("{at:05}"))];
+                    }
+                    s
+                })
+                .collect();
+            let first = choose(&standings).order[0].project.clone();
+            for count in waited.values_mut() {
+                *count += 1;
+            }
+            *waited.get_mut(first.as_str()).unwrap() = 0;
+            *broken.get_mut(first.as_str()).unwrap() = None;
+            let other = match first.as_str() {
+                "a" => Some("b"),
+                "b" => Some("a"),
+                _ => None,
+            };
+            if let Some(other) = other {
+                broken.get_mut(other).unwrap().get_or_insert(turn);
+            }
+            turns.push(first);
+        }
+        let settled = &turns[total * 4..];
+        for (name, weight) in weights {
+            let got = settled.iter().filter(|t| t.as_str() == name).count();
+            let wanted = (rounds - 4) * weight as usize;
+            assert!(got.abs_diff(wanted) <= 1, "{name} at weight {weight}: {got} turns, wanted {wanted}");
+            let at: Vec<usize> = settled.iter().enumerate().filter(|(_, t)| t.as_str() == name).map(|(i, _)| i).collect();
+            let widest = at.windows(2).map(|w| w[1] - w[0]).max().unwrap();
+            assert!(widest <= total / weight as usize + 2, "{name}: a gap of {widest} in a round of {total}");
+        }
+    }
+
     /// A question to the owner does not stop a stage, so it does not take a
     /// project out - it is counted on its line.
     #[test]
@@ -1243,6 +1469,25 @@ mod tests {
         );
         assert_eq!(turns[0].turn, 1);
         assert_eq!(turns[7].turn, 8);
+    }
+
+    /// The forecast plays the share too: what a neighbour did moves its project
+    /// ahead of the ones that waited longer, but not before it has waited its
+    /// share, and only once.
+    #[test]
+    fn the_forecast_moves_what_a_neighbour_needs_once_the_share_is_waited() {
+        let mut pulled = on_stage("pulled", 2, 1);
+        pulled.pulled = vec![note(4, "lib broke what it uses", "2026-11-03")];
+        let queue = choose(&[pulled, on_stage("heavy", 2, 30), on_stage("light", 1, 30)]);
+        let plan = Ahead {
+            stages: ["v1", "v2", "v3", "v4"].iter().map(|v| (v.to_string(), None)).collect(),
+            floor: 0,
+        };
+        let plans: HashMap<String, Ahead> = ["pulled", "heavy", "light"].iter().map(|p| (p.to_string(), plan.clone())).collect();
+        let turns = ahead(&queue, &plans, None, 6);
+        let said: Vec<(&str, Option<&str>)> = turns.iter().map(|t| (t.project.as_str(), t.note)).collect();
+        assert_eq!(said[..3], [("heavy", None), ("pulled", Some("moved")), ("light", None)], "{said:?}");
+        assert!(said[3..].iter().all(|t| t.1.is_none()), "its release settled it: {said:?}");
     }
 
     /// What presses goes first, once; a refactoring takes a turn and no stage; a

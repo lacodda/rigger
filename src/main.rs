@@ -344,7 +344,7 @@ enum Command {
         id: i64,
         /// The answer; a question answered this way becomes a decision
         answer: Option<String>,
-        /// A neighbour's order is built, not only sorted into the plan: the neighbour moves up
+        /// A neighbour's order is built, not only sorted into the plan: the neighbour moves up once it has waited its share
         #[arg(long, conflicts_with = "answer")]
         built: bool,
     },
@@ -5883,14 +5883,18 @@ fn queue_back(project: &str, json: bool) -> Result<()> {
     if json {
         return show_queue(true);
     }
-    let pulled = queue::gather(&db)?
-        .into_iter()
-        .find(|s| s.project == project.name)
-        .map_or(Vec::new(), |s| s.pulled);
-    match (open.is_empty(), pulled.is_empty()) {
-        (_, false) => println!("{} stays {}. Its next release settles that.", project.name, queue::moved_up(&pulled)),
-        (true, true) => println!("{} was not moved up: it is in its turn already.", project.name),
-        (false, true) => println!("{} is back in its turn.", project.name),
+    // What its neighbours need of it is not the owner's to take back.
+    let found = queue::choose(&queue::gather(&db)?);
+    let left = found.order.iter().find(|c| c.project == project.name);
+    let name = &project.name;
+    match left {
+        Some(c) if c.early => println!("{name} stays {}. Its next release settles that.", queue::moved_up(&c.moved)),
+        Some(c) if !c.moved.is_empty() => match open.is_empty() {
+            true => println!("{name} was not moved up: it is in its turn already - {}.", queue::moves_once_due(c)),
+            false => println!("{name} is back in its turn - {}.", queue::moves_once_due(c)),
+        },
+        _ if open.is_empty() => println!("{name} was not moved up: it is in its turn already."),
+        _ => println!("{name} is back in its turn."),
     }
     Ok(())
 }

@@ -58,7 +58,7 @@ Anything the server writes on stdout is a protocol message, so a diagnostic neve
 | `ask_owner` | A question only the owner can settle; it waits in the packet, with a `due` day when the answer is needed by one |
 | `record_shipped` | A release as the release engine made it: `tag`, `release`, `registries`, `installed`, `deployed` |
 | `wish` | Something to sort into the plan later; `from` makes it a neighbour's order, and `waits` says that neighbour's stage cannot go on without it |
-| `resolve` | Answers a question, sorts a wish or clears a blocker, so it leaves the packet; `built` says a neighbour's order is done, and the neighbour moves up once it is released |
+| `resolve` | Answers a question, sorts a wish or clears a blocker, so it leaves the packet; `built` says a neighbour's order is done, and the neighbour moves up once it is released and the neighbour has waited its share |
 | `close_task` | Marks a task of the current stage done |
 | `doc_show` | Reads a handwritten text - the vision, the rituals, a research note; lists them without a slug |
 | `doc_write` | Writes one into the record: a research note made on request, or a correction to the vision |

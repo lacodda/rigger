@@ -32,9 +32,12 @@ pub struct Target {
     /// leaves out.
     pub reason: Option<Reason>,
     pub unfinished: Option<Unfinished>,
-    /// Something asked for it to come before its turn, whatever else holds.
+    /// Something asks for it, whatever else holds: see `Candidate::moved`.
     #[serde(skip)]
     pub moved: bool,
+    /// What asks for it puts it before its turn; see `Candidate::early`.
+    #[serde(skip)]
+    pub early: bool,
     /// The sentence that says why, for the screen.
     #[serde(skip)]
     pub why: Option<String>,
@@ -50,6 +53,7 @@ impl Target {
             reason: Some(c.reason),
             unfinished: c.unfinished.clone(),
             moved: !c.moved.is_empty(),
+            early: c.early,
             why: Some(crate::queue::why(c)),
         }
     }
@@ -114,6 +118,7 @@ pub fn choose(queue: &Queue, named: Option<&str>, force: bool) -> Choice {
             reason: None,
             unfinished: None,
             moved: false,
+            early: false,
             why: queue.left_out.iter().find(|l| l.project == name).map(|l| match (&l.blocker, l.why) {
                 (Some(blocker), _) => format!("blocked since {}: {}", blocker.since, blocker.head),
                 (None, _) => "left out of the order".to_string(),
@@ -175,9 +180,11 @@ pub fn first_message(target: &Target, tail: Option<&str>) -> String {
     };
     // What moved it is in the owner's or a neighbour's words, which stay out of
     // this line, and `rigger queue` says them.
-    let moved = match target.moved {
-        true => " It comes before its turn: `rigger queue` says why, and that comes first in this stage.",
-        false => "",
+    // A neighbour's need that has not moved it yet is still its to take up.
+    let moved = match (target.moved, target.early) {
+        (true, true) => " It comes before its turn: `rigger queue` says why, and that comes first in this stage.",
+        (true, false) => " Its neighbours left it something to take up: `rigger queue` says what, and that comes first in this stage.",
+        (false, _) => "",
     };
     let tail = tail.unwrap_or_default();
     format!(
@@ -263,6 +270,8 @@ mod tests {
             refactor: false,
             since: None,
             turn_at: None,
+            early: false,
+            share: 0,
         }
     }
 
@@ -420,18 +429,29 @@ mod tests {
         let mut moved = candidate("urgent", None);
         moved.reason = Reason::Moved;
         moved.moved = vec![asked.clone()];
+        moved.early = true;
         let said = first_message(&Target::of(&moved), None);
         assert!(said.contains("It comes before its turn"), "{said}");
         assert!(!said.contains("needed for Monday"), "{said}");
 
         let mut both = candidate("urgent", Some(dirty()));
-        both.moved = vec![asked];
+        both.moved = vec![asked.clone()];
+        both.early = true;
         let said = first_message(&Target::of(&both), None);
         assert!(said.contains("It was left unfinished (2 changed files not committed)"), "{said}");
         assert!(said.contains("It comes before its turn"), "{said}");
 
+        // In its own turn, what a neighbour did is still there to take up, and
+        // it is not said to be early.
+        let mut due = candidate("due", None);
+        due.moved = vec![asked];
+        let said = first_message(&Target::of(&due), None);
+        assert!(said.contains("Its neighbours left it something to take up"), "{said}");
+        assert!(!said.contains("It comes before its turn"), "{said}");
+
         let said = first_message(&Target::of(&candidate("plain", None)), None);
         assert!(!said.contains("It comes before its turn"), "{said}");
+        assert!(!said.contains("to take up"), "{said}");
     }
 
     #[test]

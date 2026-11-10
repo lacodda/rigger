@@ -415,7 +415,7 @@ fn tools() -> Vec<Value> {
                 "project": project_arg(),
                 "id": { "type": "integer", "description": "Id of the question or wish, as the packet lists it" },
                 "answer": text_arg("What the owner decided; recorded as a decision. Omit for a wish."),
-                "built": { "type": "boolean", "description": "A neighbour's order is built, not only sorted into the plan: the neighbour moves up once this is released" },
+                "built": { "type": "boolean", "description": "A neighbour's order is built, not only sorted into the plan: the neighbour moves up once this is released and it has waited its share" },
             }),
             &["project", "id"],
         ),
