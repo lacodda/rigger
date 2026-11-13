@@ -120,9 +120,11 @@ pub struct Link {
 /// record that rewrote one into the other would lose it. But a tie recorded
 /// bare and the same tie recorded with versions read to a person as one fact,
 /// and the list printed both. So a link is alike when it joins the same two
-/// projects in the same kind and no anchor of it contradicts one of `link`'s:
-/// on each side the versions are the same, or one of the two is not given.
-/// Two anchored links of different versions are history, not a double.
+/// projects in the same kind and nothing in it contradicts `link`: on each
+/// side the versions are the same, or one of the two is not given, and so
+/// with the notes. Two anchored links of different versions are history, not
+/// a double; two links whose notes say different things are two ties, such as
+/// a product drawn on for its sessions and, since a version, for its tickets.
 ///
 /// `links` are read from the near end of `link`, as `Db::links_of` gives them,
 /// so a directed kind recorded from the far end is already turned round.
@@ -137,6 +139,7 @@ pub fn alike(links: &[Link], link: &Link) -> Vec<Link> {
                 && other.far.project == link.far.project
                 && agree(&other.near.version, &link.near.version)
                 && agree(&other.far.version, &link.far.version)
+                && agree(&other.note, &link.note)
         })
         .cloned()
         .collect()
@@ -430,6 +433,21 @@ mod tests {
         let then = tie(1, Kind::Pair, end("kasl", "v1.12", true), end("kasl-server", "v0.22.0", true));
         let now = tie(2, Kind::Pair, end("kasl", "v1.13", false), end("kasl-server", "v0.23.0", false));
         assert!(alike(&[then, now.clone()], &now).is_empty());
+    }
+
+    /// Two notes that differ are two ties, however the anchors agree: what a
+    /// product is drawn on for, said twice in different words, is two things.
+    /// A note on one of them only says more about the same tie.
+    #[test]
+    fn two_ties_told_apart_by_their_notes_are_not_alike() {
+        let mut sessions = tie(1, Kind::Donor, bare("tracker"), bare("record"));
+        sessions.note = Some("a session opens an interval".into());
+        let mut tickets = tie(2, Kind::Donor, bare("tracker"), end("record", "v0.25.0", true));
+        tickets.note = Some("the record reads the tickets".into());
+        let silent = tie(3, Kind::Donor, end("tracker", "v1.0.0", true), bare("record"));
+        let links = vec![sessions.clone(), tickets.clone(), silent.clone()];
+        assert_eq!(alike(&links, &tickets).iter().map(|l| l.id).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(alike(&links, &silent).iter().map(|l| l.id).collect::<Vec<_>>(), vec![1, 2]);
     }
 
     /// Another kind between the same two, or the same kind with another
