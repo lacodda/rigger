@@ -7181,7 +7181,12 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
     let mut mismatches = Vec::new();
     let mut apart = Vec::new();
     let mut unsynced = Vec::new();
+    let mut doubled = Vec::new();
     for project in db.projects()? {
+        // A plan is a plan whether git answers for it or not.
+        for found in db.doubled_tasks(project.id)? {
+            doubled.push((project.name.clone(), found));
+        }
         // Never synced is a thing to fix only for a project git can answer
         // for; a service project would sit in that list for ever, being
         // advised a command that cannot help it.
@@ -7261,6 +7266,10 @@ fn doctor(hubs: bool, json: bool) -> Result<()> {
                     .map(|(project, closed, tagged)| serde_json::json!({ "project": project, "closed": closed, "tagged": tagged }))
                     .collect::<Vec<_>>(),
                 "never_synced": unsynced,
+                "doubled_tasks": doubled
+                    .iter()
+                    .map(|(project, found)| serde_json::json!({ "project": project, "title": found.title, "tasks": found.tasks }))
+                    .collect::<Vec<_>>(),
                 "wishes_left_in_the_hub": waiting
                     .iter()
                     .map(|(project, count)| serde_json::json!({ "project": project, "wishes": count }))
@@ -7336,6 +7345,18 @@ the plan and the tags look one step apart ({}):",
             println!("  {project:<12} {closed} closed without a tag, beside {tagged} tagged without a stage");
         }
         println!("  the tags may name the stage before the one the plan gave them; renumber the plan, or tag the stage");
+    }
+    if !doubled.is_empty() {
+        println!(
+            "
+one task in two open stages ({}):",
+            doubled.len()
+        );
+        for (project, found) in &doubled {
+            let stands: Vec<String> = found.tasks.iter().map(|t| format!("{} [{}]", t.version, t.id)).collect();
+            println!("  {project:<12} {} - {}", context::headline(&found.title), stands.join(", "));
+        }
+        println!("  a copy a renumbered plan left behind; `rigger task status <id> dropped` strikes the one not meant");
     }
 
     if !waiting.is_empty() {

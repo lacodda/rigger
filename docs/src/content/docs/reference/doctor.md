@@ -85,6 +85,15 @@ Before `init`, only `profile`, `database` and `initialised` (false) are printed.
 | `one_step_apart[].tagged` | string | Its neighbour: a tag the plan never named a stage for. |
 | `never_synced` | array | Projects `sync` has never read. |
 | `never_synced[]` | string | A project's name. |
+| `doubled_tasks` | array | Texts that stand as a task in more than one open stage of a project. |
+| `doubled_tasks[]` | object | One such text. |
+| `doubled_tasks[].project` | string | The project's name. |
+| `doubled_tasks[].title` | string | The text the tasks share. |
+| `doubled_tasks[].tasks` | array | Every task with that text in an open stage, in version order. |
+| `doubled_tasks[].tasks[]` | object | One of them. |
+| `doubled_tasks[].tasks[].id` | integer | The id `task status` takes. |
+| `doubled_tasks[].tasks[].version` | string | The stage it stands in. |
+| `doubled_tasks[].tasks[].status` | string | Its status: `new`, `active`, `waiting-handoff`, `frozen` or `done`. |
 | `wishes_left_in_the_hub` | array | Projects with wishes waiting in `Хотелки.md`. |
 | `wishes_left_in_the_hub[]` | object | One such project. |
 | `wishes_left_in_the_hub[].project` | string | The project's name. |
@@ -145,6 +154,20 @@ the plan and the tags look one step apart (1):
 ```
 
 Reported, like the list above it, and never corrected: which of the two is right is a question about the work, and the record cannot answer it. Tagging the closed stage, or renumbering the plan so its stages carry the numbers the tags gave them, settles it. Under `--json` the pairs are `one_step_apart`.
+
+### One task in two stages
+
+A plan renumbered by hand, then read in again, could leave the copy of a task in the stage it was moved out of: the same text, standing in two stages still to come. The plan then counts it twice - in what is still open, in [`tail`](/rigger/reference/tail/), in the queue - and the copy reads as work not yet done long after the meant one is. Since v0.50.0 `doctor` names every text that stands as a task in more than one open stage of a project, with the ids:
+
+```console
+$ rigger doctor
+...
+one task in two open stages (1):
+  sample       Write the guide - v0.2.0 [12], v0.3.0 [17]
+  a copy a renumbered plan left behind; `rigger task status <id> dropped` strikes the one not meant
+```
+
+Done tasks count, struck ones do not: striking is how a copy goes, and [`task status`](/rigger/reference/task/) can strike one. Nothing is merged on its own, since which of the two is meant is a question about the plan. Under `--json` they are `doubled_tasks`.
 
 A project that has never been synced is named rather than judged: without a sync there is no way to tell a claim from a fact, and `doctor` says which projects it cannot speak for.
 

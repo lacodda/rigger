@@ -4,6 +4,7 @@
 //! lives in SQLite's `user_version` pragma; migrations are applied in order
 //! and never edited once released - a change is a new migration.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -1136,6 +1137,24 @@ pub struct PrincipleEvent {
     pub body: String,
     /// The version it was recorded against, when it was recorded against one.
     pub version: Option<String>,
+}
+
+/// One text standing in more than one open stage of a project.
+#[derive(Debug, Clone, Serialize)]
+pub struct Doubled {
+    /// The text, as the tasks share it.
+    pub title: String,
+    /// Every task with that text in an open stage, in version order.
+    pub tasks: Vec<DoubledTask>,
+}
+
+/// One of the tasks a text stands as.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoubledTask {
+    pub id: i64,
+    /// The stage it stands in.
+    pub version: String,
+    pub status: String,
 }
 
 /// The versions a link was anchored to, as the record spells them.
@@ -3990,6 +4009,48 @@ impl Db {
         let mut names: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
         names.sort_by_key(|n| std::cmp::Reverse(version_order(n)));
         Ok(names)
+    }
+
+    /// The tasks that stand in the words of one text in more than one open
+    /// stage of a project: what a renumbered plan left behind when the copy
+    /// was read in beside the original instead of moving it.
+    ///
+    /// A stage still to come is one of the plan, so a task in two of them is
+    /// counted twice - in `tail`, in the queue, in what is still open - and
+    /// the walk past frozen tasks reads the copy as work not yet done. Done
+    /// tasks count too: a copy done in one stage and open in the next is the
+    /// same text twice. Struck ones do not; striking is how a copy goes.
+    /// Reported, never merged: which of the two is the meant one is for a
+    /// person to say, and `task status <id> dropped` says it.
+    pub fn doubled_tasks(&self, project_id: i64) -> Result<Vec<Doubled>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.title, v.name, t.status FROM tasks t JOIN versions v ON v.id = t.version_id \
+             WHERE t.project_id = ?1 AND v.status = 'planned' AND t.status <> 'dropped' ORDER BY t.id",
+        )?;
+        let rows = stmt
+            .query_map([project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut by_text: BTreeMap<String, Vec<DoubledTask>> = BTreeMap::new();
+        for (id, title, version, status) in rows {
+            by_text.entry(title.trim().to_string()).or_default().push(DoubledTask { id, version, status });
+        }
+        let mut out = Vec::new();
+        for (title, mut tasks) in by_text {
+            let stages: BTreeSet<&str> = tasks.iter().map(|t| t.version.as_str()).collect();
+            if stages.len() < 2 {
+                continue;
+            }
+            tasks.sort_by(|a, b| version_order(&a.version).cmp(&version_order(&b.version)).then(a.id.cmp(&b.id)));
+            out.push(Doubled { title, tasks });
+        }
+        out.sort_by(|a, b| {
+            version_order(&a.tasks[0].version)
+                .cmp(&version_order(&b.tasks[0].version))
+                .then(a.title.cmp(&b.title))
+        });
+        Ok(out)
     }
 
     /// Where the plan and the tags look one step apart: a version closed

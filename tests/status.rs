@@ -106,6 +106,42 @@ fn a_task_is_struck_by_hand_and_brought_back_by_a_word() {
     assert!(packet.contains("2 tasks open") && packet.contains("сделать одно"), "{packet}");
 }
 
+/// The copy a renumbered plan left behind: one text in two stages still to
+/// come. The doctor names it with both ids, and once the one not meant is
+/// struck, says nothing.
+#[test]
+fn a_copy_in_a_second_stage_is_named_by_the_doctor_until_it_is_struck() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    output(
+        data.path(),
+        &["version", "add", "sample", "v0.3.0", "--task", "сделать одно", "--task", "третье"],
+    );
+
+    let doctor = output(data.path(), &["doctor"]);
+    assert!(doctor.contains("one task in two open stages (1):"), "{doctor}");
+    assert!(doctor.contains("sample       сделать одно - v0.2.0 [1], v0.3.0 [3]"), "{doctor}");
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["doctor", "--json"])).unwrap();
+    let copy = json["doubled_tasks"][0]["tasks"][1]["id"].as_i64().unwrap().to_string();
+    assert_eq!(json["doubled_tasks"][0]["tasks"][1]["version"], "v0.3.0");
+
+    output(data.path(), &["task", "status", &copy, "dropped"]);
+    assert!(!output(data.path(), &["doctor"]).contains("one task in two open stages"));
+}
+
+/// A text in a stage that shipped and again in one to come is not a copy:
+/// only stages still to come are a plan that counts it twice.
+#[test]
+fn a_text_in_a_shipped_stage_and_an_open_one_is_not_a_copy() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    output(data.path(), &["version", "add", "sample", "v0.3.0", "--task", "сделать одно"]);
+    let db = rusqlite::Connection::open(data.path().join("profiles").join("line").join("rigger.db")).unwrap();
+    db.execute("UPDATE versions SET status = 'shipped', shipped_at = '2026-01-01' WHERE name = 'v0.2.0'", [])
+        .unwrap();
+    assert!(!output(data.path(), &["doctor"]).contains("one task in two open stages"));
+}
+
 /// A hub's empty box means "not done": reading the hub again leaves an
 /// active task active, and exporting it writes the box back empty.
 #[test]

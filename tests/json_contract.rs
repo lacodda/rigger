@@ -940,8 +940,16 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("backup", &["backup", "--list"]);
     // The record moves past a file it wrote: the plan gains a stage.
     r.json("version add", &["version", "add", "alpha", "v0.9.0", "--title", "Later", "--task", "one more"]);
-    r.json("doctor", &["doctor"]);
+    // And the same text in the next stage: a copy for the doctor to name,
+    // struck once it has.
+    r.json(
+        "version add",
+        &["version", "add", "alpha", "v0.9.1", "--title", "Later still", "--task", "one more"],
+    );
+    let checked = r.json("doctor", &["doctor"]);
     r.json("doctor", &["doctor", "--hubs"]);
+    let copy = checked["doubled_tasks"][0]["tasks"][1]["id"].as_i64().unwrap_or_default().to_string();
+    r.json("task status", &["task", "status", &copy, "dropped"]);
 
     // ---- the pick ----------------------------------------------------------------
     // gamma has a change no release has taken.
