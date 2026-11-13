@@ -4,7 +4,7 @@ description: How much of each plan is left, and whether a turn should start by g
 ---
 
 ```
-rigger tail [--project <PROJECT>]
+rigger tail [PROJECT]
 rigger tail ritual
 rigger tail done <PROJECT> <TEXT>
 ```
@@ -17,6 +17,8 @@ widget   2 versions planned, at or under 3 - grow it
 gadget   12 versions planned - sort what has piled up (9 wishes)
 sample   44 versions planned, at the cap of 30: small ideas wait
 ```
+
+Name a project, `rigger tail widget`, for its line alone - the way every other command takes one; until v0.50.0 it took `--project`, which the ritual's own text never used.
 
 rigger has no ideas of its own. It says when; [`rigger tail ritual`](#the-ritual) says how; the assistant on the turn does the thinking. [`rigger go`](/rigger/reference/go/) puts it in the first message, and the [packet](/rigger/reference/context/) says it near the top.
 

@@ -60,7 +60,7 @@ fn json(data: &Path, args: &[&str]) -> Value {
 }
 
 fn tail(data: &Path, name: &str) -> Value {
-    json(data, &["tail", "--project", name])["tails"][0].clone()
+    json(data, &["tail", name])["tails"][0].clone()
 }
 
 fn init(data: &Path) {
@@ -172,7 +172,7 @@ fn the_numbers_steer_it_and_a_project_can_have_its_own() {
 
     // The cap is said, not enforced: it is the ritual that stops adding.
     text(data.path(), &["config", "tail.cap", "4"]);
-    assert!(text(data.path(), &["tail", "--project", "alpha"]).contains("at the cap of 4: small ideas wait"));
+    assert!(text(data.path(), &["tail", "alpha"]).contains("at the cap of 4: small ideas wait"));
 
     for (args, says) in [
         (vec!["config", "no.such", "1"], "there is no setting"),

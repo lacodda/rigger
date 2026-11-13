@@ -73,8 +73,14 @@ fn leaves() -> Vec<String> {
         if subs.is_empty() {
             out.push(top);
         } else {
-            // Subcommands in brackets: it also runs on its own.
-            if help.contains("[COMMAND]") {
+            // Subcommands in brackets, or a usage line of its own beside the
+            // one with a subcommand: it also runs on its own.
+            let usage: Vec<&str> = help
+                .lines()
+                .skip_while(|l| !l.starts_with("Usage:"))
+                .take_while(|l| !l.trim().is_empty())
+                .collect();
+            if help.contains("[COMMAND]") || usage.iter().any(|l| !l.contains("<COMMAND>")) {
                 out.push(top.clone());
             }
             out.extend(subs.into_iter().map(|s| format!("{top} {s}")));
@@ -980,7 +986,7 @@ fn fill(r: &mut Record, data: &Path) {
     r.json("link uses", &["link", "uses", "beta"]);
     // A plan's tail, the numbers that steer it, and big ideas.
     r.json("tail", &["tail"]);
-    r.json("tail", &["tail", "--project", "alpha"]);
+    r.json("tail", &["tail", "alpha"]);
     r.json("tail ritual", &["tail", "ritual"]);
     r.json("tail done", &["tail", "done", "alpha", "Sorted what had piled up"]);
     r.json("config", &["config"]);

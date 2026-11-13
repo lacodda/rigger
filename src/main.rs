@@ -265,11 +265,11 @@ enum Command {
         change: Option<String>,
     },
     /// How much of each plan is left, and whether a turn should start by growing or sorting it
+    #[command(args_conflicts_with_subcommands = true)]
     Tail {
         #[command(subcommand)]
         command: Option<TailCommand>,
-        /// Only this project
-        #[arg(long)]
+        /// Project name; every project when omitted
         project: Option<String>,
     },
     /// Whose turn it is to be refactored, one at a time across the line
@@ -7443,6 +7443,158 @@ one task in two open stages ({}):",
 
 #[cfg(test)]
 mod tests {
+    /// Quoted to say what not to type, each with why it is quoted.
+    const COUNTEREXAMPLES: [&str; 1] = [
+        // The reason a version is written `kasl@v1.13.0`: two optional
+        // positionals would have two readings.
+        "rigger link kasl v1.13.0 kasl-server",
+    ];
+
+    /// What a quoted command would be typed as: placeholders filled with a
+    /// word, the first of alternatives, optional parts in, and the shell's
+    /// part cut off. `None` for what is not a whole command: an elided one.
+    fn typed(quoted: &str) -> Option<Vec<String>> {
+        let mut text = quoted.replace("{{name}}", "alpha");
+        for shell in [" | ", " > ", " && ", " 2>"] {
+            if let Some(at) = text.find(shell) {
+                text.truncate(at);
+            }
+        }
+        if text.contains("...") || text.contains('…') {
+            return None;
+        }
+        // `<project>`, `<ID>` and `{id}` of a format string are all a word.
+        let mut filled = String::new();
+        let mut inside: Option<char> = None;
+        for c in text.chars() {
+            match (inside, c) {
+                (None, '<') => inside = Some('>'),
+                (None, '{') => inside = Some('}'),
+                (Some(end), c) if c == end => {
+                    inside = None;
+                    filled.push_str("alpha");
+                }
+                (Some(_), _) => {}
+                (None, '[' | ']') => {}
+                (None, c) => filled.push(c),
+            }
+        }
+        let mut words = Vec::new();
+        let mut word = String::new();
+        let mut quote: Option<char> = None;
+        let mut started = false;
+        for c in filled.chars() {
+            match (quote, c) {
+                (None, '"' | '\'') => {
+                    quote = Some(c);
+                    started = true;
+                }
+                (Some(q), c) if c == q => quote = None,
+                (None, c) if c.is_whitespace() => {
+                    if started {
+                        words.push(std::mem::take(&mut word));
+                        started = false;
+                    }
+                }
+                (_, c) => {
+                    word.push(c);
+                    started = true;
+                }
+            }
+        }
+        if started {
+            words.push(word);
+        }
+        // `open|all` offers a choice: the first is a command as good as any.
+        Some(
+            words
+                .into_iter()
+                .map(|w| match w.split_once('|') {
+                    Some((first, _)) if !w.contains(' ') => first.to_string(),
+                    _ => w,
+                })
+                .collect(),
+        )
+    }
+
+    /// Every `rigger ...` the binary's own texts tell somebody to type is a
+    /// command the command line takes.
+    ///
+    /// The ritual for growing a plan said `rigger tail <project>` from the day
+    /// it was written, while `tail` took a project only as `--project`: every
+    /// assistant that followed it word for word got an error, and nothing
+    /// checked the text against the parser. So every source file is read -
+    /// the rituals, the skill templates and forms the binary carries, and the
+    /// hints its Rust code prints - and each quoted command is parsed, with
+    /// `--help` after it so a fragment that leaves out a required argument is
+    /// still a command. A placeholder that is not a valid value (a number, a
+    /// kind) is a placeholder; an unknown command or flag is a text that lies.
+    #[test]
+    fn every_command_the_texts_name_is_one_the_command_line_takes() {
+        use clap::CommandFactory;
+        use clap::error::ErrorKind;
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut checked = 0;
+        let mut wrong = Vec::new();
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            if !matches!(path.extension().and_then(|e| e.to_str()), Some("rs" | "md")) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (at, _) in text.match_indices("`rigger ") {
+                let rest = &text[at + 1..];
+                let Some(end) = rest.find(['`', '\n']) else {
+                    continue;
+                };
+                let quoted = &rest[..end];
+                if !rest[end..].starts_with('`') || COUNTEREXAMPLES.contains(&quoted) {
+                    continue;
+                }
+                let Some(mut args) = typed(quoted) else {
+                    continue;
+                };
+                args.push("--help".to_string());
+                checked += 1;
+                let Err(err) = super::Cli::command().try_get_matches_from(&args) else {
+                    continue;
+                };
+                if !matches!(
+                    err.kind(),
+                    ErrorKind::DisplayHelp
+                        | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                        | ErrorKind::DisplayVersion
+                        | ErrorKind::InvalidValue
+                        | ErrorKind::ValueValidation
+                ) {
+                    let file = path.file_name().unwrap().to_string_lossy();
+                    let why = err.to_string();
+                    wrong.push(format!("{file}: `{quoted}` - {}", why.lines().next().unwrap_or_default()));
+                }
+            }
+        }
+        // Fewer than this means the files went unread, not that the texts
+        // stopped naming commands.
+        assert!(checked >= 80, "only {checked} quoted commands found under {}", src.display());
+        assert!(wrong.is_empty(), "texts that name a command the CLI refuses:\n{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn a_placeholder_is_a_word_and_the_shell_is_cut_off() {
+        assert_eq!(
+            typed("rigger tail done <project> \"<what changed>\"").unwrap(),
+            ["rigger", "tail", "done", "alpha", "alpha"]
+        );
+        assert_eq!(typed("rigger link remove {id}").unwrap(), ["rigger", "link", "remove", "alpha"]);
+        assert_eq!(typed("rigger session start {{name}}").unwrap(), ["rigger", "session", "start", "alpha"]);
+        assert_eq!(
+            typed("rigger task list [--status open|all]").unwrap(),
+            ["rigger", "task", "list", "--status", "open"]
+        );
+        assert_eq!(typed("rigger doctor | head -3").unwrap(), ["rigger", "doctor"]);
+        assert!(typed("rigger note ... --kind finding").is_none());
+    }
+
     /// A person at a terminal sees what they type; the rest stay callable.
     #[test]
     fn the_short_help_lists_what_a_person_types() {
