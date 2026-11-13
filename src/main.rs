@@ -1153,9 +1153,42 @@ fn is_a_closed_pipe(message: &str) -> bool {
 /// the record: they work the same, and `--help --all` lists them.
 const OWNER_COMMANDS: [&str; 10] = ["go", "queue", "priority", "inbox", "ideas", "config", "init", "project", "doctor", "help"];
 
+/// The names of the values that are somebody's own words: a note, a title,
+/// an answer, a query.
+///
+/// Words may begin with a dash - a task about `--with`, an answer that starts
+/// with a minus - and clap reads a value that does as a flag it does not know,
+/// so the stage that held one was not recorded and the error named the text
+/// as the mistake. Every value of these names takes what it is given instead;
+/// a flag the command does know is still read as one, except straight after
+/// an option of these names, whose next word is its value.
+const FREE_TEXT: [&str; 9] = ["TEXT", "NOTE", "TITLE", "BODY", "SUMMARY", "WHY", "ANSWER", "ROLE", "QUERY"];
+
+/// What a value is called in the help: the name it was given, or for a
+/// positional without one, its id the way the help prints it.
+fn value_name(arg: &clap::Arg) -> String {
+    match arg.get_value_names().and_then(|names| names.first()) {
+        Some(name) => name.to_string(),
+        None => arg.get_id().as_str().to_uppercase(),
+    }
+}
+
+/// The whole command line, every free text taking what it is given.
+fn full_command_line() -> clap::Command {
+    fn free_text(command: clap::Command) -> clap::Command {
+        command
+            .mut_args(|arg| match arg.get_action().takes_values() && FREE_TEXT.contains(&value_name(&arg).as_str()) {
+                true => arg.allow_hyphen_values(true),
+                false => arg,
+            })
+            .mut_subcommands(free_text)
+    }
+    free_text(Cli::command())
+}
+
 /// The command line, with the help showing what a person needs of it.
 fn short_command_line() -> clap::Command {
-    Cli::command()
+    full_command_line()
         .mut_subcommands(|command| {
             let hide = !OWNER_COMMANDS.contains(&command.get_name());
             command.hide(hide)
@@ -1169,7 +1202,7 @@ fn short_command_line() -> clap::Command {
 fn command_line() -> clap::Command {
     match std::io::IsTerminal::is_terminal(&std::io::stdout()) {
         true => short_command_line(),
-        false => Cli::command(),
+        false => full_command_line(),
     }
 }
 
@@ -1178,7 +1211,7 @@ fn work() -> ExitCode {
     // that take it.
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     if args.len() == 2 && args.iter().any(|a| a == "--all") && args.iter().any(|a| a == "--help" || a == "-h") {
-        return match Cli::command().print_help() {
+        return match full_command_line().print_help() {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::FAILURE,
         };
@@ -7531,7 +7564,6 @@ mod tests {
     /// kind) is a placeholder; an unknown command or flag is a text that lies.
     #[test]
     fn every_command_the_texts_name_is_one_the_command_line_takes() {
-        use clap::CommandFactory;
         use clap::error::ErrorKind;
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut checked = 0;
@@ -7556,7 +7588,7 @@ mod tests {
                 };
                 args.push("--help".to_string());
                 checked += 1;
-                let Err(err) = super::Cli::command().try_get_matches_from(&args) else {
+                let Err(err) = super::full_command_line().try_get_matches_from(&args) else {
                     continue;
                 };
                 if !matches!(
@@ -7577,6 +7609,85 @@ mod tests {
         // stopped naming commands.
         assert!(checked >= 80, "only {checked} quoted commands found under {}", src.display());
         assert!(wrong.is_empty(), "texts that name a command the CLI refuses:\n{}", wrong.join("\n"));
+    }
+
+    /// The names of values that are not somebody's words: a name, a number, a
+    /// path, a day, a word from a vocabulary. A dash before one is a mistake
+    /// worth an error.
+    const WORDS: [&str; 36] = [
+        "ACCENT", "ACCENT2", "ALIAS", "BRANCH", "BUDGET", "CHANGE", "CODE", "COMMAND", "DAY", "DIR", "FILE", "FORM", "FROM", "HUB", "HUBS", "ID", "KEY",
+        "KIND", "LIMIT", "MB", "N", "NAME", "PATH", "PROJECT", "ROOT", "SINCE", "SLUG", "STATUS", "TAG", "TASK", "TO", "TURNS", "URL", "VALUE", "VERSION",
+        "WHO",
+    ];
+
+    /// Every value the command line takes is named as free text or as a word,
+    /// and every free text takes a leading dash. A value of a new name is a
+    /// question this test asks once - which of the two is it? - rather than a
+    /// text that one day begins with a dash and is refused.
+    #[test]
+    fn every_value_is_free_text_or_a_word() {
+        fn walk(command: &clap::Command, path: &str, out: &mut Vec<String>) {
+            for arg in command.get_arguments() {
+                if !arg.get_action().takes_values() {
+                    continue;
+                }
+                let name = super::value_name(arg);
+                let free = super::FREE_TEXT.contains(&name.as_str());
+                if free && !arg.is_allow_hyphen_values_set() {
+                    out.push(format!("{path}: <{name}> is free text and refuses a leading dash"));
+                } else if !free && !WORDS.contains(&name.as_str()) {
+                    out.push(format!("{path}: <{name}> is neither free text nor a word: put it in FREE_TEXT or WORDS"));
+                }
+            }
+            for sub in command.get_subcommands() {
+                walk(sub, &format!("{path} {}", sub.get_name()), out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&super::full_command_line(), "rigger", &mut out);
+        assert!(out.is_empty(), "{}", out.join("\n"));
+    }
+
+    /// The task that could not be recorded: its text began with `--with`.
+    #[test]
+    fn a_text_that_begins_with_a_dash_is_a_text() {
+        let parse = |args: &[&str]| super::full_command_line().try_get_matches_from(args).unwrap();
+
+        let m = parse(&[
+            "rigger",
+            "version",
+            "add",
+            "alpha",
+            "v1.0.0",
+            "--task",
+            "--with block:list",
+            "--title",
+            "Blocks",
+        ]);
+        let add = m.subcommand_matches("version").unwrap().subcommand_matches("add").unwrap();
+        let tasks: Vec<&String> = add.get_many::<String>("tasks").unwrap().collect();
+        assert_eq!(tasks, ["--with block:list"]);
+        assert_eq!(add.get_one::<String>("title").unwrap(), "Blocks");
+
+        // A positional text: a dash or a minus is its own, a known flag
+        // after it is still the flag, before it or after.
+        let m = parse(&["rigger", "note", "alpha", "--with is gone", "--kind", "decision"]);
+        let note = m.subcommand_matches("note").unwrap();
+        assert_eq!(note.get_one::<String>("text").unwrap(), "--with is gone");
+        assert_eq!(note.get_raw("kind").unwrap().next().unwrap(), "decision");
+        let m = parse(&["rigger", "note", "alpha", "--kind", "pitfall", "-1 is not a count"]);
+        assert_eq!(m.subcommand_matches("note").unwrap().get_one::<String>("text").unwrap(), "-1 is not a count");
+
+        // An optional answer leaves a flag the command knows alone.
+        let m = parse(&["rigger", "resolve", "alpha", "7", "--built"]);
+        let resolve = m.subcommand_matches("resolve").unwrap();
+        assert!(resolve.get_flag("built"));
+        assert!(resolve.get_one::<String>("answer").is_none());
+        let m = parse(&["rigger", "resolve", "alpha", "7", "-- no, never"]);
+        assert_eq!(m.subcommand_matches("resolve").unwrap().get_one::<String>("answer").unwrap(), "-- no, never");
+
+        // And a word is still refused a dash: a project is a name.
+        assert!(super::full_command_line().try_get_matches_from(["rigger", "show", "--alpha"]).is_err());
     }
 
     #[test]
