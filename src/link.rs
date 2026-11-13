@@ -113,6 +113,35 @@ pub struct Link {
     pub note: Option<String>,
 }
 
+/// The other links that state the same tie as `link`, anchored differently.
+///
+/// The version anchors are part of a link's identity on purpose: kasl v1.12
+/// <-> kasl-server v0.22 and v1.13 <-> v0.23 are the history of a pair, and a
+/// record that rewrote one into the other would lose it. But a tie recorded
+/// bare and the same tie recorded with versions read to a person as one fact,
+/// and the list printed both. So a link is alike when it joins the same two
+/// projects in the same kind and no anchor of it contradicts one of `link`'s:
+/// on each side the versions are the same, or one of the two is not given.
+/// Two anchored links of different versions are history, not a double.
+///
+/// `links` are read from the near end of `link`, as `Db::links_of` gives them,
+/// so a directed kind recorded from the far end is already turned round.
+pub fn alike(links: &[Link], link: &Link) -> Vec<Link> {
+    let agree = |a: &Option<String>, b: &Option<String>| a.is_none() || b.is_none() || a == b;
+    links
+        .iter()
+        .filter(|other| {
+            other.id != link.id
+                && other.kind == link.kind
+                && other.near.project == link.near.project
+                && other.far.project == link.far.project
+                && agree(&other.near.version, &link.near.version)
+                && agree(&other.far.version, &link.far.version)
+        })
+        .cloned()
+        .collect()
+}
+
 /// Why a pair is being reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -360,6 +389,58 @@ mod tests {
         ]);
         assert_eq!(drifted[0].ahead.project, "c");
         assert_eq!(drifted[1].ahead.project, "a");
+    }
+
+    fn tie(id: i64, kind: Kind, near: End, far: End) -> Link {
+        Link {
+            id,
+            kind,
+            near,
+            far,
+            note: None,
+        }
+    }
+
+    /// The double the list printed: the same pair, once bare and once with
+    /// versions. Found from either of the two, since either can come second.
+    #[test]
+    fn a_bare_tie_and_the_same_tie_with_versions_are_alike() {
+        let bare_one = tie(1, Kind::Pair, bare("kasl"), bare("kasl-server"));
+        let anchored = tie(2, Kind::Pair, end("kasl", "v1.13", false), end("kasl-server", "v0.23.0", false));
+        let links = vec![bare_one.clone(), anchored.clone()];
+        assert_eq!(alike(&links, &anchored).iter().map(|l| l.id).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(alike(&links, &bare_one).iter().map(|l| l.id).collect::<Vec<_>>(), vec![2]);
+    }
+
+    /// Half anchored agrees with both the bare tie and the full one: neither
+    /// says anything the other contradicts.
+    #[test]
+    fn one_side_anchored_is_alike_where_the_other_side_is_silent() {
+        let half = tie(3, Kind::Pair, end("kasl", "v1.13", false), bare("kasl-server"));
+        let full = tie(2, Kind::Pair, end("kasl", "v1.13", false), end("kasl-server", "v0.23.0", false));
+        let other_half = tie(4, Kind::Pair, end("kasl", "v1.12", true), bare("kasl-server"));
+        let links = vec![half.clone(), full, other_half];
+        assert_eq!(alike(&links, &half).iter().map(|l| l.id).collect::<Vec<_>>(), vec![2]);
+    }
+
+    /// The history of a pair is not a double: each step anchors other
+    /// versions, and the record keeps every one.
+    #[test]
+    fn two_ties_anchored_to_different_versions_are_history() {
+        let then = tie(1, Kind::Pair, end("kasl", "v1.12", true), end("kasl-server", "v0.22.0", true));
+        let now = tie(2, Kind::Pair, end("kasl", "v1.13", false), end("kasl-server", "v0.23.0", false));
+        assert!(alike(&[then, now.clone()], &now).is_empty());
+    }
+
+    /// Another kind between the same two, or the same kind with another
+    /// project, says something else.
+    #[test]
+    fn another_kind_or_another_project_is_not_alike() {
+        let pair = tie(1, Kind::Pair, bare("a"), bare("b"));
+        let uses = tie(2, Kind::Consumer, bare("a"), bare("b"));
+        let elsewhere = tie(3, Kind::Pair, bare("a"), bare("c"));
+        let links = vec![pair.clone(), uses, elsewhere];
+        assert!(alike(&links, &pair).is_empty());
     }
 
     /// A list of links is printed as a column, so the kind has to honour a

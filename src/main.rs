@@ -2708,9 +2708,11 @@ fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>, json: bool
         to_version,
         note,
     })?;
+    let links = db.links_of(from_project.id)?;
+    let link = links.iter().find(|l| l.id == id);
+    let alike = link.map(|l| link::alike(&links, l)).unwrap_or_default();
     if json {
-        let link = db.links_of(from_project.id)?.into_iter().find(|l| l.id == id);
-        return print_json(&serde_json::json!({ "link": link, "changed": change == db::Change::Added }));
+        return print_json(&serde_json::json!({ "link": link, "changed": change == db::Change::Added, "alike": alike }));
     }
     let side = |name: &str, version: Option<&String>| match version {
         Some(v) => format!("{name} {v}"),
@@ -2726,7 +2728,32 @@ fn link_add(from: &str, to: &str, kind: LinkKind, note: Option<&str>, json: bool
         db::Change::Added => println!("[{id}] {both}"),
         _ => println!("[{id}] already recorded: {both}"),
     }
+    print!("{}", render_alike(&alike));
     Ok(())
+}
+
+/// The links that state the same tie with other anchors, said after a link is
+/// recorded: both stand, and which one is meant is the person's to say.
+fn render_alike(alike: &[link::Link]) -> String {
+    let Some(first) = alike.first() else {
+        return String::new();
+    };
+    let mut out = format!("  {} and {} are tied this way already:\n", first.near.project, first.far.project);
+    for found in alike {
+        let side = |end: &link::End| match &end.version {
+            Some(version) => format!("{} {version}", end.project),
+            None => end.project.clone(),
+        };
+        let arrow = if found.kind.symmetric() { "<->" } else { "->" };
+        let bare = if found.near.version.is_none() && found.far.version.is_none() {
+            ", without versions"
+        } else {
+            ""
+        };
+        out.push_str(&format!("    [{}] {} {arrow} {}{bare}\n", found.id, side(&found.near), side(&found.far)));
+    }
+    out.push_str("  Both are kept; `rigger link remove <ID>` forgets the one that is not meant.\n");
+    out
 }
 
 fn link_list(project: Option<&str>, json: bool) -> Result<()> {

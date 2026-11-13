@@ -605,6 +605,11 @@ fn fill(r: &mut Record, data: &Path) {
         "link add",
         &["link", "add", "beta@v0.1.0", "alpha@v0.4.0", "--note", "the reader and its next writer"],
     );
+    // The same pair bare: both anchored ties are alike it, and it goes again
+    // so the lists and the drift below read the record they always did.
+    let bare = r.json("link add", &["link", "add", "alpha", "beta"]);
+    let bare_id = bare["link"]["id"].as_i64().unwrap_or_default().to_string();
+    r.json("link remove", &["link", "remove", &bare_id]);
     let spare = r.json("link add", &["link", "add", "alpha", "line", "--kind", "donor"]);
     r.json("link list", &["link", "list"]);
     r.json("link list", &["link", "list", "alpha"]);

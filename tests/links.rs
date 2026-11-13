@@ -77,6 +77,40 @@ fn a_tie_is_recorded_once_and_reads_the_same_from_both_ends() {
     assert!(from_beta.contains("beta v0.2.0 <-> alpha v0.2.0"), "{from_beta}");
 }
 
+/// The double the list used to print: the same pair bare and with versions.
+/// Both are kept - the anchors are part of a link on purpose - but recording
+/// the second names the first, from whichever end and in whichever order.
+#[test]
+fn a_tie_recorded_bare_and_with_versions_is_named_when_the_second_comes() {
+    let data = tempfile::tempdir().unwrap();
+    two_projects(data.path());
+
+    let first = output(data.path(), &["link", "add", "alpha", "beta"]);
+    assert!(!first.contains("tied this way already"), "{first}");
+
+    // Written from the other end, with versions: still the same tie.
+    let second = output(data.path(), &["link", "add", "beta@v0.2.0", "alpha@v0.1.0"]);
+    assert!(second.contains("[2] beta v0.2.0 <-> alpha v0.1.0 (pair)"), "{second}");
+    assert!(second.contains("beta and alpha are tied this way already:"), "{second}");
+    assert!(second.contains("[1] beta <-> alpha, without versions"), "{second}");
+    assert_eq!(output(data.path(), &["link", "list"]).lines().count(), 2);
+
+    // The next step of the pair is history, not a double of the anchored
+    // link; only the bare tie, which contradicts neither, is named.
+    let third = output(data.path(), &["link", "add", "alpha@v0.2.0", "beta@v0.2.0"]);
+    assert!(third.contains("[1] alpha <-> beta, without versions"), "{third}");
+    assert!(!third.contains("[2]"), "{third}");
+
+    // A consumer between the same two says something else.
+    let uses = output(data.path(), &["link", "add", "alpha", "beta", "--kind", "consumer"]);
+    assert!(!uses.contains("tied this way already"), "{uses}");
+
+    let json: serde_json::Value = serde_json::from_str(&output(data.path(), &["link", "add", "alpha", "beta", "--json"])).unwrap();
+    assert_eq!(json["changed"], false);
+    let ids: Vec<i64> = json["alike"].as_array().unwrap().iter().map(|l| l["id"].as_i64().unwrap()).collect();
+    assert_eq!(ids, vec![2, 3]);
+}
+
 /// What one end calls a consumer the other calls a donor: one row, two
 /// readings. A second row saying the same thing from the other side would
 /// be a second truth, and one of them would go stale.

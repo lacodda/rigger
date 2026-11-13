@@ -86,9 +86,21 @@ $ rigger link list kasl
 
 Recording the same link twice changes nothing rather than adding a second row. A note added to a link that was recorded bare is kept, since the tie is the same tie.
 
+The version anchors are part of what makes a link one link, so that each step of a pair is kept: `kasl@v1.12.0 kasl-server@v0.22.0` and `kasl@v1.13.0 kasl-server@v0.23.0` are two links, the history of the pair. But the same tie recorded once bare and once with versions reads as one fact, and the list would print it twice. So when you record a link, `link add` names the links of the same kind between the same two projects whose anchors do not contradict it - on each side the same version, or a version on one and none on the other:
+
+```console
+$ rigger link add kasl@v1.13.0 kasl-server@v0.23.0
+[3] kasl v1.13.0 <-> kasl-server v0.23.0 (pair)
+  kasl and kasl-server are tied this way already:
+    [1] kasl <-> kasl-server, without versions
+  Both are kept; `rigger link remove <ID>` forgets the one that is not meant.
+```
+
+Nothing is refused or merged: which of the two is meant is yours to say.
+
 ## JSON
 
-`link add` prints the link it recorded, and `link list` an array of them. `near` is the project that was asked about, whichever way the row was written.
+`link add` prints the link it recorded and the links alike it, and `link list` an array of them. `near` is the project that was asked about, whichever way the row was written.
 
 <!-- json: link add -->
 | Field | Type | Meaning |
@@ -106,6 +118,19 @@ Recording the same link twice changes nothing rather than adding a second row. A
 | `link.far.project` | string | The name of the project at this end. |
 | `link.far.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
 | `link.far.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
+| `alike` | array | The links of the same kind between the same two projects whose anchors do not contradict this one, read from the same side; empty when there are none. |
+| `alike[]` | object | One such link. |
+| `alike[].id` | integer | The id `link remove` takes. |
+| `alike[].kind` | string | `pair`, `consumer` or `donor`. |
+| `alike[].note` | string or null | The note the link was recorded with. |
+| `alike[].near` | object | The end of the project the link is read from. |
+| `alike[].near.project` | string | The name of the project at this end. |
+| `alike[].near.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
+| `alike[].near.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
+| `alike[].far` | object | The other end. |
+| `alike[].far.project` | string | The name of the project at this end. |
+| `alike[].far.version` | string or null | The version anchored on this end, as the record spells it; null when none is. |
+| `alike[].far.shipped` | boolean or null | Whether that version has a tag; null when no version is anchored. |
 
 <!-- json: link list -->
 | Field | Type | Meaning |

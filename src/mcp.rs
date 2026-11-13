@@ -393,7 +393,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "link",
-            "Tie two projects together so the record can see the line as a graph. `pair` is two halves of one capability and neither ships alone; `consumer` is this project drawing on the other; `donor` is the other drawing on this one. Anchor a version on a side by writing it as `kasl@v1.13.0`. Only pairs are checked for drift - `week` and `retro` say when one half shipped without the other.",
+            "Tie two projects together so the record can see the line as a graph. `pair` is two halves of one capability and neither ships alone; `consumer` is this project drawing on the other; `donor` is the other drawing on this one. Anchor a version on a side by writing it as `kasl@v1.13.0`. Only pairs are checked for drift - `queue` says when one half shipped without the other. A tie the record already holds bare or with other versions is named in the answer: both are kept, and the one not meant is for the owner to remove.",
             json!({
                 "from": { "type": "string", "description": "Project on this side, or `project@version`" },
                 "to": { "type": "string", "description": "Project on the other side, or `project@version`" },
@@ -858,10 +858,13 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 side(&from_name, anchored.from.as_ref()),
                 side(&to_name, anchored.to.as_ref())
             );
-            Ok(match change {
+            let links = db.links_of(from.id)?;
+            let alike = links.iter().find(|l| l.id == id).map(|l| crate::link::alike(&links, l)).unwrap_or_default();
+            let head = match change {
                 crate::db::Change::Added => format!("[{id}] {both}"),
                 _ => format!("[{id}] already recorded: {both}"),
-            })
+            };
+            Ok(format!("{head}\n{}", crate::render_alike(&alike)).trim_end().to_string())
         }
         "links" => {
             let project = project(db)?;
