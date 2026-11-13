@@ -453,9 +453,9 @@ A task's status is a word from a vocabulary rather than one of two:
 | `waiting-handoff` | handed to someone else; nothing to do until they answer |
 | `frozen` | set aside on purpose |
 | `done` | finished - what a ticked box means |
-| `dropped` | struck from the hub; given by [`import`](/rigger/reference/import/), never by hand |
+| `dropped` | struck: from the hub by [`import`](/rigger/reference/import/), or by hand with `task status <TASK> dropped` |
 
-Everything before `done` is open work, and is counted as such by the [context packet](/rigger/reference/context/); the packet and the `plan` tool mark any word but `new` beside the task. `task status` takes a card's key or the id a project's packet lists; over MCP it is `set_task_status`, and `close_task` is `done` in one word. A hub's box does not overrule the word: reading a hub again leaves an active task active, and the export writes the box empty for anything short of `done`.
+Everything before `done` is open work, and is counted as such by the [context packet](/rigger/reference/context/); the packet and the `plan` tool mark any word but `new` beside the task. A struck task is neither open nor done: it leaves the plan, the packet and the count of what is still open, and is kept in the record. Since v0.50.0 a task can be struck by hand - the copy a renumbered plan left in a second stage, which [`doctor`](/rigger/reference/doctor/) names - where before only a hub read again could strike one; `task status <TASK> new` brings it back. `task status` takes a card's key or the id a project's packet lists; over MCP it is `set_task_status`, and `close_task` is `done` in one word. A hub's box does not overrule the word: reading a hub again leaves an active task active, and the export writes the box empty for anything short of `done`.
 
 ## Putting work down
 

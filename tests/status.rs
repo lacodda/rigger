@@ -78,11 +78,32 @@ fn a_status_outside_the_vocabulary_is_refused_by_name() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("'sleeping' is not a status").and(predicate::str::contains("waiting-handoff")));
-    rigger(data.path())
-        .args(["task", "status", &id, "dropped"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not a status a task can be given"));
+}
+
+/// Struck by hand: the task leaves the stage's list and count and the export,
+/// and is kept in the record, so a word brings it back.
+#[test]
+fn a_task_is_struck_by_hand_and_brought_back_by_a_word() {
+    let data = tempfile::tempdir().unwrap();
+    project(data.path());
+    let id = first_task(data.path());
+
+    let out = output(data.path(), &["task", "status", &id, "dropped"]);
+    assert!(out.contains("is now dropped (was new): сделать одно"), "{out}");
+    let stage = output(data.path(), &["version", "show", "sample", "v0.2.0"]);
+    assert!(stage.contains("1 open of 1") && !stage.contains("сделать одно"), "{stage}");
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(packet.contains("1 task open") && !packet.contains("сделать одно"), "{packet}");
+
+    let out = data.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    rigger(data.path()).args(["export", "sample", "--hub"]).arg(&out).assert().success();
+    let plan = std::fs::read_to_string(out.join("План.md")).unwrap();
+    assert!(!plan.contains("сделать одно"), "{plan}");
+
+    output(data.path(), &["task", "status", &id, "new"]);
+    let packet = output(data.path(), &["context", "sample"]);
+    assert!(packet.contains("2 tasks open") && packet.contains("сделать одно"), "{packet}");
 }
 
 /// A hub's empty box means "not done": reading the hub again leaves an

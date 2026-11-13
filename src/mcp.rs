@@ -421,11 +421,11 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "set_task_status",
-            "Give a task of the current stage a status: new, active, waiting-handoff, frozen or done. Ids come from `plan`. `active` is the one being worked on; `waiting-handoff` is handed to someone else; `frozen` is set aside on purpose.",
+            "Give a task of the current stage a status: new, active, waiting-handoff, frozen, done or dropped. Ids come from `plan`. `active` is the one being worked on; `waiting-handoff` is handed to someone else; `frozen` is set aside on purpose; `dropped` strikes it, such as a copy that stands in another stage too.",
             json!({
                 "project": project_arg(),
                 "task": { "type": "integer", "description": "Task id, as `plan` lists it" },
-                "status": { "type": "string", "description": "One of new, active, waiting-handoff, frozen, done" },
+                "status": { "type": "string", "description": "One of new, active, waiting-handoff, frozen, done, dropped" },
             }),
             &["project", "task", "status"],
         ),
@@ -684,7 +684,7 @@ fn run_tool(db: &Db, name: &str, args: &Map<String, Value>) -> Result<String> {
                 bail!("this tool needs a `task` id; `plan` lists them");
             };
             let Some(status) = args.get("status").and_then(Value::as_str) else {
-                bail!("this tool needs a `status`: one of {}", crate::db::TASK_STATUSES[..5].join(", "));
+                bail!("this tool needs a `status`: one of {}", crate::db::TASK_STATUSES.join(", "));
             };
             let (title, was) = db.set_task_status(project.id, task, status)?;
             Ok(match was == status {

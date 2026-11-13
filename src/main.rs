@@ -740,7 +740,7 @@ enum TaskCommand {
         #[arg(long, value_name = "KIND", default_value = "finding")]
         kind: NoteKind,
     },
-    /// Give a task a status: new, active, waiting-handoff, frozen or done
+    /// Give a task a status: new, active, waiting-handoff, frozen, done or dropped
     Status {
         /// Card key, alias, or the id the packet or `plan` lists
         task: String,
@@ -3994,6 +3994,9 @@ fn task_status(task: &str, status: &str, json: bool) -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
     let (project_id, id) = find_task(&db, task)?;
     let (title, was) = db.set_task_status(project_id, id, status)?;
+    if !db::is_open_status(status) {
+        let_go_of(&db, id)?;
+    }
     if json {
         return print_task_json(&db, id);
     }

@@ -732,7 +732,8 @@ pub const SINGULAR_DOC_KINDS: [&str; 3] = ["vision", "decisions", "rituals"];
 pub const RULES_KIND: &str = "rituals";
 
 /// The words a task's status can be. Everything before `done` is work
-/// still to do; `dropped` is a line struck from a hub.
+/// still to do; `dropped` is a line struck: from a hub by `import`, or in the
+/// record, such as the copy a renumbered plan left in a second stage.
 pub const TASK_STATUSES: [&str; 6] = ["new", "active", "waiting-handoff", "frozen", "done", "dropped"];
 
 /// Whether a status counts as work still to do.
@@ -3356,8 +3357,8 @@ impl Db {
     /// the lookup, as with `close_task`. Returns the title and the status
     /// it had.
     pub fn set_task_status(&self, project_id: i64, task_id: i64, status: &str) -> Result<(String, String)> {
-        if !TASK_STATUSES.contains(&status) || status == "dropped" {
-            bail!("'{status}' is not a status a task can be given; one of {}", TASK_STATUSES[..5].join(", "));
+        if !TASK_STATUSES.contains(&status) {
+            bail!("'{status}' is not a status a task can be given; one of {}", TASK_STATUSES.join(", "));
         }
         let found: Option<(String, String)> = self
             .conn
@@ -3370,6 +3371,8 @@ impl Db {
         let Some((title, was)) = found else {
             bail!("no task [{task_id}] in this project; `plan` lists the ids");
         };
+        // Only a task done is closed at a moment: what was done in a week is
+        // read from it, and a struck copy was never done.
         let closed_at = (status == "done").then(now);
         self.conn.execute(
             "UPDATE tasks SET status = ?1, closed_at = ?2 WHERE id = ?3",
