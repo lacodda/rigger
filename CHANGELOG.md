@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.50.0] - 2026-11-13
+
+### Breaking Changes
+
+- **Take the project the way the ritual writes it**
+`rigger tail --project <PROJECT>` is gone; name the
+project as `rigger tail <PROJECT>`.
+
+### Bug Fixes
+- Take the project the way the ritual writes it
+- Take a text that begins with a dash as written
+- Keep two ties told apart by their notes out of each other's double
+- Keep a tie one way round, so its other end is not a second row
+
+### Build
+- Take furca-core 0.15
+
+### Features
+- Name a tie already recorded bare or with other versions
+- Strike a task by hand with task status dropped
+- Name a task that stands in two open stages
+
 ## [0.49.1] - 2026-11-10
 
 ### Bug Fixes
