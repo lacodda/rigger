@@ -84,7 +84,7 @@ $ rigger link list kasl
 
 `rigger link remove <ID>` forgets one, by the id the list prints.
 
-Recording the same link twice changes nothing rather than adding a second row. A note added to a link that was recorded bare is kept, since the tie is the same tie.
+Recording the same link twice changes nothing rather than adding a second row - and so does recording it from its other end: `rigger link add dowel lyrid --kind donor` after `rigger link add lyrid dowel --kind consumer`, or a pair in the other order, is the link already recorded. Since v0.50.0 the record keeps every tie one way round, as a consumer or as a pair in one order, and refuses any other shape; until then the same tie written from the far end was a second row. A note added to a link that was recorded bare is kept, since the tie is the same tie.
 
 The version anchors are part of what makes a link one link, so that each step of a pair is kept: `kasl@v1.12.0 kasl-server@v0.22.0` and `kasl@v1.13.0 kasl-server@v0.23.0` are two links, the history of the pair. But the same tie recorded once bare and once with versions reads as one fact, and the list would print it twice. So when you record a link, `link add` names the links of the same kind between the same two projects that do not contradict it - on each side the same version, or a version on one and none on the other, and the same note, or a note on one only. Two links whose notes differ are two ties - a product drawn on for one thing, and since a version for another - and are not named:
 

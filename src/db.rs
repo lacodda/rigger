@@ -697,6 +697,55 @@ const MIGRATIONS: &[&str] = &[
            AND substr(e.body, 1, length(versions.name) + 9) = versions.name || ' went out'
     ) WHERE status = 'shipped';
     ",
+    // v38: a tie is held one way round. A donor is a consumer written from the
+    // other end, and a pair reads the same in either order, but the row kept
+    // them as typed - so `link add dowel lyrid --kind donor` beside `lyrid
+    // dowel --kind consumer` was a second row for one tie, and the index that
+    // says a link exists once could not see it. Every tie is now kept as a
+    // consumer, or as a pair with the lower project id first, and the table
+    // refuses any other shape: a double from the far end cannot be written.
+    // Rows are rewritten under their own ids, which the list prints and
+    // `link remove` takes; of two rows that turn out to be one tie the older
+    // is kept, with the other's note if it had none.
+    "
+    CREATE TEMP TABLE links_turned AS
+    SELECT id,
+           CASE kind WHEN 'donor' THEN 'consumer' ELSE kind END AS kind,
+           CASE WHEN kind = 'donor' OR (kind = 'pair' AND from_project > to_project) THEN to_project ELSE from_project END AS from_project,
+           CASE WHEN kind = 'donor' OR (kind = 'pair' AND from_project > to_project) THEN to_version ELSE from_version END AS from_version,
+           CASE WHEN kind = 'donor' OR (kind = 'pair' AND from_project > to_project) THEN from_project ELSE to_project END AS to_project,
+           CASE WHEN kind = 'donor' OR (kind = 'pair' AND from_project > to_project) THEN from_version ELSE to_version END AS to_version,
+           note, created_at
+      FROM links;
+    DROP TABLE links;
+    CREATE TABLE links (
+        id             INTEGER PRIMARY KEY,
+        kind           TEXT NOT NULL CHECK (kind IN ('pair', 'consumer')),
+        from_project   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        from_version   INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+        to_project     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        to_version     INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+        note           TEXT,
+        created_at     TEXT NOT NULL,
+        CHECK (from_project <> to_project),
+        CHECK (kind = 'consumer' OR from_project < to_project)
+    );
+    CREATE INDEX links_by_from ON links (from_project);
+    CREATE INDEX links_by_to ON links (to_project);
+    CREATE UNIQUE INDEX links_once ON links (
+        kind, from_project, COALESCE(from_version, -1), to_project, COALESCE(to_version, -1)
+    );
+    INSERT OR IGNORE INTO links (id, kind, from_project, from_version, to_project, to_version, note, created_at)
+    SELECT id, kind, from_project, from_version, to_project, to_version, note, created_at FROM links_turned ORDER BY id;
+    UPDATE links SET note = (
+        SELECT t.note FROM links_turned t
+         WHERE t.note IS NOT NULL AND t.kind = links.kind
+           AND t.from_project = links.from_project AND COALESCE(t.from_version, -1) = COALESCE(links.from_version, -1)
+           AND t.to_project = links.to_project AND COALESCE(t.to_version, -1) = COALESCE(links.to_version, -1)
+         ORDER BY t.id LIMIT 1
+    ) WHERE note IS NULL;
+    DROP TABLE links_turned;
+    ",
 ];
 
 /// What one read of a repository added to a card.
@@ -5227,7 +5276,10 @@ impl Db {
     ///
     /// Recording the same link twice is not an error: the unique index says
     /// a link exists once, and a session that states a tie it already stated
-    /// should be told nothing happened rather than made to check first.
+    /// should be told nothing happened rather than made to check first. The
+    /// same holds for the tie written from its other end: it is kept one way
+    /// round (see migration 38), so a donor is the consumer it mirrors and a
+    /// pair in the other order is the pair.
     pub fn add_link(&self, link: &NewLink<'_>) -> Result<(i64, Change, Anchored)> {
         let from_version = self.version_id(link.from_project, link.from_version)?;
         let to_version = self.version_id(link.to_project, link.to_version)?;
@@ -5239,12 +5291,21 @@ impl Db {
             from: self.version_name(from_version)?,
             to: self.version_name(to_version)?,
         };
+        // Kept one way round: a donor as the consumer it mirrors, a pair with
+        // the lower id first. The table refuses any other shape.
+        let (kind, from_project, from_version, to_project, to_version) = match link.kind {
+            crate::link::Kind::Donor => (crate::link::Kind::Consumer, link.to_project, to_version, link.from_project, from_version),
+            crate::link::Kind::Pair if link.from_project > link.to_project => {
+                (crate::link::Kind::Pair, link.to_project, to_version, link.from_project, from_version)
+            }
+            kind => (kind, link.from_project, from_version, link.to_project, to_version),
+        };
         let seen: Option<i64> = self
             .conn
             .query_row(
                 "SELECT id FROM links WHERE kind = ?1 AND from_project = ?2 AND COALESCE(from_version, -1) = COALESCE(?3, -1) \
                  AND to_project = ?4 AND COALESCE(to_version, -1) = COALESCE(?5, -1)",
-                params![link.kind.as_str(), link.from_project, from_version, link.to_project, to_version],
+                params![kind.as_str(), from_project, from_version, to_project, to_version],
                 |r| r.get(0),
             )
             .optional()?;
@@ -5261,15 +5322,7 @@ impl Db {
         self.conn.execute(
             "INSERT INTO links (kind, from_project, from_version, to_project, to_version, note, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                link.kind.as_str(),
-                link.from_project,
-                from_version,
-                link.to_project,
-                to_version,
-                link.note,
-                now()
-            ],
+            params![kind.as_str(), from_project, from_version, to_project, to_version, link.note, now()],
         )?;
         Ok((self.conn.last_insert_rowid(), Change::Added, anchored))
     }
@@ -5368,7 +5421,7 @@ impl Db {
     }
 
     /// Every link of the record between two projects in the work, each read
-    /// from the side it was recorded from, with the distance each end has
+    /// from the side it is kept from, with the distance each end has
     /// travelled past its anchor. A pair with a retired half has parted for
     /// good, and saying so every week would be a warning nobody can act on.
     ///

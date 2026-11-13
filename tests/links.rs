@@ -127,6 +127,96 @@ fn a_directed_tie_turns_about_when_read_from_the_other_end() {
     assert!(output(data.path(), &["link", "list", "beta"]).contains("donor     beta -> alpha"));
 }
 
+/// The double the live record would have taken: the tie written again from
+/// its other end. A donor is the consumer it mirrors, and a pair is a pair in
+/// either order - already recorded, not a second row.
+#[test]
+fn a_tie_written_from_its_other_end_is_the_tie_already_recorded() {
+    let data = tempfile::tempdir().unwrap();
+    two_projects(data.path());
+    output(data.path(), &["link", "add", "alpha", "beta", "--kind", "consumer"]);
+    let again = output(data.path(), &["link", "add", "beta", "alpha", "--kind", "donor", "--note", "beta's reader"]);
+    assert!(again.contains("[1] already recorded: beta -> alpha (donor)"), "{again}");
+    assert!(!again.contains("tied this way already"), "{again}");
+    // The note said from the far end is kept on the one row.
+    assert_eq!(output(data.path(), &["link", "list"]).trim(), "[1] consumer  alpha -> beta  beta's reader");
+
+    output(data.path(), &["link", "add", "beta@v0.2.0", "alpha@v0.1.0"]);
+    let pair = output(data.path(), &["link", "add", "alpha@v0.1.0", "beta@v0.2.0"]);
+    assert!(pair.contains("[2] already recorded: alpha v0.1.0 <-> beta v0.2.0 (pair)"), "{pair}");
+    assert_eq!(output(data.path(), &["link", "list"]).lines().count(), 2);
+}
+
+/// A record from before ties were kept one way round: its donors become the
+/// consumers they mirror and its pairs turn to one order, under their own ids,
+/// and two rows that were one tie become one, the older, with the note.
+#[test]
+fn a_tie_kept_twice_from_both_ends_is_one_after_the_migration() {
+    let data = tempfile::tempdir().unwrap();
+    two_projects(data.path());
+    let db_path = data.path().join("profiles").join("line").join("rigger.db");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "DROP TABLE links;
+             CREATE TABLE links (
+                 id INTEGER PRIMARY KEY,
+                 kind TEXT NOT NULL CHECK (kind IN ('pair', 'consumer', 'donor')),
+                 from_project INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                 from_version INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+                 to_project INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                 to_version INTEGER REFERENCES versions(id) ON DELETE SET NULL,
+                 note TEXT,
+                 created_at TEXT NOT NULL,
+                 CHECK (from_project <> to_project)
+             );
+             CREATE UNIQUE INDEX links_once ON links (
+                 kind, from_project, COALESCE(from_version, -1), to_project, COALESCE(to_version, -1)
+             );
+             PRAGMA user_version = 37;",
+        )
+        .unwrap();
+        let alpha: i64 = db.query_row("SELECT id FROM projects WHERE name = 'alpha'", [], |r| r.get(0)).unwrap();
+        let beta: i64 = db.query_row("SELECT id FROM projects WHERE name = 'beta'", [], |r| r.get(0)).unwrap();
+        let (low, high) = (alpha.min(beta), alpha.max(beta));
+        let rows = [
+            // One tie twice: as a consumer, and from the far end as a donor
+            // that alone carries the note.
+            (3, "consumer", alpha, beta, None),
+            (5, "donor", beta, alpha, Some("the reader")),
+            // A pair kept in the higher-first order, alone: turned round.
+            (7, "pair", high, low, Some("one capability")),
+        ];
+        for (id, kind, from, to, note) in rows {
+            db.execute(
+                "INSERT INTO links (id, kind, from_project, to_project, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, '2026-10-01T00:00:00Z')",
+                rusqlite::params![id, kind, from, to, note],
+            )
+            .unwrap();
+        }
+    }
+
+    let list = output(data.path(), &["link", "list", "alpha"]);
+    assert_eq!(list.lines().count(), 2, "{list}");
+    assert!(list.contains("[3] consumer  alpha -> beta  the reader"), "{list}");
+    assert!(list.contains("[7] pair      alpha <-> beta  one capability"), "{list}");
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    let kept: Vec<(i64, String, bool)> = db
+        .prepare("SELECT id, kind, from_project < to_project FROM links ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(kept[0].0, 3);
+    assert_eq!(kept[1], (7, "pair".to_string(), true));
+    // And the table refuses a donor, or a pair the other way round.
+    assert!(
+        db.execute("INSERT INTO links (kind, from_project, to_project, created_at) SELECT 'donor', 1, 2, 'x'", [])
+            .is_err()
+    );
+}
+
 /// A version the project does not have is a typo. Anchored silently to
 /// nothing, the link could never drift - and a warning that cannot fire is
 /// worse than no warning, because it reads as one that is watching.
