@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.51.0] - 2026-11-22
+
+### Features
+- Hold the sitting of the assistant the server runs beside
+
 ## [0.50.0] - 2026-11-13
 
 ### Breaking Changes
