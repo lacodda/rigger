@@ -16,12 +16,17 @@
 //! matches a binary whose database access is synchronous anyway.
 
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 
 use crate::context;
 use crate::db::{Db, Project};
+use crate::hold;
 use crate::paths;
 
 /// The protocol version this server speaks. A client that asks for another
@@ -37,8 +42,22 @@ const INVALID_PARAMS: i64 = -32602;
 ///
 /// The database is opened once: a session is a long conversation, and
 /// re-opening the file for every tool call would only add failure modes.
+///
+/// While it serves, the server is at the sitting of the project its
+/// directory belongs to (see `Attendant`); when the client goes away, it
+/// closes the sitting it held.
 pub fn serve() -> Result<()> {
     let db = Db::open(&paths::db_path()?)?;
+    let watch = Watch::start(&db);
+    let served = answer(&db);
+    if let Some(watch) = watch {
+        watch.leave(&db);
+    }
+    served
+}
+
+/// Answers requests until the client closes the stream.
+fn answer(db: &Db) -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut line = String::new();
@@ -62,12 +81,184 @@ pub fn serve() -> Result<()> {
                 continue;
             }
         };
-        let Some(response) = handle(&db, &request) else {
+        let Some(response) = handle(db, &request) else {
             // A notification: the specification forbids a response.
             continue;
         };
         writeln!(stdout, "{response}")?;
         stdout.flush()?;
+    }
+}
+
+/// How often the server looks at its project's sitting.
+///
+/// The end-of-turn hook is what it races: a sitting opened by `session start`
+/// must be held before the turn that opened it ends, or the hook closes it.
+/// A turn goes on for seconds after a command - the assistant still has its
+/// answer to write - so two looks a second apart are in time, and each look
+/// is one indexed read and one try of a lock.
+const LOOK_EVERY: Duration = Duration::from_secs(1);
+
+/// The sitting an assistant's server holds for it.
+///
+/// `go` holds the sitting of the assistant it starts, and the record can tell
+/// that assistant at work from one that has gone. An assistant the owner
+/// started directly had no holder: its sitting was "cannot tell", the queue
+/// could not see anyone at it, and the end-of-turn hook closed it at the end
+/// of every turn - so in a conversation of several turns, everything after
+/// the first was written outside any sitting.
+///
+/// The MCP server is the natural holder. The assistant keeps it running for
+/// exactly as long as the assistant itself runs, and it runs in the
+/// assistant's directory, so it knows the project. It takes the same lock
+/// `go` takes, which is why everything that asks who is at a sitting - the
+/// hook, the queue, `go` - sees this one at work with no change of its own.
+///
+/// Three rules keep it from taking what is not its own:
+///
+/// - A sitting already held when first seen belongs to whoever holds it - a
+///   `go`, or another assistant in the same tree - and is never taken, even
+///   after its holder lets go: that holder closes it.
+/// - A sitting is taken only once it has been seen free twice. `go` opens a
+///   sitting before it locks it, and an assistant already running in the
+///   tree must not take it in between.
+/// - A sitting that closes is let go of at once, so a new one can be held.
+struct Attendant {
+    project: Project,
+    held: Option<(i64, hold::Hold)>,
+    seen: Option<i64>,
+    foreign: Option<i64>,
+}
+
+impl Attendant {
+    fn new(project: Project) -> Attendant {
+        Attendant {
+            project,
+            held: None,
+            seen: None,
+            foreign: None,
+        }
+    }
+
+    /// The sitting held now, if any.
+    fn holding(&self) -> Option<i64> {
+        self.held.as_ref().map(|(id, _)| *id)
+    }
+
+    /// Looks at the project's sitting once: lets go of one that has closed,
+    /// and takes one nobody holds.
+    fn look(&mut self, db: &Db) {
+        // A record that cannot be read now is read on the next look: holding
+        // on to what is held is the safe answer meanwhile.
+        let Ok(open) = db.open_session(self.project.id) else {
+            return;
+        };
+        if self.holding().is_some_and(|id| open.as_ref().map(|s| s.id) != Some(id)) {
+            self.held = None;
+        }
+        let Some(open) = open else {
+            self.seen = None;
+            return;
+        };
+        if self.held.is_some() || self.foreign == Some(open.id) {
+            return;
+        }
+        match hold::presence(db.path(), open.id) {
+            hold::Presence::Live => self.foreign = Some(open.id),
+            _ if self.seen == Some(open.id) => match hold::take(db.path(), open.id) {
+                Ok(held) => self.held = Some((open.id, held)),
+                // Taken by someone else between the look and the lock.
+                Err(_) => self.foreign = Some(open.id),
+            },
+            _ => self.seen = Some(open.id),
+        }
+    }
+
+    /// Lets go of the sitting, and names it when it is still open: the
+    /// holder is the one to close it.
+    fn leave(&mut self, db: &Db) -> Option<i64> {
+        let (id, held) = self.held.take()?;
+        drop(held);
+        let open = db.open_session(self.project.id).ok().flatten();
+        open.filter(|s| s.id == id).map(|s| s.id)
+    }
+}
+
+/// The attendant at work beside the server, looking every `LOOK_EVERY`.
+struct Watch {
+    attendant: Arc<Mutex<Attendant>>,
+    stop: mpsc::Sender<()>,
+    looker: std::thread::JoinHandle<()>,
+}
+
+impl Watch {
+    /// Starts looking at the sitting of the project the server's directory
+    /// belongs to. A server started anywhere else holds nothing.
+    fn start(db: &Db) -> Option<Watch> {
+        let project = crate::project_here(db, None).ok()?;
+        if project.ensure_working().is_err() {
+            return None;
+        }
+        let attendant = Arc::new(Mutex::new(Attendant::new(project)));
+        let (stop, stopped) = mpsc::channel();
+        let path = db.path().to_path_buf();
+        let shared = Arc::clone(&attendant);
+        let looker = std::thread::spawn(move || look_until_stopped(&path, &shared, &stopped));
+        Some(Watch { attendant, stop, looker })
+    }
+
+    /// Stops looking, lets go of the sitting, and closes it if it was ours
+    /// and is still open.
+    ///
+    /// The close is the one the end-of-turn hook makes, run as its own
+    /// process: it may print, run the project's own closing command and write
+    /// a hub, and none of that may reach this server's stdout, which belongs
+    /// to the protocol.
+    fn leave(self, db: &Db) {
+        let _ = self.stop.send(());
+        let _ = self.looker.join();
+        let Ok(mut attendant) = self.attendant.lock() else {
+            return;
+        };
+        if attendant.leave(db).is_some() {
+            close(&attendant.project.name);
+        }
+    }
+}
+
+fn look_until_stopped(path: &Path, attendant: &Mutex<Attendant>, stopped: &mpsc::Receiver<()>) {
+    // A connection of its own: the server's is busy answering requests.
+    let Ok(db) = Db::open(path) else {
+        return;
+    };
+    loop {
+        if let Ok(mut attendant) = attendant.lock() {
+            attendant.look(&db);
+        }
+        match stopped.recv_timeout(LOOK_EVERY) {
+            Err(RecvTimeoutError::Timeout) => continue,
+            _ => return,
+        }
+    }
+}
+
+/// Closes a project's sitting the way the end-of-turn hook does.
+fn close(project: &str) {
+    let exe: PathBuf = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!("rigger mcp: the sitting on {project} is left open: cannot find this program ({e})");
+            return;
+        }
+    };
+    let closed = std::process::Command::new(exe)
+        .args(["session", "end", project, "--remind"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if let Err(e) = closed {
+        eprintln!("rigger mcp: the sitting on {project} is left open: {e}");
     }
 }
 
@@ -1273,5 +1464,97 @@ mod tests {
         assert_eq!(init["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
         // Without the tools capability a client never asks for the tools.
         assert!(init["capabilities"]["tools"].is_object());
+    }
+
+    /// A record with one project, for the attendant to sit at.
+    fn sitting_record(dir: &Path) -> (Db, Project) {
+        let db = Db::create(&dir.join("rigger.db")).unwrap();
+        let project = db
+            .add_project("sample", &dir.join("sample").to_string_lossy(), None, crate::db::Kind::Repo)
+            .unwrap();
+        (db, project)
+    }
+
+    /// A sitting opened while the server runs - by `session start` from the
+    /// assistant - is held from the second look on, which is what the hook,
+    /// the queue and `go` read as an assistant at work. Closed, it is let go
+    /// of, and the next one is held in its turn.
+    #[test]
+    fn a_sitting_nobody_holds_is_held_until_it_closes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, project) = sitting_record(dir.path());
+        let mut attendant = Attendant::new(project.clone());
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), None, "nothing is open");
+
+        let (sitting, _) = db.start_session(project.id, "2026-11-22T10:00:00Z").unwrap();
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), None, "a sitting seen free once may be a `go` about to lock it");
+        assert_eq!(hold::presence(db.path(), sitting.id), hold::Presence::Unknown);
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), Some(sitting.id));
+        assert_eq!(hold::presence(db.path(), sitting.id), hold::Presence::Live);
+
+        db.end_session(sitting.id, "2026-11-22T11:00:00Z").unwrap();
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), None, "a closed sitting is let go of");
+        assert_eq!(hold::presence(db.path(), sitting.id), hold::Presence::Unknown);
+
+        let (next, _) = db.start_session(project.id, "2026-11-22T12:00:00Z").unwrap();
+        attendant.look(&db);
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), Some(next.id));
+        // Leaving names the sitting still open, so the holder closes it.
+        assert_eq!(attendant.leave(&db), Some(next.id));
+        assert_eq!(hold::presence(db.path(), next.id), hold::Presence::Unknown, "left, it is nobody's");
+    }
+
+    /// A sitting someone else holds when it is first seen - a `go`, another
+    /// assistant in the same tree - is theirs, and stays theirs after they
+    /// let go: closing it is their business, and taking it then would keep
+    /// it open past the end that holder came to make.
+    #[test]
+    fn a_sitting_held_by_another_is_never_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, project) = sitting_record(dir.path());
+        let (sitting, _) = db.start_session(project.id, "2026-11-22T10:00:00Z").unwrap();
+        let theirs = hold::take(db.path(), sitting.id).unwrap();
+
+        let mut attendant = Attendant::new(project);
+        attendant.look(&db);
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), None);
+        drop(theirs);
+        attendant.look(&db);
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), None, "a sitting first seen held was taken once its holder let go");
+        assert_eq!(attendant.leave(&db), None, "nothing held, nothing to close");
+    }
+
+    /// A sitting left by a holder that died - a `go` killed, a server whose
+    /// client never said goodbye - is free, and this assistant is the one in
+    /// the tree now: it is taken over, as `go` takes such a sitting over.
+    #[test]
+    fn a_sitting_whose_holder_died_is_taken_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, project) = sitting_record(dir.path());
+        let (sitting, _) = db.start_session(project.id, "2026-11-22T10:00:00Z").unwrap();
+        // What a killed holder leaves behind: its file, and no lock on it,
+        // because the operating system let go of the lock with the process.
+        let sittings = dir.path().join("sittings");
+        std::fs::create_dir_all(&sittings).unwrap();
+        std::fs::write(sittings.join(format!("{}.lock", sitting.id)), "").unwrap();
+        assert_eq!(hold::presence(db.path(), sitting.id), hold::Presence::Gone);
+
+        let mut attendant = Attendant::new(project);
+        attendant.look(&db);
+        attendant.look(&db);
+        assert_eq!(attendant.holding(), Some(sitting.id));
+        assert_eq!(hold::presence(db.path(), sitting.id), hold::Presence::Live);
+
+        // Closed by someone else - the assistant's own `session end` - it is
+        // not this one's to close again.
+        db.end_session(sitting.id, "2026-11-22T11:00:00Z").unwrap();
+        assert_eq!(attendant.leave(&db), None);
     }
 }

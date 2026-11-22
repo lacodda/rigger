@@ -22,9 +22,15 @@ struct Server {
 
 impl Server {
     fn start(data: &Path) -> Server {
+        Server::start_in(data, &std::env::current_dir().unwrap())
+    }
+
+    /// Started in a directory, as a client starts it in the one it works in.
+    fn start_in(data: &Path, dir: &Path) -> Server {
         let mut child = Command::cargo_bin("rigger")
             .unwrap()
             .arg("mcp")
+            .current_dir(dir)
             .env("RIGGER_DATA_DIR", data)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -95,6 +101,46 @@ fn project(data: &Path) -> std::path::PathBuf {
     rigger(data).args(["project", "add"]).arg(&root).assert().success();
     rigger(data).args(["import", "proj", "--hub"]).arg(&hub).assert().success();
     root
+}
+
+/// The sitting left open on the record, if one is.
+fn open_sitting(data: &Path) -> Option<i64> {
+    let db = rusqlite::Connection::open(data.join("profiles").join("line").join("rigger.db")).unwrap();
+    db.query_row("SELECT id FROM sessions WHERE ended_at IS NULL", [], |r| r.get(0)).ok()
+}
+
+/// A sitting opened from an assistant the owner started directly - no `go`
+/// around it - used to be held by nothing, so the end-of-turn hook closed it
+/// at the end of the first turn and the rest of the conversation was written
+/// outside any sitting. The server the assistant keeps running holds it now:
+/// the hook leaves it open, and it closes when the client goes away.
+#[test]
+fn the_server_holds_the_sitting_of_its_directory_until_its_client_goes() {
+    let data = tempfile::tempdir().unwrap();
+    let root = project(data.path());
+    let mut server = Server::start_in(data.path(), &root);
+    server.request(1, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+
+    // Opened after the server started, the way an assistant opens one.
+    rigger(data.path()).args(["session", "start"]).current_dir(&root).assert().success();
+    let id = open_sitting(data.path()).expect("the sitting is open");
+    let lock = data.path().join("profiles").join("line").join("sittings").join(format!("{id}.lock"));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !lock.exists() {
+        assert!(std::time::Instant::now() < until, "the server never held the sitting");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // The end of a turn is not the end of the sitting.
+    rigger(data.path()).args(["session", "end", "--remind"]).current_dir(&root).assert().success();
+    assert_eq!(open_sitting(data.path()), Some(id), "the hook closed a sitting the server holds");
+    let queue = server.call(2, "queue", json!({}));
+    assert!(queue.contains("a sitting at work since"), "{queue}");
+
+    // The client goes away, and the sitting goes with it.
+    server.finish();
+    assert_eq!(open_sitting(data.path()), None, "the server left its sitting open");
+    assert!(!lock.exists(), "{} was left behind", lock.display());
 }
 
 #[test]

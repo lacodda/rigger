@@ -129,7 +129,7 @@ Every field is named here, and the test suite fails when the JSON prints one thi
 | `order[].unfinished.untagged[]` | string | One change's subject line. |
 | `order[].unfinished.undelivered` | string or null | How the last release fell short of getting out, in a few words. |
 | `order[].unfinished.sitting` | string or null | When the sitting left open began. |
-| `order[].unfinished.sitting_live` | boolean or null | Whether anyone is at that sitting: `true` while the [`go`](/rigger/reference/go/#who-is-at-a-sitting) that holds it runs, `false` once it has gone, `null` when nothing held it or no sitting is open. |
+| `order[].unfinished.sitting_live` | boolean or null | Whether anyone is at that sitting: `true` while the [`go`](/rigger/reference/go/#who-is-at-a-sitting) or the assistant's `rigger mcp` that holds it runs, `false` once it has gone, `null` when nothing held it or no sitting is open. |
 | `order[].moved` | array | Everything that asks for it to come first, while it stands, whatever `reason` says: the owner's word first, then its neighbours', each oldest first. Empty when nothing does. What a neighbour did moves it only once it has [waited its share](#its-share), so a project whose `reason` is `turn` can have something here: what that turn takes up. |
 | `order[].moved[]` | object | One of them. |
 | `order[].moved[].id` | integer | The event's id: [`resolve`](/rigger/reference/resolve/) closes the owner's word or a neighbour's order by it. |

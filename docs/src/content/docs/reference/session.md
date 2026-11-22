@@ -254,10 +254,11 @@ Session on sample closed - 1 event:
 
 A reminder that fires on every stop is a reminder nobody reads.
 
-Not every stop is the end of a sitting, and `--remind` leaves two kinds open, saying nothing:
+Not every stop is the end of a sitting, and `--remind` leaves three kinds open, saying nothing:
 
 - **A turn handed back to wait.** An assistant that starts a long run in the background - a test suite, a mutation run, a release - hands the turn back and is woken when the run finishes. Claude Code tells its hook so on standard input: the `background_tasks` still in flight, and the `session_crons` it scheduled. A turn that ends with either is a pause. Until v0.47.0 the hook closed the sitting there, and everything written after the wait - the release included - belonged to no sitting, while the [queue](/rigger/reference/queue/) saw the project free.
 - **A sitting [`go`](/rigger/reference/go/#who-is-at-a-sitting) holds.** The assistant `go` started is at work in it until it exits, and `go` closes the sitting then.
+- **A sitting an assistant's [`rigger mcp`](/rigger/reference/mcp/#the-sitting-it-holds) holds.** An assistant started without `go` keeps its MCP server running for as long as it runs, and the server holds the sitting of the project it was started in - one opened before it started, or by `session start` while it runs. The server closes the sitting when the assistant exits. Until v0.51.0 nothing held such a sitting, the hook closed it at the end of the first turn, and everything a conversation wrote after that belonged to no sitting.
 
 Standard input is read only when it is not a terminal, and for two seconds at most: a person who typed the command is not a hook.
 

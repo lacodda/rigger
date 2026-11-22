@@ -53,7 +53,8 @@ Work on gadget  v1.0.0 · Public release
 | The sitting | The queue says | `go` |
 | --- | --- | --- |
 | held by a `go` that is running | a sitting at work since … | starts nothing there, even named; `--force` goes past it |
-| held by a `go` that has gone | a sitting left open since … by an assistant that has gone | takes it over: the assistant is told how it was left, and the sitting closes when this one stops |
+| held by an assistant's [`rigger mcp`](/rigger/reference/mcp/#the-sitting-it-holds) that is running | a sitting at work since … | the same: an assistant is at work in that tree |
+| held by a `go` or a server that has gone | a sitting left open since … by an assistant that has gone | takes it over: the assistant is told how it was left, and the sitting closes when this one stops |
 | opened by `session start`, held by nothing | a sitting open since … | starts nothing there unless named; named, it joins and leaves it open for whoever opened it |
 
 Two assistants in one working tree is the worst of the mistakes, so the one sitting `go` never walks into is one an assistant is at:
@@ -63,7 +64,7 @@ $ rigger go
 error: widget is at work: an assistant has held its sitting since 2026-11-08T10:20:31Z, and a second one in that tree would write over it. Let it finish, or go past it with `rigger go --force`.
 ```
 
-A sitting nothing held cannot be told from one that was abandoned, and `go` says so:
+An assistant started without `go` holds its sitting too, through the MCP server it keeps running (since v0.51.0), so "held by nothing" is left to a sitting opened by hand or by an assistant without the server. A sitting nothing held cannot be told from one that was abandoned, and `go` says so:
 
 ```console
 $ rigger go

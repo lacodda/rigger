@@ -36,6 +36,19 @@ The server needs the database, so run [`rigger init`](/rigger/reference/init/) f
 
 Anything the server writes on stdout is a protocol message, so a diagnostic never goes there. If a client reports the server as broken, its stderr is where the reason is.
 
+## The sitting it holds
+
+A client keeps the server running for exactly as long as the assistant runs, and starts it in the directory the assistant works in. So the server is the one that can say an assistant is at a project: it holds the [sitting](/rigger/reference/session/) of the project its directory belongs to, the way [`go`](/rigger/reference/go/#who-is-at-a-sitting) holds the sitting of the assistant it starts - with the same lock on a file in the `sittings` directory beside the database. Everything that asks who is at a sitting reads it from there:
+
+- the end-of-turn hook, [`session end --remind`](/rigger/reference/session/#--remind), leaves the sitting open, because a turn is not the sitting;
+- the [queue](/rigger/reference/queue/) says "a sitting at work since …", and `go` starts no second assistant in that tree.
+
+The server looks once a second. A sitting already open when it starts is held, and so is one an assistant opens with `session start` while it runs - from the second look that finds it free, because `go` opens a sitting a moment before it locks it, and an assistant already in the tree must not take it in between. A sitting someone else held when it was first seen - a `go`, a second assistant in the same tree - is theirs to close, and is never taken. One whose holder died is taken over.
+
+When the client goes away, the server lets go of the sitting and closes it, if it is still open, exactly as the end-of-turn hook would have: the diary, the backup, the hub and the project's own closing command, run as a process of its own so that nothing it prints reaches the protocol. A server stopped without its client closing the stream - killed - leaves the sitting held by nobody, which the record reads as an assistant that has gone. The next assistant in that tree takes it over, as `go` does, and closes it when it leaves; where no server runs, the next end-of-turn hook closes it.
+
+Started in a directory no project is recorded at, the server holds nothing.
+
 ## Tools
 
 | Tool | What it does |

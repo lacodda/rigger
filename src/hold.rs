@@ -16,8 +16,12 @@
 //! process id is kept, so none can be reused, and nothing has to be cleaned
 //! up for the answer to stay true.
 //!
-//! A sitting opened by `session start` has no such file. Nothing runs for as
-//! long as it is open, so the record says it cannot tell, as before.
+//! A sitting opened by `session start` from an assistant has the same holder
+//! in another form: the assistant's `rigger mcp` server, which runs for as
+//! long as the assistant does, takes the lock on the sitting of the project
+//! its directory belongs to (see `mcp::Attendant`). Only a sitting opened
+//! where no such server runs - by hand, or by an assistant without it - has
+//! no file, and of that one the record says it cannot tell.
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
