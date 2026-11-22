@@ -55,12 +55,12 @@ pub struct Done {
 /// owner's week.
 fn week_of(moment: &str) -> Option<(i16, i8)> {
     let at: jiff::Timestamp = moment.parse().ok()?;
-    let week = at.to_zoned(jiff::tz::TimeZone::system()).date().iso_week_date();
+    let week = at.to_zoned_datetime(jiff::tz::TimeZone::system()).date().iso_week_date();
     Some((week.year(), week.week()))
 }
 
 fn this_week() -> (i16, i8) {
-    let week = jiff::Zoned::now().date().iso_week_date();
+    let week = jiff::ZonedDateTime::now().date().iso_week_date();
     (week.year(), week.week())
 }
 

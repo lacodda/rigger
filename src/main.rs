@@ -5014,7 +5014,7 @@ fn tray_done(task: Option<&str>, json: bool) -> Result<()> {
         }
         return Ok(());
     }
-    let done = tray::done(&dir, &card, &jiff::Zoned::now().date().to_string())?;
+    let done = tray::done(&dir, &card, &jiff::ZonedDateTime::now().date().to_string())?;
     if json {
         let mut value = serde_json::to_value(&done)?;
         value["card"] = serde_json::Value::String(card.key.clone());

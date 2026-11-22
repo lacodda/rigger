@@ -207,7 +207,7 @@ impl Issue {
     /// clock, the one kasl writes it in.
     pub fn is_asleep(&self) -> bool {
         let Some(until) = &self.snoozed_until else { return false };
-        let now = jiff::Zoned::now().datetime().to_string();
+        let now = jiff::ZonedDateTime::now().datetime().to_string();
         until.replace(' ', "T").as_str() > now.as_str()
     }
 

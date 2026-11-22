@@ -264,7 +264,7 @@ fn done_moves_the_material_to_the_archive_and_blanks_the_form() {
     fill(&form, "## The task as written (required)", "The customer cannot open rtf files.");
 
     let out = output(data.path(), &["tray", "done"]);
-    let day = jiff::Zoned::now().date().to_string();
+    let day = jiff::ZonedDateTime::now().date().to_string();
     let archive = tray.join("sorted").join(&day);
     assert!(out.contains("2 entries moved"), "{out}");
     assert!(archive.join("shot.png").is_file(), "{out}");

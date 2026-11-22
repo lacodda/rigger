@@ -268,7 +268,7 @@ fn utc(time: SystemTime) -> Option<String> {
 /// matches a screenshot against "reproduced at 14:22" in their own time.
 pub fn local_minute(utc: &str) -> String {
     match utc.parse::<jiff::Timestamp>() {
-        Ok(t) => t.to_zoned(jiff::tz::TimeZone::system()).strftime("%Y-%m-%d %H:%M").to_string(),
+        Ok(t) => t.to_zoned_datetime(jiff::tz::TimeZone::system()).strftime("%Y-%m-%d %H:%M").to_string(),
         Err(_) => utc.to_string(),
     }
 }

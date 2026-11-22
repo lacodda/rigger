@@ -5924,7 +5924,7 @@ fn stamp(at: jiff::Timestamp) -> String {
 /// stay in UTC. A person says "due tomorrow" in the evening of their own day:
 /// counted from UTC, three hours west of it, that was the day after.
 pub fn today() -> String {
-    jiff::Zoned::now().date().to_string()
+    jiff::ZonedDateTime::now().date().to_string()
 }
 
 /// Whether a day has gone by. The day itself is not past: a question due
